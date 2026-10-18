@@ -54,4 +54,32 @@ uv sync --project services/thumbnails    # Python service (creates .venv)
 | `pnpm lint:py` | ruff lint + format check for the thumbnail service |
 | `pnpm test:py` | pytest for the thumbnail service |
 
-Infrastructure and deployment commands will be documented here once Phase 1 (AWS bootstrap) and Phase 10 (CI/CD) are done.
+## AWS
+
+AWS Organization in **us-east-1**, accessed via IAM Identity Center (SSO):
+
+| CLI profile | Account | Purpose |
+|---|---|---|
+| `dev` | 063359189013 | Development environment |
+| `prod` | 968632140314 | Production environment |
+| `general` | 590980992845 | Management account: organization-wide budget only |
+
+```bash
+aws sso login --profile dev       # when the SSO session has expired
+```
+
+## Infrastructure (OpenTofu)
+
+| Path | What | State |
+|---|---|---|
+| `infra/bootstrap/` | One-time per account: state bucket, GitHub OIDC + CI roles, budget. See its [README](infra/bootstrap/README.md) | Local, one workspace per account |
+| `infra/envs/dev/`, `infra/envs/prod/` | The app's infrastructure per environment | S3 `photo-app-tfstate-<account-id>`, key `<env>/terraform.tfstate`, S3-native locking |
+| `infra/modules/` | Reusable modules (storage, database, auth, api, thumbnails, frontend) | n/a |
+
+```bash
+cd infra/envs/dev
+AWS_PROFILE=dev tofu init
+AWS_PROFILE=dev tofu plan
+```
+
+Deployment via GitHub Actions comes in Phase 10 (see `PROGRESS.md`).

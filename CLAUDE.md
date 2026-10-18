@@ -20,7 +20,14 @@ Serverless photo storage PWA on AWS. Full spec: `docs/SPECIFICATION.md`.
 ## Rules
 
 - Backend user identity comes only from the JWT `sub`; other users' resources return 404.
-- Never commit secrets, `*.tfstate` or `terraform.tfvars`.
+- Never commit secrets, `*.tfstate` or `terraform.tfvars`. (`infra/bootstrap/*.tfvars` are fine: IDs and email only.)
+
+## AWS
+
+- Region `us-east-1`. SSO profiles: `dev` (063359189013), `prod` (968632140314), `general` (590980992845, management, budget only). Expired session → user runs `! aws sso login --profile <p>`.
+- **Ask the user before creating any AWS resource**: show the plan, wait for an explicit yes. Approval is per account. Apply from a saved plan (`tofu plan -out` → `tofu apply <file>`).
+- Resources created for testing get destroyed afterwards. **Never destroy `infra/bootstrap` resources** (state buckets, budget, CI roles).
+- `infra/envs/<env>`: run with `AWS_PROFILE=<env>`; the provider's `allowed_account_ids` blocks the wrong account.
 
 ## Commands
 

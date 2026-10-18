@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.1 (initial specification) |
+| **Version** | 0.2 |
 | **Date** | 2026-10-18 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -82,8 +82,8 @@ Accounts, tools and decisions needed before implementation.
 
 | Item | Purpose | Notes |
 |---|---|---|
-| AWS account | Hosting everything | Enable MFA on root; create an admin IAM user/SSO user for daily work |
-| AWS Budgets alert | Cost protection | e.g. alert at $5 and $20 / month |
+| AWS Organization | Hosting everything | Accounts: **dev**, **prod**, **management** (budget only). Daily access via IAM Identity Center (SSO); MFA on every root user |
+| AWS Budgets alert | Cost protection | One organization-wide budget in the management account: $5 / month, email alerts at 80 % and 100 % actual + 100 % forecast |
 | GitHub account + private repo | Code + CI/CD | GitHub Actions free minutes are sufficient |
 | Google Cloud project | "Sign in with Google" | OAuth client ID (Web application) + consent screen |
 | Domain name | `photos.<domain>` | Optional for dev; needed for prod. Can be registered in Route 53 or elsewhere |
@@ -102,8 +102,7 @@ Accounts, tools and decisions needed before implementation.
 
 ### 3.3 One-time setup steps
 
-1. Create the OpenTofu **state bucket** via `infra/bootstrap/` (see §13.3).
-2. Create the **GitHub OIDC provider** and deploy roles in AWS (see §14.1).
+1. Run `infra/bootstrap/` once per account (see §13.3): **state bucket** + **GitHub OIDC provider** and CI roles (§14.1) in dev and prod; **budget** in the management account.
 3. Create the **Google OAuth client** once the Cognito domain is known (see §11.2).
 4. (Prod) Request an **ACM certificate** in `us-east-1` for the CloudFront domain.
 
@@ -129,7 +128,7 @@ Accounts, tools and decisions needed before implementation.
 | IaC | **OpenTofu** | Modules per area, separate dev/prod environments |
 | CI/CD | **GitHub Actions** | OIDC to AWS, no long-lived keys |
 | Monorepo | **pnpm workspaces** | `apps/`, `packages/`, `services/` |
-| Region | **eu-central-1** (Frankfurt) | Except ACM cert for CloudFront: `us-east-1` |
+| Region | **us-east-1** (N. Virginia) | Same region as the CloudFront ACM certificate |
 
 ---
 
@@ -147,7 +146,7 @@ flowchart LR
     CF[CloudFront<br/>photos.domain]
   end
 
-  subgraph AWS["AWS (eu-central-1)"]
+  subgraph AWS["AWS (us-east-1)"]
     COG[Cognito user pool<br/>+ Google IdP]
     APIGW[API Gateway<br/>JWT authorizer]
     API[API Lambda<br/>TypeScript]
@@ -440,8 +439,8 @@ URL / cookie lifetimes:
 ### 11.2 Google provider
 
 - Google Cloud Console → OAuth client ID, type *Web application*.
-  - Authorized JavaScript origin: `https://<cognito-domain>.auth.eu-central-1.amazoncognito.com`
-  - Authorized redirect URI: `https://<cognito-domain>.auth.eu-central-1.amazoncognito.com/oauth2/idpresponse`
+  - Authorized JavaScript origin: `https://<cognito-domain>.auth.us-east-1.amazoncognito.com`
+  - Authorized redirect URI: `https://<cognito-domain>.auth.us-east-1.amazoncognito.com/oauth2/idpresponse`
 - Consent screen scopes: `openid`, `email`, `profile`; **publish** before public launch (testing mode = max 100 test users).
 - Attribute mapping: `email → email`, `name → name`, `picture → picture`, `email_verified → email_verified`.
 - Client secret: stored in a secret store / CI secret, passed to OpenTofu as a sensitive variable (state is encrypted, §13.3).
@@ -521,7 +520,7 @@ Caching strategies:
 
 ## 13. Infrastructure
 
-OpenTofu, region `eu-central-1`.
+OpenTofu, region `us-east-1`. AWS Organization with separate accounts: **dev**, **prod**, and the **management** account (billing/budget only), accessed via IAM Identity Center (SSO).
 
 ### 13.1 Modules (`infra/modules/`)
 
@@ -549,10 +548,10 @@ All resources tagged `Project=photo-app`, `Environment={env}`, `ManagedBy=opento
 
 ### 13.3 State
 
-- Remote **S3 backend** in a dedicated state bucket (`photo-app-tfstate-<suffix>`), created once by `infra/bootstrap/` (local state).
+- Remote **S3 backend** in a dedicated state bucket per account (`photo-app-tfstate-<account-id>`), created once by `infra/bootstrap/` (local state).
 - `use_lockfile = true` (S3-native locking, no DynamoDB lock table).
 - State bucket: versioning on, public access blocked, encryption on, access limited to admin + CI roles.
-- **OpenTofu client-side state encryption** enabled (KMS key), because state contains the Google client secret.
+- **OpenTofu client-side state encryption** (state contains the Google client secret): **deferred** to the end of the project; S3 server-side encryption and restricted bucket access apply until then.
 - `*.tfstate`, `.terraform/`, `terraform.tfvars` are git-ignored.
 
 ---
@@ -564,9 +563,9 @@ GitHub Actions.
 ### 14.1 AWS access
 
 - GitHub OIDC identity provider in AWS.
-- Two IAM roles per environment:
-  - `ci-plan` — read-only + state read, assumable from pull requests.
-  - `ci-deploy` — deploy permissions, assumable only from `main` (and a `prod` GitHub environment with required approval).
+- Created by `infra/bootstrap/` in each account. Two IAM roles per environment:
+  - `photo-app-ci-plan` — `ReadOnlyAccess` + state read/lock, explicitly denied reading photo objects and DynamoDB items; assumable from any branch or pull request of the repo.
+  - `photo-app-ci-deploy` — deploy permissions (AdministratorAccess initially, to be scoped down before launch); dev: only the `main` branch; prod: only jobs in the `prod` GitHub environment (required approval). Max session 1 h.
 
 ### 14.2 Workflows
 
@@ -638,7 +637,7 @@ photo-app/
 
 ## 16. Cost estimate
 
-Indicative AWS list prices (eu-central-1 / us-east-1, 2026). Small scale (≈ 10 users, ≈ 100 GB photos).
+Indicative AWS list prices (us-east-1, 2026). Small scale (≈ 10 users, ≈ 100 GB photos).
 
 | Item | Estimate / month |
 |---|---|
@@ -695,4 +694,5 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 
 | Version | Date | Changes |
 |---|---|---|
+| 0.2 | 2026-10-19 | Bootstrap details: one budget for the organization, CI role permissions and trust (§3, §14.1); region changed to us-east-1; separate dev/prod AWS accounts + management account; one state bucket per account; org-wide budget $5/month; client-side state encryption deferred |
 | 0.1 | 2026-10-18 | Initial specification: architecture, stack (React + TanStack, TypeScript API, Python thumbnails, OpenTofu, GitHub Actions), multi-user model, Google login, PWA |

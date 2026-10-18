@@ -14,15 +14,17 @@
 
 | | |
 |---|---|
-| **Phase** | 2 done → next: Phase 1 (AWS prerequisites) |
-| **Last updated** | 2026-10-18 |
-| **Deployed envs** | none |
+| **Phase** | 1 — AWS prerequisites (dev + general applied; prod pending approval) |
+| **Last updated** | 2026-10-19 |
+| **Deployed envs** | Bootstrap only: dev (state bucket + CI roles), general (budget). No app resources anywhere |
 | **Blockers** | none |
 
 ## Next up
 
-1. Phase 1: AWS account, budgets, state bucket (needed before any infra work).
-2. Meanwhile, code that doesn't need AWS can proceed: the thumbnail handler logic (6.1–6.7, local tests) or the API skeleton (5.1–5.3).
+1. Phase 3 (dev): `database` + `storage` modules, then plan → **ask the user** → apply in dev.
+2. Code that doesn't need AWS can go in parallel: thumbnail handler logic (6.1–6.7) or API skeleton (5.1–5.3).
+3. Prod bootstrap (1.3/1.4/1.5 for prod) whenever the user approves it; it isn't needed until Phase 11.
+4. Add GitHub repo secrets/environments for the CI roles when Phase 10 starts.
 
 ---
 
@@ -51,11 +53,17 @@
 
 ## Phase 1 — AWS & external prerequisites (§3, §13.3, §14.1)
 
-- [ ] **1.1** AWS account: root MFA, admin SSO/IAM user, `aws configure sso` profile (NFR-COST-2)
-- [ ] **1.2** AWS Budgets alerts at $5 and $20 / month (NFR-COST-2)
-- [ ] **1.3** `infra/bootstrap/`: state bucket `photo-app-tfstate-<suffix>` (versioning, encryption, public access block), KMS key for state encryption (NFR-OPS-3)
-- [ ] **1.4** `infra/envs/dev` backend config: S3 backend, `use_lockfile = true`, client-side state encryption with KMS (§13.3)
-- [ ] **1.5** GitHub OIDC provider + `ci-plan` / `ci-deploy` roles per env (§14.1, NFR-SEC-8)
+- [x] **1.1** AWS Organization with IAM Identity Center SSO; profiles `dev` (063359189013), `prod` (968632140314), `general` (590980992845, management), all AdministratorAccess. Root-user MFA is the user's responsibility (can't be checked via SSO)
+- [x] **1.2** Org-wide budget `photo-app-monthly`, $5/month, in the management account (`general`), alerts to edgar.ayala2893@gmail.com at 80 %/100 % actual and 100 % forecast. `infra/bootstrap/budget.tf`, workspace `general`. **Applied 2026-10-19.** (The account also has a pre-existing "My Zero-Spend Budget", which isn't managed here)
+- [~] **1.3** `infra/bootstrap/`: state bucket `photo-app-tfstate-<account-id>` per account (versioning, SSE-S3, ACLs disabled, public access block, TLS-only policy, old versions expire after 90 days keeping the newest 10, `prevent_destroy`). Workspaces `dev`/`prod`
+  - [x] dev: `photo-app-tfstate-063359189013` **applied 2026-10-19**
+  - [ ] prod: `photo-app-tfstate-968632140314`, plan clean, **needs user approval**
+- [~] **1.4** `infra/envs/{dev,prod}`: S3 backend (`use_lockfile = true`, key `<env>/terraform.tfstate`), provider with `allowed_account_ids` + default tags
+  - [x] dev: `tofu init` against the bucket done; empty plan OK (lock round-trip works)
+  - [ ] prod: after prod bucket exists
+- [~] **1.5** `infra/bootstrap/github-oidc.tf`: OIDC provider + `photo-app-ci-plan` (ReadOnlyAccess + state read + `.tflock` write; denies reading S3 objects other than state and DynamoDB items; any ref/PR of `EdgarA28/Photo-app`) and `photo-app-ci-deploy` (AdministratorAccess for now → 12.6; 1 h sessions; dev: `ref:refs/heads/main`, prod: `environment:prod`)
+  - [x] dev **applied 2026-10-19**: `arn:aws:iam::063359189013:role/photo-app-ci-plan`, `arn:aws:iam::063359189013:role/photo-app-ci-deploy`
+  - [ ] prod: with prod bootstrap, **needs user approval**
 - [ ] **1.6** Google Cloud project + OAuth consent screen (done after Cognito domain exists → see 4.3)
 - [ ] **1.7** Decide domain name (D-4) — only needed for prod
 
@@ -168,6 +176,9 @@
 - [ ] **12.2** Security review: tenant isolation, bucket policies, IAM, metadata stripping (NFR-SEC-*)
 - [ ] **12.3** Performance checks: 10,000-photo gallery, API p95, thumbnail latency (NFR-PERF-*)
 - [ ] **12.4** Cost check after first month vs §16 estimate
+- [ ] **12.5** Enable OpenTofu client-side state encryption (deferred by user 2026-10-18): passphrase (pbkdf2, free) or KMS (~$1/month per key); migrate existing state
+- [ ] **12.6** Scope `photo-app-ci-deploy` down from AdministratorAccess to the services actually deployed
+- [ ] **12.7** Revisit the budget (currently $5/month org-wide) before public launch
 
 ---
 
@@ -182,6 +193,14 @@
 | 2026-10-18 | Root `package.json` is `"type": "module"`. React-specific ESLint plugins get added with the web scaffold (8.1). |
 | 2026-10-18 | API contract choices (refine if needed): photo sort values `taken-desc`/`taken-asc`; `Photo.thumbUrl`/`previewUrl` are null until `ready`; albums carry `coverThumbUrl`; shared albums add `ownerId`, `sharedAt`; `GET /shared-albums` is paginated, `GET /albums` and `GET /albums/{id}/shares` are not; extra error codes `SHARE_TARGET_NOT_FOUND`, `RATE_LIMITED`; max 100 photo IDs per add-to-album request; album names ≤ 100 chars. |
 | 2026-10-18 | Not added: a `GET /health` schema (5.5 adds it with the API). |
+| 2026-10-18 | **Region us-east-1** (spec said eu-central-1); spec updated to v0.2. Separate AWS accounts for dev and prod; `general` is the management account and only holds the budget. |
+| 2026-10-18 | **State encryption deferred** to the end (task 12.5). State buckets use SSE-S3 only for now. |
+| 2026-10-18 | **AWS rule:** ask the user before creating any resource (show the plan, wait for an explicit yes, approval is per account). Resources created for testing are destroyed afterwards. |
+| 2026-10-19 | **Kept permanently:** everything in `infra/bootstrap` (state buckets, budget, GitHub OIDC provider, CI roles). Only app resources from Phases 3+ count as test resources to destroy after testing. |
+| 2026-10-19 | User approved bootstrap for **dev + general only**; prod waits. |
+| 2026-10-19 | The first dev apply was interrupted after 12 of 13 resources; the S3 lifecycle rule had been created in AWS but wasn't in state. Fixed with `tofu import` (no AWS change). Lesson: after an interrupted apply, compare `tofu state list` with AWS before re-applying. |
+| 2026-10-19 | Bootstrap plans are applied from saved plan files (`tofu plan -out` → `tofu apply <file>`) so exactly the reviewed plan is applied. |
+| 2026-10-19 | `infra/bootstrap/*.tfvars` are committed on purpose: they hold account IDs and the alert email, no secrets. Secrets (e.g. Google client secret) must never go into tfvars in git. |
 
 ## Session log
 
@@ -192,3 +211,5 @@
 | 2026-10-18 | Completed 0.4 (thumbnails uv project, ruff, pytest) and 0.5 (README). |
 | 2026-10-18 | Completed Phase 2 (`packages/shared`): constants, IDs, S3 keys + shared test vectors, Zod API schemas. 44 tests pass; lint/typecheck/format clean. |
 | 2026-10-18 | Completed 0.6: pushed initial commit to GitHub (`EdgarA28/Photo-app`, branch `main`). Project-scope Claude plugins enabled in `.claude/settings.json`. |
+| 2026-10-18 | Phase 1 code: `infra/bootstrap` (state buckets, budget, GitHub OIDC roles), `infra/envs/{dev,prod}` backend + provider. All validate; plans clean (dev 13, prod 13, general 1 to add). Nothing applied yet. Spec → v0.2. |
+| 2026-10-19 | Applied bootstrap in **dev** (13 resources: state bucket + 6 bucket settings, GitHub OIDC provider, ci-plan/ci-deploy roles + policies) and **general** (budget). `infra/envs/dev` initialised against remote state. Prod not applied. Docs updated (README, CLAUDE.md, bootstrap README, spec §3/§14). |
