@@ -23,7 +23,6 @@
 
 1. Phase 1: AWS account, budgets, state bucket (needed before any infra work).
 2. Meanwhile, code that doesn't need AWS can proceed: the thumbnail handler logic (6.1–6.7, local tests) or the API skeleton (5.1–5.3).
-3. 0.6 (GitHub repo + first commit) is deferred at the user's request.
 
 ---
 
@@ -48,7 +47,7 @@
   - Runtime deps: pillow, pillow-heif. Dev: boto3 (provided by the Lambda runtime, so not packaged), pytest, ruff
   - Root scripts `pnpm lint:py` / `pnpm test:py`; smoke test in `tests/test_package.py`
 - [x] **0.5** `README.md` with prerequisites, quick start and commands
-- [-] **0.6** Private GitHub repo created, first commit pushed (deferred by user, 2026-10-18)
+- [x] **0.6** GitHub repo `git@github.com:EdgarA28/Photo-app.git`, initial commit pushed to `main`
 
 ## Phase 1 — AWS & external prerequisites (§3, §13.3, §14.1)
 
@@ -191,4 +190,5 @@
 | 2026-10-18 | Created folder structure, root config files, this plan and `CLAUDE.md`. |
 | 2026-10-18 | Installed pnpm, uv, Node 22, Python 3.13. Completed 0.3 (tsconfig base, ESLint, Prettier, Vitest projects); lint/format/test all pass. |
 | 2026-10-18 | Completed 0.4 (thumbnails uv project, ruff, pytest) and 0.5 (README). |
-| 2026-10-18 | 0.6 deferred. Completed Phase 2 (`packages/shared`): constants, IDs, S3 keys + shared test vectors, Zod API schemas. 44 tests pass; lint/typecheck/format clean. |
+| 2026-10-18 | Completed Phase 2 (`packages/shared`): constants, IDs, S3 keys + shared test vectors, Zod API schemas. 44 tests pass; lint/typecheck/format clean. |
+| 2026-10-18 | Completed 0.6: pushed initial commit to GitHub (`EdgarA28/Photo-app`, branch `main`). Project-scope Claude plugins enabled in `.claude/settings.json`. |
