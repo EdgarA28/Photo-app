@@ -5,6 +5,7 @@
 > 2. Work on the next unchecked task(s). Requirement IDs (FR-*/NFR-*) and § numbers refer to [`docs/SPECIFICATION.md`](docs/SPECIFICATION.md).
 > 3. Before ending the session: tick finished tasks (`[x]`), update **Current status**, **Next up**, and add a line to the **Session log**.
 > 4. If a decision is made or the plan changes, record it in **Decisions & notes** (and in spec §18/§19 if it changes the spec).
+> 5. Update [`ARCHITECTURE.md`](ARCHITECTURE.md) for everything implemented or changed (status markers, objects, resources, flows, changelog).
 >
 > Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[-]` skipped / deferred
 
@@ -213,3 +214,4 @@
 | 2026-10-18 | Completed 0.6: pushed initial commit to GitHub (`EdgarA28/Photo-app`, branch `main`). Project-scope Claude plugins enabled in `.claude/settings.json`. |
 | 2026-10-18 | Phase 1 code: `infra/bootstrap` (state buckets, budget, GitHub OIDC roles), `infra/envs/{dev,prod}` backend + provider. All validate; plans clean (dev 13, prod 13, general 1 to add). Nothing applied yet. Spec → v0.2. |
 | 2026-10-19 | Applied bootstrap in **dev** (13 resources: state bucket + 6 bucket settings, GitHub OIDC provider, ci-plan/ci-deploy roles + policies) and **general** (budget). `infra/envs/dev` initialised against remote state. Prod not applied. Docs updated (README, CLAUDE.md, bootstrap README, spec §3/§14). |
+| 2026-10-19 | Added `ARCHITECTURE.md` (as-built architecture: stack + versions, accounts, repo tree, toolchain, shared objects/schemas, data model, API surface, workflows, security, infra resources, CI/CD, deviations). Rule added to keep it updated with every change. |

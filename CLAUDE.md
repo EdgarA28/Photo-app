@@ -6,6 +6,7 @@ Serverless photo storage PWA on AWS. Full spec: `docs/SPECIFICATION.md`.
 
 - At the start of a session, read `PROGRESS.md` (current status, next tasks).
 - At the end of a session, update `PROGRESS.md`: tick tasks, update "Current status" / "Next up", add a session-log line.
+- **Whenever something is implemented or changed, update `ARCHITECTURE.md` in the same change**: status markers (✅/🚧/📋), new objects, schemas, resources, flows, repo tree, versions, deviations from the spec, and its changelog. It must always describe what actually exists.
 - Reference requirement IDs (FR-*, NFR-*) and spec sections (§n) in code comments, tests and commits where relevant.
 
 ## Layout

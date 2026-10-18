@@ -4,6 +4,7 @@ A private, multi-user photo storage and gallery PWA, similar in spirit to Google
 
 - **Spec:** [`docs/SPECIFICATION.md`](docs/SPECIFICATION.md)
 - **Implementation plan & progress:** [`PROGRESS.md`](PROGRESS.md)
+- **Architecture (as built):** [`ARCHITECTURE.md`](ARCHITECTURE.md)
 
 ## Stack
 
