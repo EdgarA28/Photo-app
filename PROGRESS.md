@@ -15,14 +15,15 @@
 
 | | |
 |---|---|
-| **Phase** | 1 — AWS prerequisites (dev + general applied; prod pending approval) |
+| **Phase** | 3 done (dev) → next: Phase 4 (auth) or AWS-independent code (Phases 5/6) |
 | **Last updated** | 2026-10-19 |
-| **Deployed envs** | Bootstrap only: dev (state bucket + CI roles), general (budget). No app resources anywhere |
+| **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
 
 ## Next up
 
-1. Phase 3 (dev): `database` + `storage` modules, then plan → **ask the user** → apply in dev.
+1. Phase 4 (auth: Cognito + Google + pre-sign-up trigger), or AWS-independent code first: thumbnail handler (6.1–6.7) / API skeleton (5.1–5.3).
+   Dev app resources (table + photo bucket) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done.
 2. Code that doesn't need AWS can go in parallel: thumbnail handler logic (6.1–6.7) or API skeleton (5.1–5.3).
 3. Prod bootstrap (1.3/1.4/1.5 for prod) whenever the user approves it; it isn't needed until Phase 11.
 4. Add GitHub repo secrets/environments for the CI roles when Phase 10 starts.
@@ -78,10 +79,13 @@
 
 ## Phase 3 — Core infrastructure, dev (`infra/modules`)
 
-- [ ] **3.1** Common tagging (`Project`, `Environment`, `ManagedBy`) via provider `default_tags`
-- [ ] **3.2** `database` module: table `photo-app-{env}`, on-demand, GSI1, PITR flag (§8.2)
-- [ ] **3.3** `storage` module: photo bucket, public access block, SSE-S3, CORS, abort-multipart lifecycle, optional versioning (NFR-SEC-3/4)
-- [ ] **3.4** `envs/dev` wiring + first `tofu apply` to dev
+- [x] **3.1** Common tagging (`Project`, `Environment`, `ManagedBy`) via provider `default_tags` in `infra/envs/*/providers.tf`
+- [x] **3.2** `database` module: table `photo-app-{env}`, on-demand, PK/SK + GSI1 (new `key_schema` syntax), PITR flag, `deletion_protection` flag (default on), AWS-owned encryption key. 3 `tofu test` runs (mock provider)
+- [x] **3.3** `storage` module: bucket `photo-app-photos-{env}-{account-id}`, ACLs off, public access block, SSE-S3, TLS-only policy, CORS (app origins; POST/GET/HEAD), abort-multipart lifecycle, optional versioning + noncurrent expiry, `force_destroy` flag (default off). 4 `tofu test` runs
+- [x] **3.4** `envs/{dev,prod}/main.tf` wire both modules; settings in `env.tfvars` (`app_origins`). dev: PITR off, no deletion protection, `force_destroy`; prod: PITR on, deletion protection, versioning with 30-day expiry
+  - [x] dev plan clean: 9 to add (`photo-app-dev`, `photo-app-photos-dev-063359189013` + 7 bucket settings)
+  - [x] dev apply **done 2026-10-19** (9 added); re-plan shows no drift; verified table ACTIVE + GSI1 ACTIVE, bucket public access fully blocked
+  - prod: validated only (`-backend=false`); applied in Phase 11
 
 ## Phase 4 — Authentication (§11)
 
@@ -202,6 +206,10 @@
 | 2026-10-19 | The first dev apply was interrupted after 12 of 13 resources; the S3 lifecycle rule had been created in AWS but wasn't in state. Fixed with `tofu import` (no AWS change). Lesson: after an interrupted apply, compare `tofu state list` with AWS before re-applying. |
 | 2026-10-19 | Bootstrap plans are applied from saved plan files (`tofu plan -out` → `tofu apply <file>`) so exactly the reviewed plan is applied. |
 | 2026-10-19 | `infra/bootstrap/*.tfvars` are committed on purpose: they hold account IDs and the alert email, no secrets. Secrets (e.g. Google client secret) must never go into tfvars in git. |
+| 2026-10-19 | Same for `infra/envs/<env>/env.tfvars` (non-secret per-env settings). Run plans with `-var-file=env.tfvars`. |
+| 2026-10-19 | Infra modules have offline `tofu test` suites using `mock_provider "aws"` (no credentials, nothing created). Root script `pnpm test:infra`. |
+| 2026-10-19 | Storage: originals' INTELLIGENT_TIERING storage class will be set by the API in the pre-signed POST (lifecycle filters can't match `users/*/originals/`). The S3 → Lambda notification will live in the `thumbnails` module and CloudFront OAC access in the bucket policy from Phase 7. Versioning off uses `Suspended` (valid whether or not the bucket was ever versioned). |
+| 2026-10-19 | AWS provider 6.69 deprecates GSI `hash_key`/`range_key`; modules use `key_schema` blocks. |
 
 ## Session log
 
@@ -215,3 +223,5 @@
 | 2026-10-18 | Phase 1 code: `infra/bootstrap` (state buckets, budget, GitHub OIDC roles), `infra/envs/{dev,prod}` backend + provider. All validate; plans clean (dev 13, prod 13, general 1 to add). Nothing applied yet. Spec → v0.2. |
 | 2026-10-19 | Applied bootstrap in **dev** (13 resources: state bucket + 6 bucket settings, GitHub OIDC provider, ci-plan/ci-deploy roles + policies) and **general** (budget). `infra/envs/dev` initialised against remote state. Prod not applied. Docs updated (README, CLAUDE.md, bootstrap README, spec §3/§14). |
 | 2026-10-19 | Added `ARCHITECTURE.md` (as-built architecture: stack + versions, accounts, repo tree, toolchain, shared objects/schemas, data model, API surface, workflows, security, infra resources, CI/CD, deviations). Rule added to keep it updated with every change. |
+| 2026-10-19 | Phase 3 code: `database` + `storage` modules with `tofu test` suites (7 passing), wired into `envs/dev` and `envs/prod`; `pnpm test:infra`. dev plan clean (9 to add); apply waits for approval. |
+| 2026-10-19 | Applied Phase 3 in dev (user approved): `photo-app-dev` table + `photo-app-photos-dev-063359189013` bucket and its 7 settings. No drift. |

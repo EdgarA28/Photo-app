@@ -10,7 +10,7 @@
 | | |
 |---|---|
 | **Last updated** | 2026-10-19 |
-| **Reflects** | Phase 0 (repo), Phase 1 (AWS bootstrap: dev + management), Phase 2 (`packages/shared`) |
+| **Reflects** | Phase 0 (repo), Phase 1 (AWS bootstrap: dev + management), Phase 2 (`packages/shared`), Phase 3 (database + storage, deployed in dev) |
 
 ---
 
@@ -44,8 +44,9 @@
 | AWS bootstrap — dev | `infra/bootstrap` (ws `dev`) | ✅ | State bucket, GitHub OIDC, CI roles |
 | AWS bootstrap — management | `infra/bootstrap` (ws `general`) | ✅ | Organization-wide $5/month budget |
 | AWS bootstrap — prod | `infra/bootstrap` (ws `prod`) | 📋 | Code ready, plan clean, not applied |
-| Environment roots | `infra/envs/{dev,prod}` | 🚧 | Backend + provider only; dev initialised; no resources yet |
-| Infra modules | `infra/modules/*` | 📋 | storage, database, auth, api, thumbnails, frontend |
+| Environment roots | `infra/envs/{dev,prod}` | 🚧 | Database + storage **deployed in dev**; prod validated only |
+| Infra modules: database, storage | `infra/modules/{database,storage}` | ✅ (dev) | Offline `tofu test` suites (7 runs) |
+| Infra modules: auth, api, thumbnails, frontend | `infra/modules/*` | 📋 | |
 | API Lambda | `apps/api` | 📋 | Folder skeleton only |
 | Thumbnail Lambda | `services/thumbnails` | 🚧 | Python project + deps + smoke test; no handler yet |
 | Auth trigger Lambda | `services/auth-triggers` | 📋 | Folder skeleton only |
@@ -75,9 +76,9 @@ flowchart LR
     TRIG["📋 Pre-sign-up Lambda<br/>services/auth-triggers"]
     APIGW["📋 API Gateway HTTP API<br/>JWT authorizer"]
     API["📋 API Lambda (Hono)<br/>apps/api"]
-    DDB[("📋 DynamoDB<br/>single table")]
+    DDB[("✅ DynamoDB<br/>single table (dev)")]
     WEB[("📋 S3 site bucket")]
-    S3[("📋 S3 photo bucket")]
+    S3[("✅ S3 photo bucket (dev)")]
     THUMB["📋 Thumbnail Lambda<br/>services/thumbnails"]
     DLQ[["📋 SQS DLQ"]]
     STATE[("✅ S3 state bucket")]
@@ -160,6 +161,7 @@ Versions are what is **installed/locked today**; 📋 rows are chosen but not ye
 | ruff | 0.17.1 | Python lint + format | ✅ |
 | pytest | 9.1.1 | Python tests | ✅ |
 | esbuild | — | Bundle Lambdas | 📋 |
+| `tofu test` + `mock_provider` | OpenTofu 1.13 | Offline infra module tests | ✅ |
 
 ---
 
@@ -177,7 +179,8 @@ flowchart TB
   MGMT --- B["✅ Budget photo-app-monthly<br/>$5/month, whole organization"]
   DEV --- DS["✅ State bucket photo-app-tfstate-063359189013"]
   DEV --- DO["✅ GitHub OIDC + ci-plan / ci-deploy"]
-  DEV --- DA["📋 App resources (Phases 3–9)"]
+  DEV --- DD["✅ DynamoDB photo-app-dev<br/>✅ S3 photo-app-photos-dev-…"]
+  DEV --- DA["📋 Remaining app resources (Phases 4–9)"]
   PROD --- PS["📋 State bucket + OIDC + roles"]
   PROD --- PA["📋 App resources (Phase 11)"]
 ```
@@ -257,9 +260,12 @@ Photo-app/
 │   │   ├── {dev,prod,general}.tfvars
 │   │   └── README.md
 │   ├── envs/
-│   │   ├── dev/                 🚧 backend + provider (initialised, no resources)
-│   │   └── prod/                🚧 backend + provider (not initialised)
-│   └── modules/                 📋 storage, database, auth, api, thumbnails, frontend
+│   │   ├── dev/                 🚧 backend, provider, main.tf (database + storage), env.tfvars; database + storage deployed
+│   │   └── prod/                🚧 same wiring with prod settings; validated only
+│   └── modules/
+│       ├── database/            ✅ DynamoDB single table (+ tests/)
+│       ├── storage/             ✅ photo bucket (+ tests/)
+│       └── auth/ api/ thumbnails/ frontend/   📋
 │
 └── .github/workflows/           📋 ci.yml, deploy.yml
 ```
@@ -300,7 +306,7 @@ flowchart LR
 | **Python** | `services/thumbnails` is an independent uv project (`uv_build` backend, src layout). boto3 is dev-only because the Lambda runtime ships it. Root scripts `lint:py` / `test:py` call uv. |
 | **IaC** | OpenTofu; provider lock files are committed; `tofu fmt` enforced. |
 
-Root commands: `pnpm lint`, `pnpm format[:check]`, `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm lint:py`, `pnpm test:py`.
+Root commands: `pnpm lint`, `pnpm format[:check]`, `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm lint:py`, `pnpm test:py`, `pnpm test:infra` (runs `tofu test` in every module with a `tests/` folder; fails on any failure).
 
 ---
 
@@ -424,9 +430,9 @@ All request/response bodies of §9 as Zod schemas with inferred TS types.
 
 ---
 
-## 8. Data model (storage) 📋
+## 8. Data model (storage) 🚧
 
-Designed in spec §8; not yet created. Key format is already implemented in `s3Keys.ts`.
+Key format implemented in `s3Keys.ts`; table and bucket defined in `infra/modules/{database,storage}` (§12.3) and **deployed in dev** (empty; nothing writes to them yet).
 
 ### 8.1 Photo bucket (per environment)
 
@@ -436,7 +442,11 @@ users/{userId}/thumbs/{photoId}.jpg        ≤ 400 px, no metadata   STANDARD, i
 users/{userId}/previews/{photoId}.jpg      ≤ 1600 px, no metadata  STANDARD, immutable cache
 ```
 
+Bucket `photo-app-photos-{env}-{account-id}`. The API sets the originals' storage class (INTELLIGENT_TIERING) in the pre-signed POST, because lifecycle filters cannot match `users/*/originals/`.
+
 ### 8.2 DynamoDB single table `photo-app-{env}`
+
+On-demand, `PK`/`SK` strings, one GSI `GSI1` (`GSI1PK`/`GSI1SK`, projection ALL), AWS-owned encryption key.
 
 | Entity | PK | SK | GSI1PK | GSI1SK | API object |
 |---|---|---|---|---|---|
@@ -576,7 +586,9 @@ Bootstrap uses local state per workspace instead of S3.
 | Strict input validation | ✅ contracts | Zod schemas: allowed types, size cap, ID formats, trimmed names, normalised emails |
 | Key-format hardening | ✅ | Builders reject invalid IDs (no path injection); parser accepts only exact originals |
 | Tenant isolation (NFR-SEC-1/2) | 📋 | User ID only from JWT `sub`; foreign resources → 404 |
-| Private buckets via OAC / signed URLs (NFR-SEC-3) | 📋 | |
+| Private photo bucket (NFR-SEC-3/4) | ✅ (dev) | Public access block, ACLs off, SSE-S3, TLS-only policy, CORS limited to app origins |
+| Data deletion guard | ✅ code (prod settings) | Table deletion protection + no `force_destroy` by default; only dev opts out |
+| CloudFront OAC / signed URLs (NFR-SEC-3) | 📋 | Phase 7 |
 | Metadata stripping on derived images (NFR-SEC-5) | 📋 | |
 | Least-privilege Lambda roles (NFR-SEC-7) | 📋 | |
 | Throttling / WAF (NFR-SEC-9) | 📋 | |
@@ -617,16 +629,57 @@ Tags on everything: `Project=photo-app`, `Environment=<ws>`, `ManagedBy=opentofu
 |---|---|
 | `versions.tf` | OpenTofu ≥ 1.10, AWS `~> 6.0`, S3 backend: bucket `photo-app-tfstate-<acct>`, key `<env>/terraform.tfstate`, `use_lockfile = true`, `encrypt = true` |
 | `providers.tf` | region var (default `us-east-1`), `allowed_account_ids`, default tags (`Project`, `Environment`, `ManagedBy`); credentials from `AWS_PROFILE` locally / OIDC in CI |
-| `variables.tf` | `region` |
+| `variables.tf` | `region`; `app_origins` (web app origins → S3 CORS; later Cognito callbacks) |
+| `main.tf` | `module "database"`, `module "storage"` with per-env settings (below) |
+| `outputs.tf` | `table_name`, `photo_bucket_name` |
+| `env.tfvars` | Non-secret settings, committed. Run with `-var-file=env.tfvars` |
 
-dev: initialised against the remote backend, plan empty. prod: not initialised.
+| Setting | dev | prod |
+|---|---|---|
+| Table | `photo-app-dev` | `photo-app-prod` |
+| PITR | off | on |
+| Table deletion protection | off (disposable) | on |
+| Photo bucket | `photo-app-photos-dev-063359189013` | `photo-app-photos-prod-968632140314` |
+| Bucket versioning | off (`Suspended`) | on, previous versions expire after 30 d |
+| `force_destroy` | on (disposable) | off |
+| `app_origins` | `http://localhost:5173` | placeholder until the domain is chosen (D-4) |
 
-### 12.3 Modules — `infra/modules` 📋
+dev: **deployed 2026-10-19** (9 resources; test resources, destroyed when testing is done). prod: validated with `-backend=false` only.
+
+### 12.3 Modules — `infra/modules`
+
+Each module has `versions.tf`, `variables.tf`, `main.tf`, `outputs.tf` and offline tests in `tests/*.tftest.hcl` (`mock_provider "aws"`).
+
+**`database` ✅**
+
+| Resource | Detail |
+|---|---|
+| `aws_dynamodb_table.main` | `PAY_PER_REQUEST`; `PK` (hash) / `SK` (range); `GSI1` via `key_schema` blocks (`GSI1PK` HASH, `GSI1SK` RANGE), projection ALL; PITR = `point_in_time_recovery`; `deletion_protection_enabled` = `deletion_protection` (default true); SSE with AWS-owned key |
+
+Inputs: `table_name`, `point_in_time_recovery` (false), `deletion_protection` (true). Outputs: `table_name`, `table_arn`, `gsi1_name`.
+Tests: on-demand + key schema + GSI1; safe defaults; PITR when requested.
+
+**`storage` ✅**
+
+| Resource | Detail |
+|---|---|
+| `aws_s3_bucket.photos` | `photo-app-photos-{env}-{account-id}`, `force_destroy` from input (default false) |
+| `aws_s3_bucket_ownership_controls.photos` | BucketOwnerEnforced (ACLs off) |
+| `aws_s3_bucket_public_access_block.photos` | all four blocks (NFR-SEC-3) |
+| `aws_s3_bucket_server_side_encryption_configuration.photos` | AES256 (NFR-SEC-4) |
+| `aws_s3_bucket_versioning.photos` | `Enabled` or `Suspended` |
+| `aws_s3_bucket_lifecycle_configuration.photos` | abort incomplete multipart after 2 d; with versioning: expire noncurrent versions after N days + clean expired delete markers |
+| `aws_s3_bucket_cors_configuration.photos` | origins = `cors_allowed_origins`; methods POST/GET/HEAD; headers `*`; expose `ETag`; max age 1 h |
+| `aws_s3_bucket_policy.photos` | deny non-TLS (CloudFront OAC statement added in Phase 7) |
+
+Inputs: `environment`, `cors_allowed_origins`, `versioning` (false), `noncurrent_version_expiration_days` (30), `force_destroy` (false). Outputs: `bucket_name`, `bucket_arn`, `bucket_regional_domain_name`.
+Tests: name format, private + encrypted, `force_destroy` default, CORS origins/methods, versioning off/on with matching lifecycle rules.
+Not here by design: the S3 → Lambda event notification (one per bucket; `thumbnails` module) and CloudFront read access (Phase 7).
+
+**Planned 📋**
 
 | Module | Will contain |
 |---|---|
-| `database` | DynamoDB table, on-demand, GSI1, PITR flag |
-| `storage` | Photo bucket, public access block, SSE-S3, CORS, lifecycle, optional versioning |
 | `auth` | Cognito user pool, domain, Google IdP, app client, pre-sign-up trigger |
 | `api` | HTTP API, JWT authorizer, API Lambda, IAM, throttling, logs |
 | `thumbnails` | Python Lambda, IAM, S3 notification, DLQ, logs |
@@ -671,3 +724,4 @@ Not started. Target design: spec §12 (TanStack Router file routes with an authe
 | Date | Change |
 |---|---|
 | 2026-10-19 | Created: reflects Phases 0, 1 (dev + management) and 2. |
+| 2026-10-19 | Phase 3: `database` and `storage` modules (+ offline tests), env wiring and per-env settings; `pnpm test:infra`. Deployed in dev. |

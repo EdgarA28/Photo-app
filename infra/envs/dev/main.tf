@@ -1,0 +1,21 @@
+locals {
+  environment = "dev"
+}
+
+# Disposable environment: no deletion protection, bucket can be destroyed with contents.
+module "database" {
+  source = "../../modules/database"
+
+  table_name             = "photo-app-${local.environment}"
+  point_in_time_recovery = false
+  deletion_protection    = false
+}
+
+module "storage" {
+  source = "../../modules/storage"
+
+  environment          = local.environment
+  cors_allowed_origins = var.app_origins
+  versioning           = false
+  force_destroy        = true
+}

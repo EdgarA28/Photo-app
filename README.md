@@ -54,6 +54,7 @@ uv sync --project services/thumbnails    # Python service (creates .venv)
 | `pnpm build` | Build every package |
 | `pnpm lint:py` | ruff lint + format check for the thumbnail service |
 | `pnpm test:py` | pytest for the thumbnail service |
+| `pnpm test:infra` | Offline `tofu test` for every infra module (mocked AWS, creates nothing) |
 
 ## AWS
 
@@ -80,7 +81,7 @@ aws sso login --profile dev       # when the SSO session has expired
 ```bash
 cd infra/envs/dev
 AWS_PROFILE=dev tofu init
-AWS_PROFILE=dev tofu plan
+AWS_PROFILE=dev tofu plan -var-file=env.tfvars
 ```
 
 Deployment via GitHub Actions comes in Phase 10 (see `PROGRESS.md`).
