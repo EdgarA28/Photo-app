@@ -1,0 +1,8 @@
+pnpm-lock.yaml
+**/dist/
+**/coverage/
+**/.terraform/
+services/thumbnails/
+docs/
+**/routeTree.gen.ts
+*.md

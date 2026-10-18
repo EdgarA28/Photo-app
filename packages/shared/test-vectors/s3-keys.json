@@ -1,0 +1,64 @@
+{
+  "$comment": "Shared by packages/shared (Vitest) and services/thumbnails (pytest) so both key implementations stay in sync (spec §8.1).",
+  "valid": [
+    {
+      "userId": "3f1c2b4a-9d8e-4f7a-b6c5-1a2b3c4d5e6f",
+      "photoId": "01JABCDEFGHJKMNPQRSTVWXYZ0",
+      "ext": "jpg",
+      "original": "users/3f1c2b4a-9d8e-4f7a-b6c5-1a2b3c4d5e6f/originals/01JABCDEFGHJKMNPQRSTVWXYZ0.jpg",
+      "thumb": "users/3f1c2b4a-9d8e-4f7a-b6c5-1a2b3c4d5e6f/thumbs/01JABCDEFGHJKMNPQRSTVWXYZ0.jpg",
+      "preview": "users/3f1c2b4a-9d8e-4f7a-b6c5-1a2b3c4d5e6f/previews/01JABCDEFGHJKMNPQRSTVWXYZ0.jpg"
+    },
+    {
+      "userId": "00000000-0000-4000-8000-000000000000",
+      "photoId": "7ZZZZZZZZZZZZZZZZZZZZZZZZZ",
+      "ext": "heic",
+      "original": "users/00000000-0000-4000-8000-000000000000/originals/7ZZZZZZZZZZZZZZZZZZZZZZZZZ.heic",
+      "thumb": "users/00000000-0000-4000-8000-000000000000/thumbs/7ZZZZZZZZZZZZZZZZZZZZZZZZZ.jpg",
+      "preview": "users/00000000-0000-4000-8000-000000000000/previews/7ZZZZZZZZZZZZZZZZZZZZZZZZZ.jpg"
+    },
+    {
+      "userId": "abcdef01-2345-4678-9abc-def012345678",
+      "photoId": "00000000000000000000000000",
+      "ext": "png",
+      "original": "users/abcdef01-2345-4678-9abc-def012345678/originals/00000000000000000000000000.png",
+      "thumb": "users/abcdef01-2345-4678-9abc-def012345678/thumbs/00000000000000000000000000.jpg",
+      "preview": "users/abcdef01-2345-4678-9abc-def012345678/previews/00000000000000000000000000.jpg"
+    },
+    {
+      "userId": "abcdef01-2345-4678-9abc-def012345678",
+      "photoId": "01JABCDEFGHJKMNPQRSTVWXYZ0",
+      "ext": "heif",
+      "original": "users/abcdef01-2345-4678-9abc-def012345678/originals/01JABCDEFGHJKMNPQRSTVWXYZ0.heif",
+      "thumb": "users/abcdef01-2345-4678-9abc-def012345678/thumbs/01JABCDEFGHJKMNPQRSTVWXYZ0.jpg",
+      "preview": "users/abcdef01-2345-4678-9abc-def012345678/previews/01JABCDEFGHJKMNPQRSTVWXYZ0.jpg"
+    },
+    {
+      "userId": "abcdef01-2345-4678-9abc-def012345678",
+      "photoId": "01JABCDEFGHJKMNPQRSTVWXYZ0",
+      "ext": "webp",
+      "original": "users/abcdef01-2345-4678-9abc-def012345678/originals/01JABCDEFGHJKMNPQRSTVWXYZ0.webp",
+      "thumb": "users/abcdef01-2345-4678-9abc-def012345678/thumbs/01JABCDEFGHJKMNPQRSTVWXYZ0.jpg",
+      "preview": "users/abcdef01-2345-4678-9abc-def012345678/previews/01JABCDEFGHJKMNPQRSTVWXYZ0.jpg"
+    }
+  ],
+  "invalidOriginalKeys": [
+    "users/3f1c2b4a-9d8e-4f7a-b6c5-1a2b3c4d5e6f/thumbs/01JABCDEFGHJKMNPQRSTVWXYZ0.jpg",
+    "users/3f1c2b4a-9d8e-4f7a-b6c5-1a2b3c4d5e6f/previews/01JABCDEFGHJKMNPQRSTVWXYZ0.jpg",
+    "users/3f1c2b4a-9d8e-4f7a-b6c5-1a2b3c4d5e6f/originals/01JABCDEFGHJKMNPQRSTVWXYZ0",
+    "users/3f1c2b4a-9d8e-4f7a-b6c5-1a2b3c4d5e6f/originals/01JABCDEFGHJKMNPQRSTVWXYZ0.jpeg",
+    "users/3f1c2b4a-9d8e-4f7a-b6c5-1a2b3c4d5e6f/originals/01JABCDEFGHJKMNPQRSTVWXYZ0.JPG",
+    "users/3f1c2b4a-9d8e-4f7a-b6c5-1a2b3c4d5e6f/originals/01jabcdefghjkmnpqrstvwxyz0.jpg",
+    "users/3f1c2b4a-9d8e-4f7a-b6c5-1a2b3c4d5e6f/originals/81JABCDEFGHJKMNPQRSTVWXYZ0.jpg",
+    "users/3f1c2b4a-9d8e-4f7a-b6c5-1a2b3c4d5e6f/originals/01JABCDEFGHJKMNPQRSTVWXYZI.jpg",
+    "users/3F1C2B4A-9D8E-4F7A-B6C5-1A2B3C4D5E6F/originals/01JABCDEFGHJKMNPQRSTVWXYZ0.jpg",
+    "users/not-a-uuid/originals/01JABCDEFGHJKMNPQRSTVWXYZ0.jpg",
+    "users/3f1c2b4a-9d8e-4f7a-b6c5-1a2b3c4d5e6f/originals/sub/01JABCDEFGHJKMNPQRSTVWXYZ0.jpg",
+    "users/3f1c2b4a-9d8e-4f7a-b6c5-1a2b3c4d5e6f/originals/01JABCDEFGHJKMNPQRSTVWXYZ0.jpg/",
+    "/users/3f1c2b4a-9d8e-4f7a-b6c5-1a2b3c4d5e6f/originals/01JABCDEFGHJKMNPQRSTVWXYZ0.jpg",
+    "prefix/users/3f1c2b4a-9d8e-4f7a-b6c5-1a2b3c4d5e6f/originals/01JABCDEFGHJKMNPQRSTVWXYZ0.jpg",
+    "users/3f1c2b4a-9d8e-4f7a-b6c5-1a2b3c4d5e6f/originals/01JABCDEFGHJKMNPQRSTVWXYZ0.jpg.png",
+    "users//originals/01JABCDEFGHJKMNPQRSTVWXYZ0.jpg",
+    ""
+  ]
+}
