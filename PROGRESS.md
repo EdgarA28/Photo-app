@@ -15,18 +15,19 @@
 
 | | |
 |---|---|
-| **Phase** | 3 done (dev) → next: Phase 4 (auth) or AWS-independent code (Phases 5/6) |
+| **Phase** | 3 done (dev), 6.1–6.7 done (thumbnail code) → next: API skeleton (5.1–5.3) or Phase 4 (auth) |
 | **Last updated** | 2026-10-19 |
 | **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
 
 ## Next up
 
-1. Phase 4 (auth: Cognito + Google + pre-sign-up trigger), or AWS-independent code first: thumbnail handler (6.1–6.7) / API skeleton (5.1–5.3).
+1. API skeleton (5.1–5.3), no AWS needed. 5.6 must follow the Photo item lifecycle contract in ARCHITECTURE.md §8.2 (pending item with provisional GSI1SK; Usage is counted by the thumbnail Lambda).
+2. Phase 4 (auth: Cognito + Google + pre-sign-up trigger): creates AWS resources, needs approval.
    Dev app resources (table + photo bucket) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done.
-2. Code that doesn't need AWS can go in parallel: thumbnail handler logic (6.1–6.7) or API skeleton (5.1–5.3).
-3. Prod bootstrap (1.3/1.4/1.5 for prod) whenever the user approves it; it isn't needed until Phase 11.
-4. Add GitHub repo secrets/environments for the CI roles when Phase 10 starts.
+3. Thumbnails 6.8 (aarch64 packaging) + 6.9 (infra module, can be written and `tofu test`ed offline; deploy needs approval). IAM must include `s3:DeleteObject` on `thumbs/`+`previews/` (race cleanup) and Lambda JSON log format.
+4. Prod bootstrap (1.3/1.4/1.5 for prod) whenever the user approves it; it isn't needed until Phase 11.
+5. Add GitHub repo secrets/environments for the CI roles when Phase 10 starts.
 
 ---
 
@@ -115,13 +116,14 @@
 
 ## Phase 6 — Thumbnail service (`services/thumbnails`, §10)
 
-- [ ] **6.1** Handler: key filter (loop protection), download, decode (Pillow + pillow-heif), EXIF orientation (FR-GAL-6)
-- [ ] **6.2** Extract `DateTimeOriginal`, width, height; fallback to upload time
-- [ ] **6.3** Generate thumb (400 px, q75) + preview (1600 px, q82), no upscale, flatten alpha, strip metadata (NFR-SEC-5)
-- [ ] **6.4** Upload with `image/jpeg` + immutable cache headers; update DynamoDB to `ready` (+ GSI1SK)
-- [ ] **6.5** Error handling: permanent → `failed`, transient → raise (FR-GAL-5, NFR-OPS-1)
-- [ ] **6.6** Python mirror of S3 key format + tests kept in sync with `packages/shared`
-- [ ] **6.7** pytest fixtures: JPEG with orientation, PNG with alpha, HEIC, corrupt file
+- [x] **6.1** Handler: key filter (loop protection), download, decode (Pillow + pillow-heif), EXIF orientation (FR-GAL-6)
+- [x] **6.2** Extract `DateTimeOriginal`, width, height; fallback to upload time
+- [x] **6.3** Generate thumb (400 px, q75) + preview (1600 px, q82), no upscale, flatten alpha, strip metadata (NFR-SEC-5)
+- [x] **6.4** Upload with `image/jpeg` + immutable cache headers; update DynamoDB to `ready` (+ GSI1SK)
+- [x] **6.5** Error handling: permanent → `failed`, transient → raise (FR-GAL-5, NFR-OPS-1)
+- [x] **6.6** Python mirror of S3 key format + tests kept in sync with `packages/shared`
+- [x] **6.7** pytest fixtures: JPEG with orientation, PNG with alpha, HEIC, corrupt file
+  - 73 tests (key vectors, imaging, handler/processor on moto S3 + DynamoDB); fixtures generated in `conftest.py`, no binaries in git
 - [ ] **6.8** Packaging: manylinux2014 aarch64 wheels → zip
 - [ ] **6.9** `thumbnails` infra module: Lambda (1536 MB, 60 s), IAM (read `originals/`, write `thumbs/`+`previews/`), S3 notification, retries 2×, SQS DLQ 14 days, logs (NFR-SEC-7)
 - [ ] **6.10** End-to-end check: upload via pre-signed POST → thumb ≤ 5 s (NFR-PERF-1)
@@ -210,6 +212,11 @@
 | 2026-10-19 | Infra modules have offline `tofu test` suites using `mock_provider "aws"` (no credentials, nothing created). Root script `pnpm test:infra`. |
 | 2026-10-19 | Storage: originals' INTELLIGENT_TIERING storage class will be set by the API in the pre-signed POST (lifecycle filters can't match `users/*/originals/`). The S3 → Lambda notification will live in the `thumbnails` module and CloudFront OAC access in the bucket policy from Phase 7. Versioning off uses `Suspended` (valid whether or not the bucket was ever versioned). |
 | 2026-10-19 | AWS provider 6.69 deprecates GSI `hash_key`/`range_key`; modules use `key_schema` blocks. |
+| 2026-10-19 | **Usage is counted by the thumbnail Lambda**, atomically with the final status, for both `ready` and `failed` (the original is stored either way). The API only creates the `pending` item (with provisional GSI1SK = uploadedAt) and decrements on delete. The Lambda also writes the actual S3 `sizeBytes`. |
+| 2026-10-19 | `takenAt`: EXIF offset applied when present; without one the wall-clock time is stored as UTC. All timestamps use the JS `toISOString()` format so GSI1SK sorts correctly. |
+| 2026-10-19 | Thumbnails convert embedded ICC profiles (e.g. Display P3) to sRGB before stripping metadata, so colours stay correct. Max source 100 MP (decompression-bomb guard). |
+| 2026-10-19 | Known libheif quirk: pure random-noise images encoded at high quality produce HEIC files libde265 can't decode; real photos are fine. Such files would be marked `failed`. |
+| 2026-10-19 | moto added as a Python dev dependency for S3/DynamoDB tests. |
 
 ## Session log
 
@@ -225,3 +232,4 @@
 | 2026-10-19 | Added `ARCHITECTURE.md` (as-built architecture: stack + versions, accounts, repo tree, toolchain, shared objects/schemas, data model, API surface, workflows, security, infra resources, CI/CD, deviations). Rule added to keep it updated with every change. |
 | 2026-10-19 | Phase 3 code: `database` + `storage` modules with `tofu test` suites (7 passing), wired into `envs/dev` and `envs/prod`; `pnpm test:infra`. dev plan clean (9 to add); apply waits for approval. |
 | 2026-10-19 | Applied Phase 3 in dev (user approved): `photo-app-dev` table + `photo-app-photos-dev-063359189013` bucket and its 7 settings. No drift. |
+| 2026-10-19 | Thumbnail service code 6.1–6.7: `handler.py`, `processor.py`, `imaging.py`, `s3_keys.py`; 73 pytest tests pass, ruff clean. 12 MP photo processes in 0.3–1.0 s locally. Nothing deployed. |

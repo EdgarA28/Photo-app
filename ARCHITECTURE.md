@@ -10,7 +10,7 @@
 | | |
 |---|---|
 | **Last updated** | 2026-10-19 |
-| **Reflects** | Phase 0 (repo), Phase 1 (AWS bootstrap: dev + management), Phase 2 (`packages/shared`), Phase 3 (database + storage, deployed in dev) |
+| **Reflects** | Phase 0 (repo), Phase 1 (AWS bootstrap: dev + management), Phase 2 (`packages/shared`), Phase 3 (database + storage, deployed in dev), Phase 6.1–6.7 (thumbnail code, not deployed) |
 
 ---
 
@@ -48,7 +48,7 @@
 | Infra modules: database, storage | `infra/modules/{database,storage}` | ✅ (dev) | Offline `tofu test` suites (7 runs) |
 | Infra modules: auth, api, thumbnails, frontend | `infra/modules/*` | 📋 | |
 | API Lambda | `apps/api` | 📋 | Folder skeleton only |
-| Thumbnail Lambda | `services/thumbnails` | 🚧 | Python project + deps + smoke test; no handler yet |
+| Thumbnail Lambda | `services/thumbnails` | 🚧 | Handler, image pipeline, S3-key mirror + 73 pytest tests (6.1–6.7); not packaged or deployed yet (6.8–6.10) |
 | Auth trigger Lambda | `services/auth-triggers` | 📋 | Folder skeleton only |
 | Web app / PWA | `apps/web` | 📋 | Folder skeleton only |
 | CI/CD workflows | `.github/workflows` | 📋 | AWS-side roles exist (dev); no workflows yet |
@@ -79,7 +79,7 @@ flowchart LR
     DDB[("✅ DynamoDB<br/>single table (dev)")]
     WEB[("📋 S3 site bucket")]
     S3[("✅ S3 photo bucket (dev)")]
-    THUMB["📋 Thumbnail Lambda<br/>services/thumbnails"]
+    THUMB["🚧 Thumbnail Lambda<br/>services/thumbnails"]
     DLQ[["📋 SQS DLQ"]]
     STATE[("✅ S3 state bucket")]
   end
@@ -140,9 +140,9 @@ Versions are what is **installed/locked today**; 📋 rows are chosen but not ye
 |---|---|---|---|---|
 | zod | 4.6.7 | `packages/shared` | API request/response schemas, runtime validation | ✅ |
 | ulid | 3.0.2 | `packages/shared` | Time-sortable IDs for photos/albums | ✅ |
-| Pillow | 13.0.0 | `services/thumbnails` | Image decode/resize/encode | ✅ installed |
-| pillow-heif | 1.8.1 | `services/thumbnails` | HEIC/HEIF decoding | ✅ installed |
-| boto3 | 1.43.114 (dev only) | `services/thumbnails` | AWS SDK; provided by Lambda runtime, not packaged | ✅ installed |
+| Pillow | 13.0.0 | `services/thumbnails` | Image decode/resize/encode, EXIF, ICC → sRGB (LittleCMS) | ✅ |
+| pillow-heif | 1.8.1 | `services/thumbnails` | HEIC/HEIF decoding (libheif 1.23, libde265) | ✅ |
+| boto3 | 1.43.114 (dev only) | `services/thumbnails` | AWS SDK; provided by Lambda runtime, not packaged | ✅ |
 | Hono | — | `apps/api` | Lightweight router inside one Lambda (D-1) | 📋 |
 | AWS SDK v3 | — | `apps/api`, `services/auth-triggers` | DynamoDB, S3, Cognito, CloudFront signer | 📋 |
 | React + Vite | — | `apps/web` | SPA | 📋 |
@@ -160,6 +160,7 @@ Versions are what is **installed/locked today**; 📋 rows are chosen but not ye
 | Vitest | 5.0.5 | Unit tests, one project per package | ✅ |
 | ruff | 0.17.1 | Python lint + format | ✅ |
 | pytest | 9.1.1 | Python tests | ✅ |
+| moto (`s3`, `dynamodb`) | 5.2.4 | In-memory S3/DynamoDB for thumbnail handler tests | ✅ |
 | esbuild | — | Bundle Lambdas | 📋 |
 | `tofu test` + `mock_provider` | OpenTofu 1.13 | Offline infra module tests | ✅ |
 
@@ -248,8 +249,12 @@ Photo-app/
 │   ├── thumbnails/              🚧 Python Lambda
 │   │   ├── pyproject.toml       ✅ uv project, ruff + pytest config
 │   │   ├── uv.lock              ✅
-│   │   ├── src/thumbnails/      🚧 package (handler 📋)
-│   │   └── tests/               🚧 smoke test only
+│   │   ├── src/thumbnails/      ✅ package
+│   │   │   ├── handler.py       Lambda entry `thumbnails.handler.handler` (S3 event → Processor)
+│   │   │   ├── processor.py     S3 get/put, DynamoDB status + Usage transaction, error policy
+│   │   │   ├── imaging.py       pure pipeline: decode, orient, EXIF date, resize, strip, JPEG
+│   │   │   └── s3_keys.py       mirror of packages/shared s3Keys.ts
+│   │   └── tests/               ✅ pytest: key vectors, imaging, handler on moto; fixtures generated in conftest.py
 │   └── auth-triggers/           📋 Cognito pre-sign-up Lambda (TS)
 │
 ├── infra/
@@ -458,6 +463,12 @@ On-demand, `PK`/`SK` strings, one GSI `GSI1` (`GSI1PK`/`GSI1SK`, projection ALL)
 
 Access patterns and the "can user X see photo P" rule: see spec §8.2.
 
+**Photo item lifecycle (contract between API and thumbnail Lambda):**
+- API (5.6) puts the item with `status: pending`, `uploadedAt`, and `GSI1PK`/`GSI1SK` using `uploadedAt` as the provisional `takenAt`, so pending photos appear in the gallery (FR-GAL-5).
+- Thumbnail Lambda moves it to `ready` (sets `width`, `height`, `takenAt`, `GSI1SK`, actual `sizeBytes`, `processedAt`) or `failed` (`failureReason`, `sizeBytes`, `processedAt`; GSI1SK unchanged).
+- **Usage** is incremented by the thumbnail Lambda, in the same transaction, once per stored original (`ready` *or* `failed`, because the original occupies storage either way): `ADD bytesUsed :size, photoCount 1`. `DELETE /photos/{id}` (5.9) decrements by the item's `sizeBytes`. `quotaBytes` is not written here.
+- All timestamps use the JS `toISOString()` format.
+
 ---
 
 ## 9. API surface 📋
@@ -514,7 +525,7 @@ sequenceDiagram
   A-->>U: Set-Cookie: CloudFront signed cookies for /users/{sub}/*
 ```
 
-### 10.2 Upload & processing 📋 (contracts ✅)
+### 10.2 Upload & processing 🚧 (contracts ✅, thumbnail code ✅, API 📋, not deployed)
 
 ```mermaid
 sequenceDiagram
@@ -529,15 +540,33 @@ sequenceDiagram
   A-->>U: {photoId, upload{url, fields}}<br/>✅ newId(), originalKey()
   U->>S: POST file to users/{sub}/originals/{photoId}.{ext}<br/>(policy limits size + content type)
   S-)T: ObjectCreated
-  T->>T: ✅ parseOriginalKey() → ignore anything else
-  T->>S: GET original
-  T->>T: decode (HEIC ok), EXIF orientation, read DateTimeOriginal,<br/>resize 400/1600, strip metadata, JPEG
-  T->>S: PUT thumbs/ + previews/ (✅ thumbKey/previewKey)
-  T->>D: Photo → ready (+ width, height, takenAt, GSI1SK), Usage += size
+  T->>T: ✅ parse_original_key() → ignore anything else
+  T->>D: ✅ GetItem Photo (consistent) → skip unless pending
+  T->>S: ✅ GET original
+  T->>T: ✅ decode (HEIC ok), EXIF orientation, read DateTimeOriginal,<br/>ICC → sRGB, resize 400/1600, strip metadata, JPEG
+  T->>S: ✅ PUT thumbs/ + previews/ (thumb_key/preview_key)
+  T->>D: ✅ TransactWrite: Photo pending → ready (+ width, height, takenAt, GSI1SK, sizeBytes)<br/>and Usage ADD bytesUsed, photoCount
   U->>A: refetch GET /photos → appears in gallery
 ```
 
 Failure paths: corrupt/unsupported → `status: failed`, no retry; transient → 2 async retries → SQS DLQ.
+
+**Thumbnail Lambda details** (`services/thumbnails`, ✅ code, 📋 deployed):
+
+| Aspect | Implementation |
+|---|---|
+| Entry / config | `thumbnails.handler.handler`; env `TABLE_NAME`; bucket and key from the event (key URL-decoded) |
+| Loop protection | Only exact original keys are processed; thumbs/previews/anything else → `skipped` |
+| Idempotency | Photo item read with `ConsistentRead`; final write is conditional on `status = pending`, so duplicate S3 events and Lambda retries never double-count |
+| Decoding | Pillow restricted to `JPEG`, `PNG`, `HEIF`, `WEBP`; JPEG decoded at reduced scale via `draft()` when ≥ 2× the preview size |
+| Image rules | EXIF orientation applied; `width`/`height` = displayed size of the original; alpha flattened on white; embedded ICC profile converted to sRGB, then dropped; LANCZOS, never upscaled; JPEG progressive + optimized, q75 thumb / q82 preview |
+| `takenAt` | EXIF `DateTimeOriginal` (+ `SubSecTimeOriginal`, `OffsetTimeOriginal` → UTC). No offset → wall-clock time stored as UTC. Invalid, before 1900 or in the future → fallback to the item's `uploadedAt` (then event time). Format = JS `toISOString()` (`YYYY-MM-DDTHH:mm:ss.sssZ`) so GSI1SK sorts as a string |
+| Output objects | `image/jpeg`, `Cache-Control: public, max-age=31536000, immutable`, `STANDARD` |
+| Permanent failure | Corrupt/truncated/unsupported, > 50 MB (checked from the event before download) or > 100 MP → item `failed` + `failureReason`; returns normally |
+| Transient failure | Any S3/DynamoDB error is raised → Lambda async retry → DLQ (6.9) |
+| Races | Original already deleted → `skipped`. Photo item deleted while processing → derived objects are deleted again (needs `s3:DeleteObject` on `thumbs/`, `previews/`) |
+| Logs | stdlib `logging` with `extra` fields; JSON via the Lambda JSON log format (set in the 6.9 module) |
+| Measured locally | 12 MP JPEG 0.3 s, WebP 0.5 s, PNG 0.6 s, HEIC 1.0 s (x86 laptop; Lambda check in 6.10) |
 
 ### 10.3 Viewing 📋
 
@@ -589,7 +618,8 @@ Bootstrap uses local state per workspace instead of S3.
 | Private photo bucket (NFR-SEC-3/4) | ✅ (dev) | Public access block, ACLs off, SSE-S3, TLS-only policy, CORS limited to app origins |
 | Data deletion guard | ✅ code (prod settings) | Table deletion protection + no `force_destroy` by default; only dev opts out |
 | CloudFront OAC / signed URLs (NFR-SEC-3) | 📋 | Phase 7 |
-| Metadata stripping on derived images (NFR-SEC-5) | 📋 | |
+| Metadata stripping on derived images (NFR-SEC-5) | ✅ code | Output JPEGs carry pixels only (no EXIF/GPS/XMP/ICC); tested for JPEG, PNG, WebP and HEIF sources |
+| Decompression-bomb / size limits | ✅ code | Thumbnail Lambda rejects sources > 50 MB or > 100 MP as permanent failures |
 | Least-privilege Lambda roles (NFR-SEC-7) | 📋 | |
 | Throttling / WAF (NFR-SEC-9) | 📋 | |
 | `ci-deploy` least privilege | 📋 | Currently `AdministratorAccess`, restricted by *who* (main / prod env); task 12.6 |
@@ -725,3 +755,4 @@ Not started. Target design: spec §12 (TanStack Router file routes with an authe
 |---|---|
 | 2026-10-19 | Created: reflects Phases 0, 1 (dev + management) and 2. |
 | 2026-10-19 | Phase 3: `database` and `storage` modules (+ offline tests), env wiring and per-env settings; `pnpm test:infra`. Deployed in dev. |
+| 2026-10-19 | Thumbnail service code (6.1–6.7): handler, processor, imaging pipeline, Python S3-key mirror, 73 tests (moto added). Photo item lifecycle + Usage contract documented (§8.2), Lambda details (§10.2), security rows updated. |
