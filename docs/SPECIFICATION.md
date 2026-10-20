@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Version** | 0.2 |
-| **Date** | 2026-10-18 |
+| **Version** | 0.3 |
+| **Date** | 2026-10-20 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
 
@@ -190,6 +190,10 @@ flowchart LR
 1. App fetches `GET /api/photos?cursor=…` (metadata only).
 2. Thumbnails/previews load via CloudFront at stable URLs `/users/{userId}/thumbs/{photoId}.jpg`, authorized by signed cookies, cached at the edge and by the service worker.
 
+**Logout** (FR-AUTH-5)
+1. App calls `DELETE /api/session/media-cookie` → API expires the three CloudFront cookies (`Max-Age=0`). The cookies are `HttpOnly`, so only a server response can remove them.
+2. App clears tokens, the Query cache and IndexedDB, then redirects to the Cognito logout endpoint.
+
 **Download original**
 1. App calls `GET /api/photos/{id}/download-url`.
 2. API verifies ownership/share, returns a 5-minute pre-signed S3 GET URL with `Content-Disposition: attachment`.
@@ -370,6 +374,7 @@ Access patterns:
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/session/media-cookie` | Set CloudFront signed cookies for `/users/{userId}/*` |
+| `DELETE` | `/session/media-cookie` | Expire the media cookies (logout); `204`, idempotent |
 | `GET` | `/me` | Profile, usage and quota |
 | `POST` | `/photos/upload-url` | Body `{fileName, contentType, sizeBytes}` → `{photoId, upload: {url, fields}}`; creates `pending` item, checks quota |
 | `GET` | `/photos` | List own photos `?cursor&limit&sort` |
@@ -400,6 +405,8 @@ URL / cookie lifetimes:
 | Download pre-signed GET | 5 min |
 | CloudFront signed URLs (shared photos) | 15 min |
 | CloudFront media cookie | 8 h, refreshed with tokens |
+
+Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`, served from the same CloudFront domain as the app (first-party). `DELETE /session/media-cookie` sends the same three cookie names with the same `Path` and `Max-Age=0`. Signed cookies cannot be revoked server-side: a copy taken before logout stays valid until its expiry (≤ 8 h), and only for that user's own prefix.
 
 ---
 
@@ -694,5 +701,6 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 
 | Version | Date | Changes |
 |---|---|---|
+| 0.3 | 2026-10-20 | `DELETE /session/media-cookie` for logout (FR-AUTH-5: `HttpOnly` cookies can't be cleared by JS); logout flow (§5.2); media cookie attributes and non-revocability (§9) |
 | 0.2 | 2026-10-19 | Bootstrap details: one budget for the organization, CI role permissions and trust (§3, §14.1); region changed to us-east-1; separate dev/prod AWS accounts + management account; one state bucket per account; org-wide budget $5/month; client-side state encryption deferred |
 | 0.1 | 2026-10-18 | Initial specification: architecture, stack (React + TanStack, TypeScript API, Python thumbnails, OpenTofu, GitHub Actions), multi-user model, Google login, PWA |

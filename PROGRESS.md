@@ -133,7 +133,7 @@
 
 - [ ] **7.1** `frontend` module: site bucket, CloudFront with OAC, behaviors `/` (site), `/api/*` (API GW), `/users/*` (photo bucket), SPA fallback
 - [ ] **7.2** CloudFront key pair + key group; private key in Secrets Manager / SSM for the API
-- [ ] **7.3** `POST /session/media-cookie`: signed cookies for `/users/{sub}/*`, 8 h
+- [ ] **7.3** `POST /session/media-cookie`: signed cookies for `/users/{sub}/*`, 8 h; `DELETE /session/media-cookie`: expire them on logout (FR-AUTH-5, spec v0.3)
 - [ ] **7.4** Signed URLs (15 min) for photos in albums shared with me
 - [ ] **7.5** Update Cognito callback URLs + S3 CORS with the CloudFront domain
 
@@ -151,7 +151,7 @@
 - [ ] **8.10** Upload queue in IndexedDB: picker, drag & drop, camera; 3 concurrent; progress; retry on `online`/start (FR-UP-1/5/6)
 - [ ] **8.11** Albums: list, create, rename, delete, add/remove photos, album view (FR-ALB-1/2)
 - [ ] **8.12** Sharing UI: share by email, revoke, "Shared with me" section (FR-SHR-1..4)
-- [ ] **8.13** Settings: usage/quota bar, logout clearing tokens, cookies, Query cache, IndexedDB (FR-ACC-1, FR-AUTH-5)
+- [ ] **8.13** Settings: usage/quota bar, logout calling `DELETE /session/media-cookie` and clearing tokens, Query cache, IndexedDB (FR-ACC-1, FR-AUTH-5)
 - [ ] **8.14** Quota exceeded + error messages (FR-UP-7)
 
 ## Phase 9 — PWA (§12.5)
@@ -241,3 +241,4 @@
 | 2026-10-19 | API skeleton 5.1–5.3 (`apps/api`): Hono app, auth/validation/error middleware, `/health`, DynamoDB repositories (photos, albums, memberships, shares, usage, cursors), esbuild bundle. 47 tests incl. DynamoDB Local; lint/typecheck/format clean. Nothing deployed. |
 | 2026-10-19 | Thumbnail service code 6.1–6.7: `handler.py`, `processor.py`, `imaging.py`, `s3_keys.py`; 73 pytest tests pass, ruff clean. 12 MP photo processes in 0.3–1.0 s locally. Nothing deployed. |
 | 2026-10-20 | Security fix: album update verifies ownership before checking `coverPhotoId` membership, so other users get a plain not-found (test added). |
+| 2026-10-20 | Spec v0.3: added `DELETE /session/media-cookie` + logout flow (HttpOnly media cookies can only be cleared by a server response). Tasks 7.3 and 8.13 updated. |

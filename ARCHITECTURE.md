@@ -230,7 +230,7 @@ Photo-app/
 ├── .claude/settings.json        ✅ project Claude Code plugins (TS/Python LSP, aws-core, github, security-guidance)
 │
 ├── docs/
-│   └── SPECIFICATION.md         ✅ requirements & target design (v0.2)
+│   └── SPECIFICATION.md         ✅ requirements & target design (v0.3)
 │
 ├── packages/
 │   └── shared/                  ✅ @photo-app/shared (source-only, see §6)
@@ -505,6 +505,7 @@ Contracts exist (✅ in `packages/shared`); only `GET /health` is implemented. B
 | Method | Path | Request schema | Response schema |
 |---|---|---|---|
 | `POST` | `/session/media-cookie` | — | `mediaCookieResponseSchema` |
+| `DELETE` | `/session/media-cookie` | — | none (`204`, expires the cookies; logout, FR-AUTH-5) |
 | `GET` | `/me` | — | `meResponseSchema` |
 | `POST` | `/photos/upload-url` | `uploadUrlRequestSchema` | `uploadUrlResponseSchema` |
 | `GET` | `/photos` | `listPhotosQuerySchema` (query) | `photoPageSchema` |
@@ -783,5 +784,6 @@ Not started. Target design: spec §12 (TanStack Router file routes with an authe
 | 2026-10-19 | Created: reflects Phases 0, 1 (dev + management) and 2. |
 | 2026-10-19 | Phase 3: `database` and `storage` modules (+ offline tests), env wiring and per-env settings; `pnpm test:infra`. Deployed in dev. |
 | 2026-10-19 | API skeleton (5.1–5.3): Hono app + middleware, `/health`, DynamoDB repositories, esbuild bundle, DynamoDB Local tests. Libraries, tooling, repo tree, §8.2 repository details, §9 request pipeline, security rows updated. |
-| 2026-10-20 | Album update checks ownership before the cover-membership lookup (closes an existence oracle on other users' albums). |
 | 2026-10-19 | Thumbnail service code (6.1–6.7): handler, processor, imaging pipeline, Python S3-key mirror, 73 tests (moto added). Photo item lifecycle + Usage contract documented (§8.2), Lambda details (§10.2), security rows updated. |
+| 2026-10-20 | Album update checks ownership before the cover-membership lookup (closes an existence oracle on other users' albums). |
+| 2026-10-20 | Planned route `DELETE /session/media-cookie` (spec v0.3) added to the API surface. |
