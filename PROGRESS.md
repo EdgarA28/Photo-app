@@ -15,14 +15,14 @@
 
 | | |
 |---|---|
-| **Phase** | 3 done (dev), 5.1–5.3 done (API skeleton), 6.1–6.7 done (thumbnail code) → next: API routes 5.5–5.13 (code only) or Phase 4 (auth) |
-| **Last updated** | 2026-10-19 |
+| **Phase** | 3 done (dev), 5.1–5.3 + 5.5/5.7/5.10/5.11 done (API skeleton + read/album routes), 6.1–6.7 done (thumbnail code) → next: API routes needing S3/Cognito/CloudFront (5.6, 5.8, 5.9, 5.12, 5.13) or Phase 4 (auth) |
+| **Last updated** | 2026-10-20 |
 | **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
 
 ## Next up
 
-1. API routes without AWS: 5.5 `GET /me`, 5.7 list/get photos, 5.10–5.11 albums. Register them via `createApp({ routes })` with `createRepositories`; use `validate()` + `orNotFound()`. Routes needing S3/Cognito/CloudFront signing (5.6, 5.8, 5.9, 5.12) need those clients added (mock in tests). 5.6 follows the Photo item lifecycle in ARCHITECTURE.md §8.2.
+1. Remaining API routes: 5.6 upload URL, 5.8 download URL, 5.9 photo delete (need an S3 client: add to `Deps` in `src/routes/index.ts`, fake in tests), 5.12 sharing (Cognito email lookup: extend `UserDirectory` in `src/lib/users.ts`), 5.13 shared access (then open `GET /albums/{id}/photos` to recipients; their image URLs need CloudFront signing, 7.4). 5.6 follows the Photo item lifecycle in ARCHITECTURE.md §8.2. New tests can use `createTestApi()` from `test/helpers.ts`.
 2. Phase 4 (auth: Cognito + Google + pre-sign-up trigger): creates AWS resources, needs approval.
    Dev app resources (table + photo bucket) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done.
 3. Thumbnails 6.8 (aarch64 packaging) + 6.9 (infra module, can be written and `tofu test`ed offline; deploy needs approval). IAM must include `s3:DeleteObject` on `thumbs/`+`previews/` (race cleanup) and Lambda JSON log format.
@@ -104,13 +104,14 @@
 - [x] **5.3** DynamoDB repository layer (photos, albums, memberships, shares, usage) + cursor encoding
   - 47 API tests (app/middleware, cursor tampering, repositories on DynamoDB Local in Docker); bundle 474 KB, smoke-tested by invoking `dist/index.mjs`
 - [ ] **5.4** `api` infra module: HTTP API, JWT authorizer, Lambda, least-privilege IAM, throttling, 30-day logs (NFR-SEC-7/9, NFR-OPS-2)
-- [~] **5.5** `GET /health` (for smoke tests) ✅ + `GET /me` (usage + quota) (FR-ACC-1, FR-ACC-2)
+- [x] **5.5** `GET /health` (for smoke tests) + `GET /me` (usage + quota) (FR-ACC-1, FR-ACC-2). Profile from Cognito `ListUsers` by `sub`; quota = Usage override or `DEFAULT_QUOTA_BYTES`
 - [ ] **5.6** `POST /photos/upload-url`: quota check, `pending` item, pre-signed POST with size/type conditions (FR-UP-3/4/7, NFR-SEC-6)
-- [ ] **5.7** `GET /photos` (GSI1, desc, cursor), `GET /photos/{id}` (FR-GAL-1/2)
+- [x] **5.7** `GET /photos` (GSI1, desc, cursor), `GET /photos/{id}` (FR-GAL-1/2)
 - [ ] **5.8** `GET /photos/{id}/download-url` (5 min, attachment + original filename) (FR-DL-1/2)
 - [ ] **5.9** `DELETE /photos/{id}`: S3 objects, item, memberships, usage update (FR-DEL-1)
-- [ ] **5.10** Albums CRUD: `GET/POST /albums`, `PATCH/DELETE /albums/{id}` (FR-ALB-1)
-- [ ] **5.11** Album photos: `GET/POST /albums/{id}/photos`, `DELETE /albums/{id}/photos/{photoId}` (FR-ALB-2)
+- [x] **5.10** Albums CRUD: `GET/POST /albums`, `PATCH/DELETE /albums/{id}` (FR-ALB-1)
+- [x] **5.11** Album photos: `GET/POST /albums/{id}/photos`, `DELETE /albums/{id}/photos/{photoId}` (FR-ALB-2). `GET` is owner-only until 5.13
+  - 83 API tests (36 new: routes on DynamoDB Local with a fake Cognito directory, config, directory); bundle 1.1 MB (Cognito client), smoke-tested
 - [ ] **5.12** Sharing: `GET/POST /albums/{id}/shares`, `DELETE …/shares/{userId}`, `GET /shared-albums`; lookup user by email in Cognito (FR-SHR-1..4)
 - [ ] **5.13** Access check "can user X see photo P" for shared albums (§8.2)
 - [ ] **5.14** Tenant-isolation test suite: every route with another user's IDs → 404
@@ -223,6 +224,8 @@
 | 2026-10-19 | Photo items carry `albumIds` (string set) as the reverse index of album memberships, needed by photo delete (5.9) and the shared-photo access check (5.13); spec §8.2 had no photo→album lookup. |
 | 2026-10-19 | Unknown `/api/*` routes answer 401 to anonymous callers (auth runs before routing) and 404 to signed-in users. JSON bodies are capped at 64 KB. |
 | 2026-10-19 | Album photos are listed in membership (upload/ULID) order for now; ordering by date taken would need another index. Quota check at upload (5.6) only sees counted (non-pending) usage, so parallel uploads can overshoot slightly. |
+| 2026-10-20 | `GET /me` reads email/name from Cognito (`ListUsers` filtered by `sub`) because access tokens carry neither; needs `cognito-idp:ListUsers` in the 5.4 IAM policy. A token whose user is gone from the pool → 401. API env vars now `TABLE_NAME`, `USER_POOL_ID`, `DEFAULT_QUOTA_BYTES` (5.4 must set them). |
+| 2026-10-20 | Response choices: `POST /albums` → 201; cover not in album → 400 `VALIDATION_ERROR`; `POST /albums/{id}/photos` → 204, idempotent, all-or-nothing 404 if any photo is unknown/foreign; own image URLs are relative CloudFront paths (`/users/{sub}/thumbs|previews/{id}.jpg`), null until `ready`. |
 
 ## Session log
 
@@ -242,3 +245,4 @@
 | 2026-10-19 | Thumbnail service code 6.1–6.7: `handler.py`, `processor.py`, `imaging.py`, `s3_keys.py`; 73 pytest tests pass, ruff clean. 12 MP photo processes in 0.3–1.0 s locally. Nothing deployed. |
 | 2026-10-20 | Security fix: album update verifies ownership before checking `coverPhotoId` membership, so other users get a plain not-found (test added). |
 | 2026-10-20 | Spec v0.3: added `DELETE /session/media-cookie` + logout flow (HttpOnly media cookies can only be cleared by a server response). Tasks 7.3 and 8.13 updated. |
+| 2026-10-20 | API routes 5.5 `GET /me`, 5.7 `GET /photos` + `/photos/{id}`, 5.10–5.11 albums + album photos (`src/routes/`, Cognito `UserDirectory`, config). 127 tests pass repo-wide; lint/typecheck/format clean. Nothing deployed. |

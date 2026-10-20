@@ -1,8 +1,12 @@
 import { CreateTableCommand, DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { newId } from "@photo-app/shared";
 import { randomUUID } from "node:crypto";
 import { inject } from "vitest";
+import { createApp } from "../src/app";
+import type { UserDirectory, UserProfile } from "../src/lib/users";
 import { createDocumentClient, createRepositories, type Db } from "../src/repo";
+import { registerRoutes } from "../src/routes";
 
 /**
  * A fresh table per test file, shaped like the `database` module's table (infra/modules/database):
@@ -67,4 +71,84 @@ export function newPhoto(
     originalKey: `users/${userId}/originals/${photoId}.jpg`,
     uploadedAt: overrides.uploadedAt ?? nextIso(),
   };
+}
+
+/** Does what the thumbnail Lambda does on success (services/thumbnails processor.py). */
+export async function markReady(
+  db: Db,
+  userId: string,
+  photoId: string,
+  size: number,
+  takenAt: string,
+) {
+  await db.client.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Update: {
+            TableName: db.table,
+            Key: { PK: `USER#${userId}`, SK: `PHOTO#${photoId}` },
+            UpdateExpression:
+              "SET #status = :ready, takenAt = :t, GSI1SK = :gsi, sizeBytes = :size, width = :w, height = :h",
+            ConditionExpression: "attribute_exists(PK) AND #status = :pending",
+            ExpressionAttributeNames: { "#status": "status" },
+            ExpressionAttributeValues: {
+              ":ready": "ready",
+              ":pending": "pending",
+              ":t": takenAt,
+              ":gsi": `TAKEN#${takenAt}#${photoId}`,
+              ":size": size,
+              ":w": 4000,
+              ":h": 3000,
+            },
+          },
+        },
+        {
+          Update: {
+            TableName: db.table,
+            Key: { PK: `USER#${userId}`, SK: "USAGE" },
+            UpdateExpression: "ADD bytesUsed :size, photoCount :one",
+            ExpressionAttributeValues: { ":size": size, ":one": 1 },
+          },
+        },
+      ],
+    }),
+  );
+}
+
+export const TEST_DEFAULT_QUOTA = 2 * 1024 ** 3;
+
+/**
+ * The real app and routes on a fresh DynamoDB Local table, with a fake Cognito directory
+ * (`profiles`). `api(as, …)` sends a request as user `as` (null = anonymous), the way API Gateway
+ * delivers it: the JWT `sub` in the authorizer claims.
+ */
+export async function createTestApi() {
+  const { db, repos } = await createTestRepos();
+  const profiles = new Map<string, UserProfile>();
+  const users: UserDirectory = { getProfile: async (userId) => profiles.get(userId) ?? null };
+  const app = createApp({
+    routes: registerRoutes({ repos, users, config: { defaultQuotaBytes: TEST_DEFAULT_QUOTA } }),
+  });
+
+  async function api(as: string | null, method: string, path: string, body?: unknown) {
+    const res = await app.request(
+      `/api${path}`,
+      {
+        method,
+        ...(body === undefined
+          ? {}
+          : { body: JSON.stringify(body), headers: { "content-type": "application/json" } }),
+      },
+      {
+        event: {
+          requestContext: { authorizer: as ? { jwt: { claims: { sub: as }, scopes: null } } : {} },
+        },
+      },
+    );
+    const text = await res.text();
+    return { status: res.status, body: (text ? JSON.parse(text) : null) as unknown };
+  }
+
+  return { db, repos, profiles, api };
 }

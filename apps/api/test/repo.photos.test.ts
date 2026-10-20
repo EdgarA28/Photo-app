@@ -1,51 +1,14 @@
 /** Photos repository against DynamoDB Local (task 5.3, spec §8.2). */
-import { GetCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand } from "@aws-sdk/lib-dynamodb";
 import { beforeAll, describe, expect, test } from "vitest";
 import type { Db, PhotoRecord, Repositories } from "../src/repo";
-import { createTestRepos, newPhoto, newUserId } from "./helpers";
+import { createTestRepos, markReady, newPhoto, newUserId } from "./helpers";
 
 let db: Db;
 let repos: Repositories;
 beforeAll(async () => {
   ({ db, repos } = await createTestRepos());
 });
-
-/** Does what the thumbnail Lambda does on success (services/thumbnails processor.py). */
-async function markReady(userId: string, photoId: string, size: number, takenAt: string) {
-  await db.client.send(
-    new TransactWriteCommand({
-      TransactItems: [
-        {
-          Update: {
-            TableName: db.table,
-            Key: { PK: `USER#${userId}`, SK: `PHOTO#${photoId}` },
-            UpdateExpression:
-              "SET #status = :ready, takenAt = :t, GSI1SK = :gsi, sizeBytes = :size, width = :w, height = :h",
-            ConditionExpression: "attribute_exists(PK) AND #status = :pending",
-            ExpressionAttributeNames: { "#status": "status" },
-            ExpressionAttributeValues: {
-              ":ready": "ready",
-              ":pending": "pending",
-              ":t": takenAt,
-              ":gsi": `TAKEN#${takenAt}#${photoId}`,
-              ":size": size,
-              ":w": 4000,
-              ":h": 3000,
-            },
-          },
-        },
-        {
-          Update: {
-            TableName: db.table,
-            Key: { PK: `USER#${userId}`, SK: "USAGE" },
-            UpdateExpression: "ADD bytesUsed :size, photoCount :one",
-            ExpressionAttributeValues: { ":size": size, ":one": 1 },
-          },
-        },
-      ],
-    }),
-  );
-}
 
 async function rawItem(key: Record<string, string>) {
   return (await db.client.send(new GetCommand({ TableName: db.table, Key: key }))).Item;
@@ -102,7 +65,7 @@ describe("list (gallery, GSI1)", () => {
     const photos: PhotoRecord[] = [];
     for (let i = 0; i < 5; i++) photos.push(await repos.photos.createPending(newPhoto(userId)));
     // The oldest upload turns out to be the newest photo once its EXIF date is known.
-    await markReady(userId, photos[0]!.photoId, 500, "2030-01-01T00:00:00.000Z");
+    await markReady(db, userId, photos[0]!.photoId, 500, "2030-01-01T00:00:00.000Z");
 
     const ids = (items: { photoId: string }[]) => items.map((p) => p.photoId);
     const first = await repos.photos.list(userId, { sort: "taken-desc", limit: 2 });
@@ -158,8 +121,8 @@ describe("delete", () => {
     const b = newPhoto(userId);
     await repos.photos.createPending(a);
     await repos.photos.createPending(b);
-    await markReady(userId, a.photoId, 300, a.uploadedAt);
-    await markReady(userId, b.photoId, 700, b.uploadedAt);
+    await markReady(db, userId, a.photoId, 300, a.uploadedAt);
+    await markReady(db, userId, b.photoId, 700, b.uploadedAt);
 
     const deleted = await repos.photos.delete(userId, a.photoId);
 
@@ -174,7 +137,7 @@ describe("delete", () => {
     const ready = newPhoto(userId);
     const pending = newPhoto(userId);
     await repos.photos.createPending(ready);
-    await markReady(userId, ready.photoId, 400, ready.uploadedAt);
+    await markReady(db, userId, ready.photoId, 400, ready.uploadedAt);
     await repos.photos.createPending(pending);
 
     await repos.photos.delete(userId, pending.photoId);
