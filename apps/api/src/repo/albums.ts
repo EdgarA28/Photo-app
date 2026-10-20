@@ -84,6 +84,9 @@ export function albumsRepo(db: Db) {
       changes: AlbumUpdate,
     ): Promise<AlbumRecord | "cover-not-in-album" | null> {
       if (typeof changes.coverPhotoId === "string") {
+        // Ownership first: a membership answer for someone else's album would leak which
+        // photos it contains (other users' resources are indistinguishable from missing ones).
+        if (!(await getAlbum(db, ownerId, albumId))) return null;
         const membership = await db.client.send(
           new GetCommand({
             TableName: db.table,

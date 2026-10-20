@@ -240,3 +240,4 @@
 | 2026-10-19 | Applied Phase 3 in dev (user approved): `photo-app-dev` table + `photo-app-photos-dev-063359189013` bucket and its 7 settings. No drift. |
 | 2026-10-19 | API skeleton 5.1–5.3 (`apps/api`): Hono app, auth/validation/error middleware, `/health`, DynamoDB repositories (photos, albums, memberships, shares, usage, cursors), esbuild bundle. 47 tests incl. DynamoDB Local; lint/typecheck/format clean. Nothing deployed. |
 | 2026-10-19 | Thumbnail service code 6.1–6.7: `handler.py`, `processor.py`, `imaging.py`, `s3_keys.py`; 73 pytest tests pass, ruff clean. 12 MP photo processes in 0.3–1.0 s locally. Nothing deployed. |
+| 2026-10-20 | Security fix: album update verifies ownership before checking `coverPhotoId` membership, so other users get a plain not-found (test added). |

@@ -484,7 +484,7 @@ Access patterns and the "can user X see photo P" rule: see spec §8.2.
 | Item | Extra attributes written by the API |
 |---|---|
 | Photo | `entity: "photo"`, `userId`, `photoId`, `originalKey`, `albumIds` (string set: reverse index of album memberships, maintained with each membership change) |
-| Album | `entity: "album"`, `ownerId`, `albumId`, `photoCount` (kept by membership transactions), optional `coverPhotoId` (must be a member) |
+| Album | `entity: "album"`, `ownerId`, `albumId`, `photoCount` (kept by membership transactions), optional `coverPhotoId` (must be a member; album ownership is checked before membership, so the cover check can't reveal another user's album contents) |
 | Album membership | `entity: "membership"`, `albumId`, `photoId`, `ownerId`, `addedAt` |
 | Album share | `entity: "share"`, `albumId`, `ownerId`, `userId` (recipient), `email`, `sharedAt` |
 | Usage | read only by the API (`quotaBytes` optional per-user override) |
@@ -783,4 +783,5 @@ Not started. Target design: spec §12 (TanStack Router file routes with an authe
 | 2026-10-19 | Created: reflects Phases 0, 1 (dev + management) and 2. |
 | 2026-10-19 | Phase 3: `database` and `storage` modules (+ offline tests), env wiring and per-env settings; `pnpm test:infra`. Deployed in dev. |
 | 2026-10-19 | API skeleton (5.1–5.3): Hono app + middleware, `/health`, DynamoDB repositories, esbuild bundle, DynamoDB Local tests. Libraries, tooling, repo tree, §8.2 repository details, §9 request pipeline, security rows updated. |
+| 2026-10-20 | Album update checks ownership before the cover-membership lookup (closes an existence oracle on other users' albums). |
 | 2026-10-19 | Thumbnail service code (6.1–6.7): handler, processor, imaging pipeline, Python S3-key mirror, 73 tests (moto added). Photo item lifecycle + Usage contract documented (§8.2), Lambda details (§10.2), security rows updated. |

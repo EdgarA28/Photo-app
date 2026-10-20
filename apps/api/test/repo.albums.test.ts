@@ -44,12 +44,19 @@ describe("albums", () => {
     expect(await repos.albums.get(intruder, a.albumId)).toBeNull();
     expect(await repos.albums.list(intruder)).toEqual([]);
     expect(await repos.albums.update(intruder, a.albumId, { name: "pwned" })).toBeNull();
+    // Setting a cover must not reveal whether a photo is in someone else's album.
+    const [ownerPhoto] = await photos(owner, 1);
+    await repos.albums.addPhotos(owner, a.albumId, [ownerPhoto!], nextIso());
+    expect(
+      await repos.albums.update(intruder, a.albumId, { coverPhotoId: ownerPhoto! }),
+    ).toBeNull();
+    expect(await repos.albums.update(intruder, a.albumId, { coverPhotoId: newId() })).toBeNull();
     expect(await repos.albums.delete(intruder, a.albumId)).toBe(false);
     const results = await repos.albums.addPhotos(intruder, a.albumId, [intruderPhoto!], nextIso());
     expect(results.get(intruderPhoto!)).toBe("album-not-found");
     expect(await repos.albums.get(owner, a.albumId)).toMatchObject({
       name: "Holidays",
-      photoCount: 0,
+      photoCount: 1,
     });
     // The failed transaction must not have created a stub album under the intruder.
     expect(await repos.albums.list(intruder)).toEqual([]);
