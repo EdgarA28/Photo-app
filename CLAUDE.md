@@ -35,6 +35,7 @@ Serverless photo storage PWA on AWS. Full spec: `docs/SPECIFICATION.md`.
 Run `source ~/.nvm/nvm.sh && nvm use` first (system Node is 24; the project uses 22 from `.nvmrc`).
 
 - `pnpm lint` · `pnpm format` · `pnpm format:check` · `pnpm test` · `pnpm typecheck` · `pnpm build`
+- `pnpm test` needs Docker running: `apps/api` repository tests start DynamoDB Local (`amazon/dynamodb-local:3.3.1`), or use `DYNAMODB_ENDPOINT`.
 - Infra modules: `pnpm test:infra` (offline `tofu test`, mocked provider). Env plans: `AWS_PROFILE=<env> tofu plan -var-file=env.tfvars -out=<env>.tfplan` in `infra/envs/<env>`
 - Python (thumbnails): `pnpm lint:py` · `pnpm test:py`, or `uv run …` inside `services/thumbnails` (uv is in `~/.local/bin`)
 - New TS packages: extend `../../tsconfig.base.json`, add a `vitest.config.ts` (auto-discovered by the root config) and a `typecheck` script (`tsc`).

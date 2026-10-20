@@ -1,0 +1,168 @@
+import { GetCommand, PutCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
+import type { AllowedContentType, Page, PhotoSort, PhotoStatus } from "@photo-app/shared";
+import { batchGet, conditionFailedAt, queryPage, stripKeys, type Db } from "./db";
+import { GSI1, GSI1_KEY_ATTRIBUTES, photoKey, takenSk, usageKey, userPk } from "./keys";
+import { removeMembership } from "./memberships";
+
+/** Photo item without key attributes (spec §8.2). */
+export interface PhotoRecord {
+  userId: string;
+  photoId: string;
+  status: PhotoStatus;
+  fileName: string;
+  contentType: AllowedContentType;
+  sizeBytes: number;
+  originalKey: string;
+  uploadedAt: string;
+  /** Provisional = uploadedAt while pending; EXIF date once the thumbnail Lambda is done. */
+  takenAt: string;
+  width?: number;
+  height?: number;
+  processedAt?: string;
+  failureReason?: string;
+  /** Albums containing this photo: reverse index for deletes and share checks (§8.2). */
+  albumIds?: Set<string>;
+}
+
+export interface NewPhoto {
+  userId: string;
+  photoId: string;
+  fileName: string;
+  contentType: AllowedContentType;
+  sizeBytes: number;
+  originalKey: string;
+  uploadedAt: string;
+}
+
+export function photosRepo(db: Db) {
+  return {
+    /**
+     * Creates the `pending` item before the upload (5.6). GSI1SK uses uploadedAt as provisional
+     * takenAt, so the photo shows up in the gallery straight away (FR-GAL-5, FR-UP-6).
+     * Usage is NOT counted here: the thumbnail Lambda does that once the original is stored.
+     */
+    async createPending(photo: NewPhoto): Promise<PhotoRecord> {
+      const record: PhotoRecord = { ...photo, status: "pending", takenAt: photo.uploadedAt };
+      await db.client.send(
+        new PutCommand({
+          TableName: db.table,
+          Item: {
+            ...photoKey(photo.userId, photo.photoId),
+            GSI1PK: userPk(photo.userId),
+            GSI1SK: takenSk(record.takenAt, photo.photoId),
+            entity: "photo",
+            ...record,
+          },
+          ConditionExpression: "attribute_not_exists(PK)",
+        }),
+      );
+      return record;
+    },
+
+    get: (userId: string, photoId: string) => getPhoto(db, userId, photoId),
+
+    /** Several of one user's photos; IDs that don't exist (or aren't theirs) are left out. */
+    async getMany(userId: string, photoIds: string[]): Promise<PhotoRecord[]> {
+      const unique = [...new Set(photoIds)];
+      const items = await batchGet(
+        db,
+        unique.map((photoId) => photoKey(userId, photoId)),
+      );
+      return items.map((item) => stripKeys<PhotoRecord>(item));
+    },
+
+    /** Gallery: GSI1, by date taken (FR-GAL-1/2). */
+    async list(
+      userId: string,
+      options: { sort: PhotoSort; limit: number; cursor?: string | undefined },
+    ): Promise<Page<PhotoRecord>> {
+      const page = await queryPage(db, {
+        input: {
+          IndexName: GSI1,
+          KeyConditionExpression: "GSI1PK = :pk AND begins_with(GSI1SK, :taken)",
+          ExpressionAttributeValues: { ":pk": userPk(userId), ":taken": "TAKEN#" },
+          ScanIndexForward: options.sort === "taken-asc",
+        },
+        keyAttributes: GSI1_KEY_ATTRIBUTES,
+        partition: { attribute: "GSI1PK", value: userPk(userId) },
+        limit: options.limit,
+        cursor: options.cursor,
+      });
+      return { ...page, items: page.items.map((item) => stripKeys<PhotoRecord>(item)) };
+    },
+
+    /**
+     * Deletes the photo for DELETE /photos/{id} (5.9): first its album memberships (fixing album
+     * counts and covers), then the item itself together with the Usage decrement. Usage is only
+     * decremented if the thumbnail Lambda already counted the photo (status != pending).
+     *
+     * Every step is conditional, so a retry after a partial failure finishes the job without
+     * double-counting. Returns the deleted record, or null if it did not exist. S3 objects are
+     * the caller's job.
+     */
+    async delete(userId: string, photoId: string): Promise<PhotoRecord | null> {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const record = await getPhoto(db, userId, photoId, true);
+        if (!record) return null;
+
+        for (const albumId of record.albumIds ?? []) {
+          await removeMembership(db, userId, albumId, photoId);
+        }
+
+        const counted = record.status !== "pending";
+        try {
+          await db.client.send(
+            new TransactWriteCommand({
+              TransactItems: [
+                {
+                  Delete: {
+                    TableName: db.table,
+                    Key: photoKey(userId, photoId),
+                    // Guards against the thumbnail Lambda changing the status (and counting
+                    // Usage) between our read and this delete.
+                    ConditionExpression: "#status = :status",
+                    ExpressionAttributeNames: { "#status": "status" },
+                    ExpressionAttributeValues: { ":status": record.status },
+                  },
+                },
+                ...(counted
+                  ? [
+                      {
+                        Update: {
+                          TableName: db.table,
+                          Key: usageKey(userId),
+                          UpdateExpression: "ADD bytesUsed :size, photoCount :one",
+                          ExpressionAttributeValues: { ":size": -record.sizeBytes, ":one": -1 },
+                        },
+                      },
+                    ]
+                  : []),
+              ],
+            }),
+          );
+          return record;
+        } catch (err) {
+          // Status changed or photo deleted concurrently: re-read and try again.
+          if (!conditionFailedAt(err, 0)) throw err;
+        }
+      }
+      throw new Error(`Photo ${photoId} kept changing while being deleted`);
+    },
+  };
+}
+
+async function getPhoto(
+  db: Db,
+  userId: string,
+  photoId: string,
+  consistent = false,
+): Promise<PhotoRecord | null> {
+  const output = await db.client.send(
+    new GetCommand({
+      TableName: db.table,
+      Key: photoKey(userId, photoId),
+      ConsistentRead: consistent,
+    }),
+  );
+  return output.Item ? stripKeys<PhotoRecord>(output.Item) : null;
+}

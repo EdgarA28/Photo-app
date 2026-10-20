@@ -15,14 +15,14 @@
 
 | | |
 |---|---|
-| **Phase** | 3 done (dev), 6.1–6.7 done (thumbnail code) → next: API skeleton (5.1–5.3) or Phase 4 (auth) |
+| **Phase** | 3 done (dev), 5.1–5.3 done (API skeleton), 6.1–6.7 done (thumbnail code) → next: API routes 5.5–5.13 (code only) or Phase 4 (auth) |
 | **Last updated** | 2026-10-19 |
 | **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
 
 ## Next up
 
-1. API skeleton (5.1–5.3), no AWS needed. 5.6 must follow the Photo item lifecycle contract in ARCHITECTURE.md §8.2 (pending item with provisional GSI1SK; Usage is counted by the thumbnail Lambda).
+1. API routes without AWS: 5.5 `GET /me`, 5.7 list/get photos, 5.10–5.11 albums. Register them via `createApp({ routes })` with `createRepositories`; use `validate()` + `orNotFound()`. Routes needing S3/Cognito/CloudFront signing (5.6, 5.8, 5.9, 5.12) need those clients added (mock in tests). 5.6 follows the Photo item lifecycle in ARCHITECTURE.md §8.2.
 2. Phase 4 (auth: Cognito + Google + pre-sign-up trigger): creates AWS resources, needs approval.
    Dev app resources (table + photo bucket) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done.
 3. Thumbnails 6.8 (aarch64 packaging) + 6.9 (infra module, can be written and `tofu test`ed offline; deploy needs approval). IAM must include `s3:DeleteObject` on `thumbs/`+`previews/` (race cleanup) and Lambda JSON log format.
@@ -99,11 +99,12 @@
 
 ## Phase 5 — API Lambda (`apps/api`, §9)
 
-- [ ] **5.1** Project setup: Hono, esbuild bundle (arm64, Node 22), Vitest, AWS SDK v3 clients
-- [ ] **5.2** Middleware: user ID from JWT `sub` only (NFR-SEC-1), error handler → error shape, 404-not-403 helper (NFR-SEC-2), Zod validation
-- [ ] **5.3** DynamoDB repository layer (photos, albums, memberships, shares, usage) + cursor encoding
+- [x] **5.1** Project setup: Hono, esbuild bundle (arm64, Node 22), Vitest, AWS SDK v3 clients
+- [x] **5.2** Middleware: user ID from JWT `sub` only (NFR-SEC-1), error handler → error shape, 404-not-403 helper (NFR-SEC-2), Zod validation
+- [x] **5.3** DynamoDB repository layer (photos, albums, memberships, shares, usage) + cursor encoding
+  - 47 API tests (app/middleware, cursor tampering, repositories on DynamoDB Local in Docker); bundle 474 KB, smoke-tested by invoking `dist/index.mjs`
 - [ ] **5.4** `api` infra module: HTTP API, JWT authorizer, Lambda, least-privilege IAM, throttling, 30-day logs (NFR-SEC-7/9, NFR-OPS-2)
-- [ ] **5.5** `GET /health` (for smoke tests) + `GET /me` (usage + quota) (FR-ACC-1, FR-ACC-2)
+- [~] **5.5** `GET /health` (for smoke tests) ✅ + `GET /me` (usage + quota) (FR-ACC-1, FR-ACC-2)
 - [ ] **5.6** `POST /photos/upload-url`: quota check, `pending` item, pre-signed POST with size/type conditions (FR-UP-3/4/7, NFR-SEC-6)
 - [ ] **5.7** `GET /photos` (GSI1, desc, cursor), `GET /photos/{id}` (FR-GAL-1/2)
 - [ ] **5.8** `GET /photos/{id}/download-url` (5 min, attachment + original filename) (FR-DL-1/2)
@@ -217,6 +218,11 @@
 | 2026-10-19 | Thumbnails convert embedded ICC profiles (e.g. Display P3) to sRGB before stripping metadata, so colours stay correct. Max source 100 MP (decompression-bomb guard). |
 | 2026-10-19 | Known libheif quirk: pure random-noise images encoded at high quality produce HEIC files libde265 can't decode; real photos are fine. Such files would be marked `failed`. |
 | 2026-10-19 | moto added as a Python dev dependency for S3/DynamoDB tests. |
+| 2026-10-19 | API Lambda adapter: `@hono/aws-lambda` 1.0.0 (Hono's built-in `hono/aws-lambda` is deprecated, removed in Hono 5). AWS SDK is bundled into the API zip rather than using the runtime's copy. Bundle is ESM (`dist/index.mjs`, handler `index.handler`) with a source map: set `NODE_OPTIONS=--enable-source-maps` in 5.4. |
+| 2026-10-19 | API repository tests run against **DynamoDB Local in Docker** (`amazon/dynamodb-local:3.3.1`, pinned) for real query/transaction/condition semantics; `pnpm test` therefore needs Docker (or `DYNAMODB_ENDPOINT`, e.g. a CI service container in 10.1). |
+| 2026-10-19 | Photo items carry `albumIds` (string set) as the reverse index of album memberships, needed by photo delete (5.9) and the shared-photo access check (5.13); spec §8.2 had no photo→album lookup. |
+| 2026-10-19 | Unknown `/api/*` routes answer 401 to anonymous callers (auth runs before routing) and 404 to signed-in users. JSON bodies are capped at 64 KB. |
+| 2026-10-19 | Album photos are listed in membership (upload/ULID) order for now; ordering by date taken would need another index. Quota check at upload (5.6) only sees counted (non-pending) usage, so parallel uploads can overshoot slightly. |
 
 ## Session log
 
@@ -232,4 +238,5 @@
 | 2026-10-19 | Added `ARCHITECTURE.md` (as-built architecture: stack + versions, accounts, repo tree, toolchain, shared objects/schemas, data model, API surface, workflows, security, infra resources, CI/CD, deviations). Rule added to keep it updated with every change. |
 | 2026-10-19 | Phase 3 code: `database` + `storage` modules with `tofu test` suites (7 passing), wired into `envs/dev` and `envs/prod`; `pnpm test:infra`. dev plan clean (9 to add); apply waits for approval. |
 | 2026-10-19 | Applied Phase 3 in dev (user approved): `photo-app-dev` table + `photo-app-photos-dev-063359189013` bucket and its 7 settings. No drift. |
+| 2026-10-19 | API skeleton 5.1–5.3 (`apps/api`): Hono app, auth/validation/error middleware, `/health`, DynamoDB repositories (photos, albums, memberships, shares, usage, cursors), esbuild bundle. 47 tests incl. DynamoDB Local; lint/typecheck/format clean. Nothing deployed. |
 | 2026-10-19 | Thumbnail service code 6.1–6.7: `handler.py`, `processor.py`, `imaging.py`, `s3_keys.py`; 73 pytest tests pass, ruff clean. 12 MP photo processes in 0.3–1.0 s locally. Nothing deployed. |

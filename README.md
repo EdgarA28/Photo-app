@@ -34,6 +34,7 @@ docs/                    Specification
 | uv | latest | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | OpenTofu | ≥ 1.10 | https://opentofu.org/docs/intro/install/ |
 | AWS CLI | v2 | https://docs.aws.amazon.com/cli/ |
+| Docker | any recent | Needed by `pnpm test` (API repository tests start DynamoDB Local); or set `DYNAMODB_ENDPOINT` |
 
 ## Quick start
 

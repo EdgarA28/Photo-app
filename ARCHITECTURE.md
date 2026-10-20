@@ -10,7 +10,7 @@
 | | |
 |---|---|
 | **Last updated** | 2026-10-19 |
-| **Reflects** | Phase 0 (repo), Phase 1 (AWS bootstrap: dev + management), Phase 2 (`packages/shared`), Phase 3 (database + storage, deployed in dev), Phase 6.1–6.7 (thumbnail code, not deployed) |
+| **Reflects** | Phase 0 (repo), Phase 1 (AWS bootstrap: dev + management), Phase 2 (`packages/shared`), Phase 3 (database + storage, deployed in dev), Phase 5.1–5.3 (API skeleton, not deployed), Phase 6.1–6.7 (thumbnail code, not deployed) |
 
 ---
 
@@ -47,7 +47,7 @@
 | Environment roots | `infra/envs/{dev,prod}` | 🚧 | Database + storage **deployed in dev**; prod validated only |
 | Infra modules: database, storage | `infra/modules/{database,storage}` | ✅ (dev) | Offline `tofu test` suites (7 runs) |
 | Infra modules: auth, api, thumbnails, frontend | `infra/modules/*` | 📋 | |
-| API Lambda | `apps/api` | 📋 | Folder skeleton only |
+| API Lambda | `apps/api` | 🚧 | Skeleton (5.1–5.3): Hono app, auth/validation/error middleware, `GET /health`, DynamoDB repositories, esbuild bundle, 47 tests (incl. DynamoDB Local). No business routes yet; not deployed |
 | Thumbnail Lambda | `services/thumbnails` | 🚧 | Handler, image pipeline, S3-key mirror + 73 pytest tests (6.1–6.7); not packaged or deployed yet (6.8–6.10) |
 | Auth trigger Lambda | `services/auth-triggers` | 📋 | Folder skeleton only |
 | Web app / PWA | `apps/web` | 📋 | Folder skeleton only |
@@ -75,7 +75,7 @@ flowchart LR
     COG["📋 Cognito user pool<br/>+ Google IdP"]
     TRIG["📋 Pre-sign-up Lambda<br/>services/auth-triggers"]
     APIGW["📋 API Gateway HTTP API<br/>JWT authorizer"]
-    API["📋 API Lambda (Hono)<br/>apps/api"]
+    API["🚧 API Lambda (Hono)<br/>apps/api"]
     DDB[("✅ DynamoDB<br/>single table (dev)")]
     WEB[("📋 S3 site bucket")]
     S3[("✅ S3 photo bucket (dev)")]
@@ -143,8 +143,10 @@ Versions are what is **installed/locked today**; 📋 rows are chosen but not ye
 | Pillow | 13.0.0 | `services/thumbnails` | Image decode/resize/encode, EXIF, ICC → sRGB (LittleCMS) | ✅ |
 | pillow-heif | 1.8.1 | `services/thumbnails` | HEIC/HEIF decoding (libheif 1.23, libde265) | ✅ |
 | boto3 | 1.43.114 (dev only) | `services/thumbnails` | AWS SDK; provided by Lambda runtime, not packaged | ✅ |
-| Hono | — | `apps/api` | Lightweight router inside one Lambda (D-1) | 📋 |
-| AWS SDK v3 | — | `apps/api`, `services/auth-triggers` | DynamoDB, S3, Cognito, CloudFront signer | 📋 |
+| Hono | 4.13.13 | `apps/api` | Lightweight router inside one Lambda (D-1) | ✅ |
+| @hono/aws-lambda | 1.0.0 | `apps/api` | Lambda adapter (API Gateway HTTP API event → Request); replaces the deprecated `hono/aws-lambda` | ✅ |
+| AWS SDK v3 (`client-dynamodb`, `lib-dynamodb`) | 3.1153.0 | `apps/api` | DynamoDB via the DocumentClient; bundled (not the runtime copy) | ✅ |
+| AWS SDK v3 (S3, Cognito, CloudFront signer) | — | `apps/api`, `services/auth-triggers` | Pre-signed URLs, user lookup, signed cookies | 📋 |
 | React + Vite | — | `apps/web` | SPA | 📋 |
 | TanStack Router / Query / Virtual | — | `apps/web` | Routing, server state, virtualized grid | 📋 |
 | oidc-client-ts | — | `apps/web` | Cognito login with PKCE (D-2, leaning) | 📋 |
@@ -161,7 +163,8 @@ Versions are what is **installed/locked today**; 📋 rows are chosen but not ye
 | ruff | 0.17.1 | Python lint + format | ✅ |
 | pytest | 9.1.1 | Python tests | ✅ |
 | moto (`s3`, `dynamodb`) | 5.2.4 | In-memory S3/DynamoDB for thumbnail handler tests | ✅ |
-| esbuild | — | Bundle Lambdas | 📋 |
+| esbuild | 0.28.2 | Bundle Lambdas (`apps/api/build.mjs` → `dist/index.mjs`, ESM, node22, minified + source map) | ✅ (API) |
+| DynamoDB Local (Docker `amazon/dynamodb-local:3.3.1`) | 3.3.1 | Repository tests; started by `apps/api/test/dynamodb-local.ts`, or `DYNAMODB_ENDPOINT` | ✅ |
 | `tofu test` + `mock_provider` | OpenTofu 1.13 | Offline infra module tests | ✅ |
 
 ---
@@ -243,7 +246,14 @@ Photo-app/
 │
 ├── apps/
 │   ├── web/                     📋 React PWA (routes/, queries/, components/, upload/, auth/, api/)
-│   └── api/                     📋 API Lambda (src/handlers, src/lib, test/)
+│   └── api/                     🚧 API Lambda
+│       ├── build.mjs            esbuild bundle → dist/index.mjs (handler `index.handler`)
+│       ├── src/index.ts         Lambda entry (@hono/aws-lambda `handle`)
+│       ├── src/app.ts           Hono app: /api base path, body limit, /health, requireUser, error envelope
+│       ├── src/env.ts           Hono env type (Lambda event binding, `userId` variable)
+│       ├── src/lib/             auth.ts (JWT sub), errors.ts (AppError, orNotFound), validation.ts (Zod), log.ts, config.ts
+│       ├── src/repo/            DynamoDB layer: keys, cursor, db helpers, photos, albums, memberships, shares, usage
+│       └── test/                Vitest: app/middleware, cursor, repositories on DynamoDB Local
 │
 ├── services/
 │   ├── thumbnails/              🚧 Python Lambda
@@ -437,7 +447,7 @@ All request/response bodies of §9 as Zod schemas with inferred TS types.
 
 ## 8. Data model (storage) 🚧
 
-Key format implemented in `s3Keys.ts`; table and bucket defined in `infra/modules/{database,storage}` (§12.3) and **deployed in dev** (empty; nothing writes to them yet).
+Key format implemented in `s3Keys.ts`; table and bucket defined in `infra/modules/{database,storage}` (§12.3) and **deployed in dev** (empty; nothing writes to them yet). The API's table access is implemented in `apps/api/src/repo` (keys in `keys.ts` only).
 
 ### 8.1 Photo bucket (per environment)
 
@@ -469,11 +479,28 @@ Access patterns and the "can user X see photo P" rule: see spec §8.2.
 - **Usage** is incremented by the thumbnail Lambda, in the same transaction, once per stored original (`ready` *or* `failed`, because the original occupies storage either way): `ADD bytesUsed :size, photoCount 1`. `DELETE /photos/{id}` (5.9) decrements by the item's `sizeBytes`. `quotaBytes` is not written here.
 - All timestamps use the JS `toISOString()` format.
 
+**Repository layer (✅ `apps/api/src/repo`, task 5.3):**
+
+| Item | Extra attributes written by the API |
+|---|---|
+| Photo | `entity: "photo"`, `userId`, `photoId`, `originalKey`, `albumIds` (string set: reverse index of album memberships, maintained with each membership change) |
+| Album | `entity: "album"`, `ownerId`, `albumId`, `photoCount` (kept by membership transactions), optional `coverPhotoId` (must be a member) |
+| Album membership | `entity: "membership"`, `albumId`, `photoId`, `ownerId`, `addedAt` |
+| Album share | `entity: "share"`, `albumId`, `ownerId`, `userId` (recipient), `email`, `sharedAt` |
+| Usage | read only by the API (`quotaBytes` optional per-user override) |
+
+- **Membership changes** are one transaction each over membership + photo `albumIds` + album `photoCount`, with conditions (album exists, photo exists = same owner, not already a member; on removal the membership's `ownerId` must be the caller, since membership keys carry no user), so duplicates and retries never double-count and nobody can add to or remove from another user's album. `listMemberships`/`hasPhoto` are not user-scoped: routes must check album ownership or a share first.
+- **Deletes** are ordered children-first and conditional so a retried request finishes an interrupted one: photo = memberships → item + Usage decrement in one transaction (conditioned on the status read, so it can't race the thumbnail Lambda's count); album = unlink photos → memberships + shares → album item.
+- **Pagination:** `queryPage` reads `limit + 1` items, so `nextCursor` is null exactly at the end; the cursor is base64url JSON of the last item's key attributes, and decoding rejects anything that isn't exactly those attributes for the caller's own partition.
+- Not yet covered: listing an album's photos by date taken (memberships are in upload order), quota check including pending uploads.
+
 ---
 
-## 9. API surface 📋
+## 9. API surface 🚧
 
-Contracts exist (✅ in `packages/shared`); handlers do not yet. Base path `/api`, bearer = Cognito access token.
+Contracts exist (✅ in `packages/shared`); only `GET /health` is implemented. Base path `/api`, bearer = Cognito access token.
+
+**Request pipeline (✅, `apps/api/src/app.ts`):** body limit 64 KB → `GET /health` (public) → `requireUser` (JWT `sub` from `event.requestContext.authorizer.jwt.claims`, set by the API Gateway JWT authorizer) → route (`validate(target, schema)` with the shared Zod schemas, repositories, `orNotFound`) → `onError`. Every error leaves as `{error: {code, message}}`: `AppError` as thrown; Hono `HTTPException` by status (400 `VALIDATION_ERROR`, 413 `PAYLOAD_TOO_LARGE`, …); anything else is logged as JSON and returned as a generic 500 `INTERNAL_ERROR`. Unknown routes: 401 for anonymous callers, 404 `NOT_FOUND` for users. Routes are registered through `createApp({ routes })`.
 
 | Method | Path | Request schema | Response schema |
 |---|---|---|---|
@@ -495,7 +522,7 @@ Contracts exist (✅ in `packages/shared`); handlers do not yet. Base path `/api
 | `POST` | `/albums/{albumId}/shares` | `createShareRequestSchema` | `albumShareSchema` |
 | `DELETE` | `/albums/{albumId}/shares/{userId}` | — | 204 |
 | `GET` | `/shared-albums` | `pageQuerySchema` (query) | `sharedAlbumPageSchema` |
-| `GET` | `/health` | — | 📋 defined with the API (task 5.5) |
+| `GET` | `/health` | — | ✅ `{status: "ok"}`, no auth |
 
 Errors on every route: `apiErrorSchema`. Status codes for success bodies (201 vs 200, 204) are finalised with the handlers.
 
@@ -612,9 +639,9 @@ Bootstrap uses local state per workspace instead of S3.
 | State protection | ✅ (dev) | Versioning, SSE-S3, ACLs disabled, public access blocked, TLS-only policy, `prevent_destroy` |
 | State client-side encryption | 📋 deferred | Task 12.5 (state will contain the Google client secret) |
 | Cost guardrail | ✅ | Organization budget $5/month with email alerts |
-| Strict input validation | ✅ contracts | Zod schemas: allowed types, size cap, ID formats, trimmed names, normalised emails |
+| Strict input validation | ✅ | Zod schemas: allowed types, size cap, ID formats, trimmed names, normalised emails; applied in the API by `validate()`; JSON bodies capped at 64 KB |
 | Key-format hardening | ✅ | Builders reject invalid IDs (no path injection); parser accepts only exact originals |
-| Tenant isolation (NFR-SEC-1/2) | 📋 | User ID only from JWT `sub`; foreign resources → 404 |
+| Tenant isolation (NFR-SEC-1/2) | 🚧 | ✅ `requireUser` takes the user ID only from the authorizer's JWT `sub` (must be a lowercase UUID, else 401); ✅ repositories key every user-owned lookup by that ID, so foreign items read as missing and `orNotFound` → 404; ✅ pagination cursors are bound to the caller's partition. 📋 per-route suite (5.14) |
 | Private photo bucket (NFR-SEC-3/4) | ✅ (dev) | Public access block, ACLs off, SSE-S3, TLS-only policy, CORS limited to app origins |
 | Data deletion guard | ✅ code (prod settings) | Table deletion protection + no `force_destroy` by default; only dev opts out |
 | CloudFront OAC / signed URLs (NFR-SEC-3) | 📋 | Phase 7 |
@@ -755,4 +782,5 @@ Not started. Target design: spec §12 (TanStack Router file routes with an authe
 |---|---|
 | 2026-10-19 | Created: reflects Phases 0, 1 (dev + management) and 2. |
 | 2026-10-19 | Phase 3: `database` and `storage` modules (+ offline tests), env wiring and per-env settings; `pnpm test:infra`. Deployed in dev. |
+| 2026-10-19 | API skeleton (5.1–5.3): Hono app + middleware, `/health`, DynamoDB repositories, esbuild bundle, DynamoDB Local tests. Libraries, tooling, repo tree, §8.2 repository details, §9 request pipeline, security rows updated. |
 | 2026-10-19 | Thumbnail service code (6.1–6.7): handler, processor, imaging pipeline, Python S3-key mirror, 73 tests (moto added). Photo item lifecycle + Usage contract documented (§8.2), Lambda details (§10.2), security rows updated. |
