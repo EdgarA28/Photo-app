@@ -16,7 +16,7 @@
 | | |
 |---|---|
 | **Phase** | 3 done (dev), 5.1–5.3 + 5.5/5.7/5.10/5.11 done (API skeleton + read/album routes), 6.1–6.7 done (thumbnail code) → next: API routes needing S3/Cognito/CloudFront (5.6, 5.8, 5.9, 5.12, 5.13) or Phase 4 (auth) |
-| **Last updated** | 2026-10-20 |
+| **Last updated** | 2026-10-21 |
 | **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
 
@@ -226,6 +226,7 @@
 | 2026-10-19 | Album photos are listed in membership (upload/ULID) order for now; ordering by date taken would need another index. Quota check at upload (5.6) only sees counted (non-pending) usage, so parallel uploads can overshoot slightly. |
 | 2026-10-20 | `GET /me` reads email/name from Cognito (`ListUsers` filtered by `sub`) because access tokens carry neither; needs `cognito-idp:ListUsers` in the 5.4 IAM policy. A token whose user is gone from the pool → 401. API env vars now `TABLE_NAME`, `USER_POOL_ID`, `DEFAULT_QUOTA_BYTES` (5.4 must set them). |
 | 2026-10-20 | Response choices: `POST /albums` → 201; cover not in album → 400 `VALIDATION_ERROR`; `POST /albums/{id}/photos` → 204, idempotent, all-or-nothing 404 if any photo is unknown/foreign; own image URLs are relative CloudFront paths (`/users/{sub}/thumbs|previews/{id}.jpg`), null until `ready`. |
+| 2026-10-21 | DynamoDB Local runs with `-disableTelemetry`: its startup telemetry call to AWS (Cognito Identity/Pinpoint) runs before the port opens and hung on a stalled TLS handshake, so the container never became ready. |
 
 ## Session log
 
@@ -246,3 +247,4 @@
 | 2026-10-20 | Security fix: album update verifies ownership before checking `coverPhotoId` membership, so other users get a plain not-found (test added). |
 | 2026-10-20 | Spec v0.3: added `DELETE /session/media-cookie` + logout flow (HttpOnly media cookies can only be cleared by a server response). Tasks 7.3 and 8.13 updated. |
 | 2026-10-20 | API routes 5.5 `GET /me`, 5.7 `GET /photos` + `/photos/{id}`, 5.10–5.11 albums + album photos (`src/routes/`, Cognito `UserDirectory`, config). 127 tests pass repo-wide; lint/typecheck/format clean. Nothing deployed. |
+| 2026-10-21 | Test fix: DynamoDB Local hung at startup on its telemetry call to AWS; now started with `-disableTelemetry` (`test/dynamodb-local.ts`). 83 API tests pass again. |

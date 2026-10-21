@@ -35,6 +35,8 @@ export default async function setup(project: TestProject) {
       "-jar",
       "DynamoDBLocal.jar",
       "-inMemory",
+      // Telemetry runs before the port opens; a stalled call to AWS would hang startup.
+      "-disableTelemetry",
     );
   } catch (err) {
     throw new Error(
