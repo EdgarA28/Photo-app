@@ -24,13 +24,36 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, config }: Deps)
    * Starts an upload (FR-UP-3/4/7, NFR-SEC-6): quota check, `pending` item, pre-signed POST for
    * `users/{sub}/originals/{photoId}.{ext}`. The bytes go straight to S3; the thumbnail Lambda
    * takes it from there (ARCHITECTURE.md §8.2).
+   *
+   * With `photoId` (a retry, 5.6a) it re-signs the upload for that photo instead: no new item, so
+   * failed or expired attempts don't leave duplicate pending photos behind.
    */
   app.post("/photos/upload-url", validate("json", uploadUrlRequestSchema), async (c) => {
     const userId = c.get("userId");
-    const { fileName, contentType, sizeBytes } = c.req.valid("json");
+    const { fileName, contentType, sizeBytes, photoId: retryOf } = c.req.valid("json");
 
-    // Counted usage only: pending uploads aren't in Usage yet, so parallel uploads can overshoot
-    // the quota slightly (PROGRESS.md decisions, 2026-10-19).
+    if (retryOf) {
+      // Other users' photos read as missing (NFR-SEC-2).
+      const record = orNotFound(await repos.photos.get(userId, retryOf), "Photo not found");
+      // Once processed, the original must not be replaced.
+      if (record.status !== "pending") {
+        throw new AppError(409, "CONFLICT", "This photo has already been uploaded");
+      }
+      // The quota check and the item were made for this type and size.
+      if (record.contentType !== contentType || record.sizeBytes !== sizeBytes) {
+        throw new AppError(409, "CONFLICT", "contentType and sizeBytes must match the photo");
+      }
+      const upload = await storage.createUploadPost({
+        key: record.originalKey,
+        contentType,
+        sizeBytes,
+      });
+      const body: UploadUrlResponse = { photoId: record.photoId, upload };
+      return c.json(body);
+    }
+
+    // Counted usage only: pending uploads aren't in Usage yet, so URLs requested before earlier
+    // uploads are processed can exceed the quota. Reserving bytes for pending uploads is 5.6b.
     const usage = await repos.usage.get(userId);
     const quotaBytes = usage.quotaBytes ?? config.defaultQuotaBytes;
     if (usage.bytesUsed + sizeBytes > quotaBytes) {

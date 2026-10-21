@@ -51,6 +51,14 @@ describe("uploadUrlRequestSchema", () => {
     expect(uploadUrlRequestSchema.safeParse({ ...ok, sizeBytes: 0 }).success).toBe(false);
     expect(uploadUrlRequestSchema.safeParse({ ...ok, fileName: "   " }).success).toBe(false);
   });
+
+  test("optional photoId for retries must be a photo ID (5.6a)", () => {
+    expect(uploadUrlRequestSchema.parse({ ...ok, photoId: PHOTO_ID })).toEqual({
+      ...ok,
+      photoId: PHOTO_ID,
+    });
+    expect(uploadUrlRequestSchema.safeParse({ ...ok, photoId: "../x" }).success).toBe(false);
+  });
 });
 
 describe("photoSchema", () => {

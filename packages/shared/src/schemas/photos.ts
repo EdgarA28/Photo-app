@@ -41,6 +41,11 @@ export const uploadUrlRequestSchema = z.object({
   fileName: z.string().trim().min(1).max(MAX_FILE_NAME_LENGTH),
   contentType: contentTypeSchema,
   sizeBytes: z.number().int().positive().max(MAX_UPLOAD_BYTES),
+  /**
+   * Retry of an earlier upload (5.6a): re-sign for this still-pending photo instead of creating a
+   * new one. contentType and sizeBytes must match it; fileName is kept from the first request.
+   */
+  photoId: idSchema.optional(),
 });
 export type UploadUrlRequest = z.infer<typeof uploadUrlRequestSchema>;
 

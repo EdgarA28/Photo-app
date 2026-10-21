@@ -176,3 +176,85 @@ describe("quota (FR-UP-7, FR-ACC-2)", () => {
 test("401 for anonymous callers", async () => {
   expect((await api(null, "POST", "/photos/upload-url", request)).status).toBe(401);
 });
+
+describe("retrying an upload with photoId (5.6a)", () => {
+  async function start(user: string) {
+    const { body } = await api(user, "POST", "/photos/upload-url", request);
+    return uploadUrlResponseSchema.parse(body).photoId;
+  }
+
+  test("re-signs for the same pending photo: 200, same key, no new item", async () => {
+    const user = newUserId();
+    const photoId = await start(user);
+    const { status, body } = await api(user, "POST", "/photos/upload-url", {
+      ...request,
+      fileName: "renamed.heic",
+      photoId,
+    });
+    expect(status).toBe(200);
+    const key = `users/${user}/originals/${photoId}.heic`;
+    expect(uploadUrlResponseSchema.parse(body)).toEqual({
+      photoId,
+      upload: { url: TEST_UPLOAD_URL, fields: { key, "Content-Type": "image/heic" } },
+    });
+    expect(uploads.at(-1)).toEqual({ key, contentType: "image/heic", sizeBytes: 3_000_000 });
+
+    const page = photoPageSchema.parse((await api(user, "GET", "/photos")).body);
+    expect(page.items.map((p) => p.photoId)).toEqual([photoId]);
+    // The first request's file name is kept.
+    expect((await repos.photos.get(user, photoId))!.fileName).toBe("IMG_0001.HEIC");
+  });
+
+  test("409 CONFLICT once the photo is processed; the original can't be replaced", async () => {
+    const user = newUserId();
+    const photoId = await start(user);
+    await markReady(db, user, photoId, 3_000_000, "2025-01-01T00:00:00.000Z");
+    const before = uploads.length;
+    const { status, body } = await api(user, "POST", "/photos/upload-url", { ...request, photoId });
+    expect(status).toBe(409);
+    expect(errorCode(body)).toBe("CONFLICT");
+    expect(uploads.length).toBe(before);
+  });
+
+  test.each([
+    ["a different content type", { contentType: "image/jpeg" }],
+    ["a different size", { sizeBytes: 3_000_001 }],
+  ])("409 CONFLICT for %s than the pending photo", async (_name, override) => {
+    const user = newUserId();
+    const photoId = await start(user);
+    const before = uploads.length;
+    const { status, body } = await api(user, "POST", "/photos/upload-url", {
+      ...request,
+      ...override,
+      photoId,
+    });
+    expect(status).toBe(409);
+    expect(errorCode(body)).toBe("CONFLICT");
+    expect(uploads.length).toBe(before);
+  });
+
+  test("404 for an unknown photo and for another user's photo (NFR-SEC-2)", async () => {
+    const owner = newUserId();
+    const photoId = await start(owner);
+    const other = newUserId();
+    const before = uploads.length;
+    const foreign = await api(other, "POST", "/photos/upload-url", { ...request, photoId });
+    const unknown = await api(other, "POST", "/photos/upload-url", {
+      ...request,
+      photoId: "01JABCDEFGHJKMNPQRSTVWXYZ0",
+    });
+    for (const res of [foreign, unknown]) {
+      expect(res.status).toBe(404);
+      expect(errorCode(res.body)).toBe("NOT_FOUND");
+    }
+    expect(foreign.body).toEqual(unknown.body);
+    expect(uploads.length).toBe(before);
+    // Nothing was created for the other user either.
+    expect(photoPageSchema.parse((await api(other, "GET", "/photos")).body).items).toEqual([]);
+  });
+
+  test("400 for a malformed photoId", async () => {
+    const res = await api(newUserId(), "POST", "/photos/upload-url", { ...request, photoId: "x" });
+    expect(res.status).toBe(400);
+  });
+});
