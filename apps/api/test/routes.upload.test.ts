@@ -253,6 +253,19 @@ describe("retrying an upload with photoId (5.6a)", () => {
     expect(photoPageSchema.parse((await api(other, "GET", "/photos")).body).items).toEqual([]);
   });
 
+  test("413 QUOTA_EXCEEDED when usage grew past the quota since the photo was created", async () => {
+    const user = newUserId();
+    const photoId = await start(user);
+    await setUsage(user, TEST_DEFAULT_QUOTA - 1000);
+    const before = uploads.length;
+    const { status, body } = await api(user, "POST", "/photos/upload-url", { ...request, photoId });
+    expect(status).toBe(413);
+    expect(errorCode(body)).toBe("QUOTA_EXCEEDED");
+    expect(uploads.length).toBe(before);
+    // The photo stays pending, so it can be retried once space is freed.
+    expect((await repos.photos.get(user, photoId))!.status).toBe("pending");
+  });
+
   test("400 for a malformed photoId", async () => {
     const res = await api(newUserId(), "POST", "/photos/upload-url", { ...request, photoId: "x" });
     expect(res.status).toBe(400);

@@ -32,6 +32,16 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, config }: Deps)
     const userId = c.get("userId");
     const { fileName, contentType, sizeBytes, photoId: retryOf } = c.req.valid("json");
 
+    // Counted usage only: pending uploads aren't in Usage yet, so URLs requested before earlier
+    // uploads are processed can exceed the quota. Reserving bytes for pending uploads is 5.6b.
+    const assertQuota = async () => {
+      const usage = await repos.usage.get(userId);
+      const quotaBytes = usage.quotaBytes ?? config.defaultQuotaBytes;
+      if (usage.bytesUsed + sizeBytes > quotaBytes) {
+        throw new AppError(413, "QUOTA_EXCEEDED", "This upload would exceed your storage quota");
+      }
+    };
+
     if (retryOf) {
       // Other users' photos read as missing (NFR-SEC-2).
       const record = orNotFound(await repos.photos.get(userId, retryOf), "Photo not found");
@@ -43,6 +53,8 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, config }: Deps)
       if (record.contentType !== contentType || record.sizeBytes !== sizeBytes) {
         throw new AppError(409, "CONFLICT", "contentType and sizeBytes must match the photo");
       }
+      // Checked again: usage may have grown since the photo was created.
+      await assertQuota();
       const upload = await storage.createUploadPost({
         key: record.originalKey,
         contentType,
@@ -52,14 +64,7 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, config }: Deps)
       return c.json(body);
     }
 
-    // Counted usage only: pending uploads aren't in Usage yet, so URLs requested before earlier
-    // uploads are processed can exceed the quota. Reserving bytes for pending uploads is 5.6b.
-    const usage = await repos.usage.get(userId);
-    const quotaBytes = usage.quotaBytes ?? config.defaultQuotaBytes;
-    if (usage.bytesUsed + sizeBytes > quotaBytes) {
-      throw new AppError(413, "QUOTA_EXCEEDED", "This upload would exceed your storage quota");
-    }
-
+    await assertQuota();
     const photoId = newId();
     const key = originalKey(userId, photoId, extensionFor(contentType));
     // Signed before the item exists, so a failure here leaves nothing behind.
