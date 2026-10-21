@@ -3,7 +3,7 @@ import { PutCommand } from "@aws-sdk/lib-dynamodb";
 import { newId } from "@photo-app/shared";
 import { beforeAll, describe, expect, test } from "vitest";
 import type { Db, Repositories } from "../src/repo";
-import { createTestRepos, newPhoto, newUserId, nextIso } from "./helpers";
+import { createPending, createTestRepos, newPhoto, newUserId, nextIso } from "./helpers";
 
 let db: Db;
 let repos: Repositories;
@@ -17,8 +17,7 @@ async function album(ownerId: string, name = "Holidays") {
 
 async function photos(userId: string, count: number) {
   const ids: string[] = [];
-  for (let i = 0; i < count; i++)
-    ids.push((await repos.photos.createPending(newPhoto(userId))).photoId);
+  for (let i = 0; i < count; i++) ids.push((await createPending(repos, newPhoto(userId))).photoId);
   return ids;
 }
 
@@ -260,6 +259,7 @@ describe("usage", () => {
     expect(await repos.usage.get(userId)).toEqual({
       bytesUsed: 0,
       photoCount: 0,
+      bytesReserved: 0,
       quotaBytes: null,
     });
     await db.client.send(
@@ -269,6 +269,7 @@ describe("usage", () => {
           PK: `USER#${userId}`,
           SK: "USAGE",
           bytesUsed: 10,
+          bytesReserved: 25,
           photoCount: 1,
           quotaBytes: 5_000,
         },
@@ -277,6 +278,7 @@ describe("usage", () => {
     expect(await repos.usage.get(userId)).toEqual({
       bytesUsed: 10,
       photoCount: 1,
+      bytesReserved: 25,
       quotaBytes: 5_000,
     });
   });

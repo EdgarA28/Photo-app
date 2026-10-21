@@ -479,7 +479,11 @@ Access patterns and the "can user X see photo P" rule: see spec §8.2.
 **Photo item lifecycle (contract between API and thumbnail Lambda):**
 - API (5.6) puts the item with `status: pending`, `uploadedAt`, and `GSI1PK`/`GSI1SK` using `uploadedAt` as the provisional `takenAt`, so pending photos appear in the gallery (FR-GAL-5).
 - Thumbnail Lambda moves it to `ready` (sets `width`, `height`, `takenAt`, `GSI1SK`, actual `sizeBytes`, `processedAt`) or `failed` (`failureReason`, `sizeBytes`, `processedAt`; GSI1SK unchanged).
-- **Usage** is incremented by the thumbnail Lambda, in the same transaction, once per stored original (`ready` *or* `failed`, because the original occupies storage either way): `ADD bytesUsed :size, photoCount 1`. `DELETE /photos/{id}` (5.9) decrements by the item's `sizeBytes`. `quotaBytes` is not written here.
+- **Usage** has two byte counters (task 5.6b). Invariant: `bytesReserved = bytesUsed + declared size of every pending photo`.
+  - `bytesUsed`/`photoCount`: stored originals, shown by `GET /me`. Incremented by the thumbnail Lambda, in the same transaction as the final status, once per stored original (`ready` *or* `failed`, because the original occupies storage either way).
+  - `bytesReserved`: what the **quota is checked against**. The API adds the declared `sizeBytes` in the same transaction that creates the pending item, conditional on `attribute_not_exists(bytesReserved) OR bytesReserved <= quota − sizeBytes` (DynamoDB conditions can't add, so the API precomputes the limit). The thumbnail Lambda adds `actual − declared` (normally 0, the POST policy pins the size).
+  - Deletes (5.9): a pending photo releases its declared size from `bytesReserved`; a counted photo decrements `bytesUsed`, `photoCount` and `bytesReserved` by its `sizeBytes`. The stale-pending sweeper (6.11) will release like a pending delete.
+  - `quotaBytes` (optional per-user override) is never written by the app.
 - All timestamps use the JS `toISOString()` format.
 
 **Repository layer (✅ `apps/api/src/repo`, task 5.3):**
@@ -490,12 +494,12 @@ Access patterns and the "can user X see photo P" rule: see spec §8.2.
 | Album | `entity: "album"`, `ownerId`, `albumId`, `photoCount` (kept by membership transactions), optional `coverPhotoId` (must be a member; album ownership is checked before membership, so the cover check can't reveal another user's album contents) |
 | Album membership | `entity: "membership"`, `albumId`, `photoId`, `ownerId`, `addedAt` |
 | Album share | `entity: "share"`, `albumId`, `ownerId`, `userId` (recipient), `email`, `sharedAt` |
-| Usage | read only by the API (`quotaBytes` optional per-user override) |
+| Usage | API writes only `bytesReserved` (reserve on create, release on delete) and the decrements on delete; `quotaBytes` optional per-user override |
 
 - **Membership changes** are one transaction each over membership + photo `albumIds` + album `photoCount`, with conditions (album exists, photo exists = same owner, not already a member; on removal the membership's `ownerId` must be the caller, since membership keys carry no user), so duplicates and retries never double-count and nobody can add to or remove from another user's album. `listMemberships`/`hasPhoto` are not user-scoped: routes must check album ownership or a share first.
 - **Deletes** are ordered children-first and conditional so a retried request finishes an interrupted one: photo = memberships → item + Usage decrement in one transaction (conditioned on the status read, so it can't race the thumbnail Lambda's count); album = unlink photos → memberships + shares → album item.
 - **Pagination:** `queryPage` reads `limit + 1` items, so `nextCursor` is null exactly at the end; the cursor is base64url JSON of the last item's key attributes, and decoding rejects anything that isn't exactly those attributes for the caller's own partition.
-- Not yet covered: listing an album's photos by date taken (memberships are in upload order), **quota check including pending uploads** (today any number of upload URLs can be requested before the first is counted, so the quota can be exceeded without limit until uploads are processed: task 5.6b), cleanup of `pending` items whose upload never happened (retries reuse the item via 5.6a; abandoned ones need the 6.11 sweeper).
+- Not yet covered: listing an album's photos by date taken (memberships are in upload order), cleanup of `pending` items whose upload never happened (retries reuse the item via 5.6a; abandoned ones need the 6.11 sweeper).
 
 ---
 
@@ -510,8 +514,8 @@ Contracts exist (✅ in `packages/shared`). Implemented routes are marked ✅ be
 **Response conventions (✅):**
 - Own image URLs are stable CloudFront paths, `/users/{sub}/thumbs/{photoId}.jpg` and `/users/{sub}/previews/{photoId}.jpg`, and only when `status = ready` (else `null`). Album `coverThumbUrl` is the cover's thumb path under the same rule.
 - `GET /me`: email and name come from Cognito (`ListUsers` filtered by `sub`, because access tokens carry neither and Google users' usernames aren't their `sub`); a token whose user is gone from the pool → 401. `quotaBytes` = the Usage item's override, else `DEFAULT_QUOTA_BYTES`.
-- `POST /photos/upload-url` → 201 `{photoId, upload: {url, fields}}`. Order: validate (type, 1 B–50 MB, name) → quota check → sign → put the `pending` item (signing is local and comes first, so a failure leaves no item). Quota = counted `bytesUsed` + `sizeBytes` must be ≤ quota, else **413 `QUOTA_EXCEEDED`**; pending uploads aren't counted. The POST policy pins bucket, exact key `users/{sub}/originals/{photoId}.{ext}`, `Content-Type`, `x-amz-storage-class: INTELLIGENT_TIERING` and `content-length-range` = exactly the declared size; expires after 15 min. The browser must send the returned `fields` (plus `file` last) as multipart form data to `url`.
-- **Retry (5.6a):** the same request with `photoId` re-signs the upload for that photo → 200, same key, no new item. The quota is checked again against current usage (413 `QUOTA_EXCEEDED`), since usage may have grown since the photo was created. Unknown or another user's photo → 404; photo no longer `pending` → 409 `CONFLICT` (a processed original can't be replaced through the API); `contentType`/`sizeBytes` different from the item → 409 `CONFLICT`. `fileName` is kept from the first request. The upload queue stores the `photoId` with the file (8.10).
+- `POST /photos/upload-url` → 201 `{photoId, upload: {url, fields}}`. Order: validate (type, 1 B–50 MB, name) → read Usage for the quota → sign → put the `pending` item **and** reserve its size in one transaction (signing is local and comes first, so a failure leaves no item or reservation). `bytesReserved + sizeBytes` must be ≤ quota, else **413 `QUOTA_EXCEEDED`**; pending uploads count, and the conditional write means parallel requests can't overshoot (5.6b). The POST policy pins bucket, exact key `users/{sub}/originals/{photoId}.{ext}`, `Content-Type`, `x-amz-storage-class: INTELLIGENT_TIERING` and `content-length-range` = exactly the declared size; expires after 15 min. The browser must send the returned `fields` (plus `file` last) as multipart form data to `url`.
+- **Retry (5.6a):** the same request with `photoId` re-signs the upload for that photo → 200, same key, no new item. Its bytes are already reserved, so the check is `bytesReserved ≤ quota` (only fails if the quota was lowered meanwhile → 413 `QUOTA_EXCEEDED`); nothing is reserved again. Unknown or another user's photo → 404; photo no longer `pending` → 409 `CONFLICT` (a processed original can't be replaced through the API); `contentType`/`sizeBytes` different from the item → 409 `CONFLICT`. `fileName` is kept from the first request. The upload queue stores the `photoId` with the file (8.10).
 - `POST /albums` → 201 with the album. `PATCH` → 200 with the album; a cover that isn't in the album → 400 `VALIDATION_ERROR`. Deletes and `POST /albums/{id}/photos` → 204.
 - `POST /albums/{id}/photos` is idempotent (photos already in the album are fine) and checks all photos first: any unknown or foreign photo → 404 `Photo not found` and nothing is added.
 - `GET /albums/{id}/photos` lists in photo upload order (memberships are keyed by the photo ULID; ordering by date taken would need another index, §8.2) and is **owner-only** until sharing (5.12/5.13) adds recipients with signed URLs.
@@ -578,9 +582,9 @@ sequenceDiagram
   participant S as S3 photo bucket
   participant T as Thumbnail Lambda
   U->>A: POST /photos/upload-url {fileName, contentType, sizeBytes}<br/>✅ uploadUrlRequestSchema
-  A->>D: ✅ check Usage vs quota (413 QUOTA_EXCEEDED)
+  A->>D: ✅ GetItem Usage (quota override)
   A->>A: ✅ sign POST (key, type, exact size, INTELLIGENT_TIERING, 15 min)
-  A->>D: ✅ put Photo {status: pending}
+  A->>D: ✅ TransactWrite: put Photo {status: pending}<br/>and Usage ADD bytesReserved if it fits (else 413 QUOTA_EXCEEDED)
   A-->>U: ✅ 201 {photoId, upload{url, fields}}
   U->>S: POST file to users/{sub}/originals/{photoId}.{ext}<br/>(policy limits size + content type)
   S-)T: ObjectCreated
@@ -589,7 +593,7 @@ sequenceDiagram
   T->>S: ✅ GET original
   T->>T: ✅ decode (HEIC ok), EXIF orientation, read DateTimeOriginal,<br/>ICC → sRGB, resize 400/1600, strip metadata, JPEG
   T->>S: ✅ PUT thumbs/ + previews/ (thumb_key/preview_key)
-  T->>D: ✅ TransactWrite: Photo pending → ready (+ width, height, takenAt, GSI1SK, sizeBytes)<br/>and Usage ADD bytesUsed, photoCount
+  T->>D: ✅ TransactWrite: Photo pending → ready (+ width, height, takenAt, GSI1SK, sizeBytes)<br/>and Usage ADD bytesUsed, photoCount, bytesReserved (actual − declared)
   U->>A: refetch GET /photos → appears in gallery
 ```
 
@@ -809,3 +813,4 @@ Not started. Target design: spec §12 (TanStack Router file routes with an authe
 | 2026-10-21 | Test setup: DynamoDB Local started with `-disableTelemetry` (its startup telemetry call could hang the container). |
 | 2026-10-21 | 5.6a: `photoId` on `POST /photos/upload-url` re-signs an upload for an existing pending photo (§9 conventions). Quota gap with pending uploads described accurately (unbounded, task 5.6b). |
 | 2026-10-21 | Upload retry re-checks the quota (security review: pending photos created while storage was empty could otherwise all be uploaded after the quota filled). |
+| 2026-10-22 | 5.6b: quota reservation for pending uploads. Usage `bytesReserved` (§8.2 contract: API reserves on create, Lambda adjusts to actual size, deletes release), upload-url order and retry rule (§9), upload flow (§10.2). Closes the pending-upload quota gap. |

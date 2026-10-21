@@ -1,4 +1,4 @@
-import { GetCommand, PutCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import type { AllowedContentType, Page, PhotoSort, PhotoStatus } from "@photo-app/shared";
 import { batchGet, conditionFailedAt, queryPage, stripKeys, type Db } from "./db";
 import { GSI1, GSI1_KEY_ATTRIBUTES, photoKey, takenSk, usageKey, userPk } from "./keys";
@@ -39,23 +39,55 @@ export function photosRepo(db: Db) {
     /**
      * Creates the `pending` item before the upload (5.6). GSI1SK uses uploadedAt as provisional
      * takenAt, so the photo shows up in the gallery straight away (FR-GAL-5, FR-UP-6).
-     * Usage is NOT counted here: the thumbnail Lambda does that once the original is stored.
+     *
+     * Reserves `sizeBytes` in Usage `bytesReserved` in the same transaction, only while the
+     * reservation stays within `quotaBytes` (FR-UP-7, 5.6b). `bytesUsed`/`photoCount` are NOT
+     * counted here: the thumbnail Lambda does that once the original is stored.
      */
-    async createPending(photo: NewPhoto): Promise<PhotoRecord> {
+    async createPending(
+      photo: NewPhoto,
+      { quotaBytes }: { quotaBytes: number },
+    ): Promise<PhotoRecord | "quota-exceeded"> {
+      if (photo.sizeBytes > quotaBytes) return "quota-exceeded";
       const record: PhotoRecord = { ...photo, status: "pending", takenAt: photo.uploadedAt };
-      await db.client.send(
-        new PutCommand({
-          TableName: db.table,
-          Item: {
-            ...photoKey(photo.userId, photo.photoId),
-            GSI1PK: userPk(photo.userId),
-            GSI1SK: takenSk(record.takenAt, photo.photoId),
-            entity: "photo",
-            ...record,
-          },
-          ConditionExpression: "attribute_not_exists(PK)",
-        }),
-      );
+      try {
+        await db.client.send(
+          new TransactWriteCommand({
+            TransactItems: [
+              {
+                Put: {
+                  TableName: db.table,
+                  Item: {
+                    ...photoKey(photo.userId, photo.photoId),
+                    GSI1PK: userPk(photo.userId),
+                    GSI1SK: takenSk(record.takenAt, photo.photoId),
+                    entity: "photo",
+                    ...record,
+                  },
+                  ConditionExpression: "attribute_not_exists(PK)",
+                },
+              },
+              {
+                Update: {
+                  TableName: db.table,
+                  Key: usageKey(photo.userId),
+                  UpdateExpression: "ADD bytesReserved :size",
+                  // Conditions can't add, so the limit is precomputed: reserved + size <= quota.
+                  ConditionExpression:
+                    "attribute_not_exists(bytesReserved) OR bytesReserved <= :max",
+                  ExpressionAttributeValues: {
+                    ":size": photo.sizeBytes,
+                    ":max": quotaBytes - photo.sizeBytes,
+                  },
+                },
+              },
+            ],
+          }),
+        );
+      } catch (err) {
+        if (conditionFailedAt(err, 1)) return "quota-exceeded";
+        throw err;
+      }
       return record;
     },
 
@@ -93,8 +125,9 @@ export function photosRepo(db: Db) {
 
     /**
      * Deletes the photo for DELETE /photos/{id} (5.9): first its album memberships (fixing album
-     * counts and covers), then the item itself together with the Usage decrement. Usage is only
-     * decremented if the thumbnail Lambda already counted the photo (status != pending).
+     * counts and covers), then the item itself together with the Usage decrement: `bytesReserved`
+     * always, `bytesUsed`/`photoCount` only if the thumbnail Lambda already counted the photo
+     * (status != pending).
      *
      * Every step is conditional, so a retry after a partial failure finishes the job without
      * double-counting. Returns the deleted record, or null if it did not exist. S3 objects are
@@ -125,18 +158,18 @@ export function photosRepo(db: Db) {
                     ExpressionAttributeValues: { ":status": record.status },
                   },
                 },
-                ...(counted
-                  ? [
-                      {
-                        Update: {
-                          TableName: db.table,
-                          Key: usageKey(userId),
-                          UpdateExpression: "ADD bytesUsed :size, photoCount :one",
-                          ExpressionAttributeValues: { ":size": -record.sizeBytes, ":one": -1 },
-                        },
-                      },
-                    ]
-                  : []),
+                {
+                  Update: {
+                    TableName: db.table,
+                    Key: usageKey(userId),
+                    UpdateExpression: counted
+                      ? "ADD bytesUsed :size, photoCount :one, bytesReserved :size"
+                      : "ADD bytesReserved :size",
+                    ExpressionAttributeValues: counted
+                      ? { ":size": -record.sizeBytes, ":one": -1 }
+                      : { ":size": -record.sizeBytes },
+                  },
+                },
               ],
             }),
           );

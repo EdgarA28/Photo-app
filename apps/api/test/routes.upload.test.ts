@@ -1,5 +1,5 @@
 /** POST /photos/upload-url (5.6) on DynamoDB Local with a fake photo bucket. */
-import { PutCommand } from "@aws-sdk/lib-dynamodb";
+import { PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import {
   MAX_UPLOAD_BYTES,
   apiErrorSchema,
@@ -31,11 +31,19 @@ function errorCode(body: unknown) {
 
 const request = { fileName: "IMG_0001.HEIC", contentType: "image/heic", sizeBytes: 3_000_000 };
 
+/** Counted usage with no pending uploads: bytesReserved = bytesUsed. */
 async function setUsage(userId: string, bytesUsed: number, quotaBytes?: number) {
   await db.client.send(
     new PutCommand({
       TableName: db.table,
-      Item: { PK: `USER#${userId}`, SK: "USAGE", bytesUsed, photoCount: 1, quotaBytes },
+      Item: {
+        PK: `USER#${userId}`,
+        SK: "USAGE",
+        bytesUsed,
+        bytesReserved: bytesUsed,
+        photoCount: 1,
+        quotaBytes,
+      },
     }),
   );
 }
@@ -123,15 +131,16 @@ describe("quota (FR-UP-7, FR-ACC-2)", () => {
   test("413 QUOTA_EXCEEDED when the upload would pass the default quota; nothing created", async () => {
     const user = newUserId();
     await setUsage(user, TEST_DEFAULT_QUOTA - 100);
-    const before = uploads.length;
     const { status, body } = await api(user, "POST", "/photos/upload-url", {
       ...request,
       sizeBytes: 101,
     });
+    // Signing happens first (local, never returned), so only the response, item and
+    // reservation matter here.
     expect(status).toBe(413);
     expect(errorCode(body)).toBe("QUOTA_EXCEEDED");
-    expect(uploads.length).toBe(before);
     expect(photoPageSchema.parse((await api(user, "GET", "/photos")).body).items).toEqual([]);
+    expect(await repos.usage.get(user)).toMatchObject({ bytesReserved: TEST_DEFAULT_QUOTA - 100 });
   });
 
   test("filling the quota exactly is allowed", async () => {
@@ -163,6 +172,28 @@ describe("quota (FR-UP-7, FR-ACC-2)", () => {
     await markReady(db, user, photoId, TEST_DEFAULT_QUOTA - 10, "2025-01-01T00:00:00.000Z");
     const next = await api(user, "POST", "/photos/upload-url", { ...request, sizeBytes: 11 });
     expect(next.status).toBe(413);
+  });
+
+  test("pending uploads count: URLs can't be requested past the quota before processing (5.6b)", async () => {
+    const user = newUserId();
+    await setUsage(user, 0, 10_000_000);
+    for (let i = 0; i < 3; i++) {
+      expect((await api(user, "POST", "/photos/upload-url", request)).status).toBe(201);
+    }
+    const over = await api(user, "POST", "/photos/upload-url", request);
+    expect(over.status).toBe(413);
+    expect(errorCode(over.body)).toBe("QUOTA_EXCEEDED");
+    expect(photoPageSchema.parse((await api(user, "GET", "/photos")).body).items).toHaveLength(3);
+  });
+
+  test("parallel requests can't overshoot the quota", async () => {
+    const user = newUserId();
+    await setUsage(user, 0, 10_000_000);
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () => api(user, "POST", "/photos/upload-url", request)),
+    );
+    expect(results.filter((r) => r.status === 201)).toHaveLength(3);
+    expect(results.filter((r) => r.status === 413)).toHaveLength(5);
   });
 
   test("one user's usage doesn't count against another (NFR-SEC-2)", async () => {
@@ -253,10 +284,42 @@ describe("retrying an upload with photoId (5.6a)", () => {
     expect(photoPageSchema.parse((await api(other, "GET", "/photos")).body).items).toEqual([]);
   });
 
-  test("413 QUOTA_EXCEEDED when usage grew past the quota since the photo was created", async () => {
+  test("its own reservation counts once: a retry at exactly full quota is fine", async () => {
+    const user = newUserId();
+    const { body } = await api(user, "POST", "/photos/upload-url", {
+      ...request,
+      sizeBytes: MAX_UPLOAD_BYTES,
+    });
+    const { photoId } = uploadUrlResponseSchema.parse(body);
+    await setUsage(user, TEST_DEFAULT_QUOTA - MAX_UPLOAD_BYTES);
+    await db.client.send(
+      new UpdateCommand({
+        TableName: db.table,
+        Key: { PK: `USER#${user}`, SK: "USAGE" },
+        UpdateExpression: "ADD bytesReserved :size",
+        ExpressionAttributeValues: { ":size": MAX_UPLOAD_BYTES },
+      }),
+    );
+    const retry = await api(user, "POST", "/photos/upload-url", {
+      ...request,
+      sizeBytes: MAX_UPLOAD_BYTES,
+      photoId,
+    });
+    expect(retry.status).toBe(200);
+  });
+
+  test("413 QUOTA_EXCEEDED if the quota was lowered below what's reserved", async () => {
     const user = newUserId();
     const photoId = await start(user);
-    await setUsage(user, TEST_DEFAULT_QUOTA - 1000);
+    await setUsage(user, 0, 1_000_000);
+    await db.client.send(
+      new UpdateCommand({
+        TableName: db.table,
+        Key: { PK: `USER#${user}`, SK: "USAGE" },
+        UpdateExpression: "SET bytesReserved = :reserved",
+        ExpressionAttributeValues: { ":reserved": request.sizeBytes },
+      }),
+    );
     const before = uploads.length;
     const { status, body } = await api(user, "POST", "/photos/upload-url", { ...request, photoId });
     expect(status).toBe(413);

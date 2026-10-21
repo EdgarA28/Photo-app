@@ -10,6 +10,11 @@ import { usageKey } from "./keys";
 export interface UsageRecord {
   bytesUsed: number;
   photoCount: number;
+  /**
+   * What the quota is checked against (5.6b): bytesUsed plus the declared size of every pending
+   * upload. Reserved by createPending, adjusted by the thumbnail Lambda, released by deletes.
+   */
+  bytesReserved: number;
   quotaBytes: number | null;
 }
 
@@ -24,6 +29,7 @@ export function usageRepo(db: Db) {
       return {
         bytesUsed: Math.max(0, Number(item.bytesUsed ?? 0)),
         photoCount: Math.max(0, Number(item.photoCount ?? 0)),
+        bytesReserved: Math.max(0, Number(item.bytesReserved ?? 0)),
         quotaBytes: typeof item.quotaBytes === "number" ? item.quotaBytes : null,
       };
     },

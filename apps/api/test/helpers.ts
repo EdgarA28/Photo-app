@@ -1,12 +1,19 @@
 import { CreateTableCommand, DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { newId } from "@photo-app/shared";
 import { randomUUID } from "node:crypto";
 import { inject } from "vitest";
 import { createApp } from "../src/app";
 import type { PhotoStorage, UploadTarget } from "../src/lib/storage";
 import type { UserDirectory, UserProfile } from "../src/lib/users";
-import { createDocumentClient, createRepositories, type Db } from "../src/repo";
+import {
+  createDocumentClient,
+  createRepositories,
+  type Db,
+  type NewPhoto,
+  type PhotoRecord,
+  type Repositories,
+} from "../src/repo";
 import { registerRoutes } from "../src/routes";
 
 /**
@@ -74,7 +81,21 @@ export function newPhoto(
   };
 }
 
-/** Does what the thumbnail Lambda does on success (services/thumbnails processor.py). */
+/** createPending with plenty of quota, for tests that aren't about the quota. */
+export async function createPending(
+  repos: Repositories,
+  photo: NewPhoto,
+  quotaBytes = 1024 ** 4,
+): Promise<PhotoRecord> {
+  const created = await repos.photos.createPending(photo, { quotaBytes });
+  if (created === "quota-exceeded") throw new Error("Unexpected quota-exceeded in test setup");
+  return created;
+}
+
+/**
+ * Does what the thumbnail Lambda does on success (services/thumbnails processor.py): counts the
+ * actual `size` and moves the reservation from the declared size to it.
+ */
 export async function markReady(
   db: Db,
   userId: string,
@@ -82,6 +103,14 @@ export async function markReady(
   size: number,
   takenAt: string,
 ) {
+  const item = await db.client.send(
+    new GetCommand({
+      TableName: db.table,
+      Key: { PK: `USER#${userId}`, SK: `PHOTO#${photoId}` },
+      ConsistentRead: true,
+    }),
+  );
+  const declared = Number(item.Item?.sizeBytes ?? 0);
   await db.client.send(
     new TransactWriteCommand({
       TransactItems: [
@@ -108,8 +137,8 @@ export async function markReady(
           Update: {
             TableName: db.table,
             Key: { PK: `USER#${userId}`, SK: "USAGE" },
-            UpdateExpression: "ADD bytesUsed :size, photoCount :one",
-            ExpressionAttributeValues: { ":size": size, ":one": 1 },
+            UpdateExpression: "ADD bytesUsed :size, photoCount :one, bytesReserved :delta",
+            ExpressionAttributeValues: { ":size": size, ":one": 1, ":delta": size - declared },
           },
         },
       ],

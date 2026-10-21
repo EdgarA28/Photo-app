@@ -8,7 +8,7 @@ import {
 } from "@photo-app/shared";
 import { beforeAll, describe, expect, test } from "vitest";
 import type { Db, Repositories } from "../src/repo";
-import { createTestApi, markReady, newPhoto, newUserId } from "./helpers";
+import { createPending, createTestApi, markReady, newPhoto, newUserId } from "./helpers";
 
 let db: Db;
 let repos: Repositories;
@@ -23,8 +23,7 @@ function errorCode(body: unknown) {
 
 async function upload(userId: string, count: number) {
   const ids: string[] = [];
-  for (let i = 0; i < count; i++)
-    ids.push((await repos.photos.createPending(newPhoto(userId))).photoId);
+  for (let i = 0; i < count; i++) ids.push((await createPending(repos, newPhoto(userId))).photoId);
   return ids;
 }
 

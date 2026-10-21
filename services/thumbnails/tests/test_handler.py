@@ -52,7 +52,8 @@ def aws(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Any, Any]]:
         handler_module._processor.cache_clear()
 
 
-def put_pending(dynamodb: Any) -> None:
+def put_pending(dynamodb: Any, declared: int = 1) -> None:
+    """What the API's createPending does: the item plus a reservation of its declared size."""
     dynamodb.put_item(
         TableName=TABLE,
         Item={
@@ -61,9 +62,10 @@ def put_pending(dynamodb: Any) -> None:
             "uploadedAt": {"S": UPLOADED_AT},
             "GSI1PK": {"S": f"USER#{USER}"},
             "GSI1SK": {"S": f"TAKEN#{UPLOADED_AT}#{PHOTO}"},
-            "sizeBytes": {"N": "1"},
+            "sizeBytes": {"N": str(declared)},
         },
     )
+    dynamodb.put_item(TableName=TABLE, Item={**USAGE_KEY, "bytesReserved": {"N": str(declared)}})
 
 
 def s3_event(key: str, size: int) -> dict[str, Any]:
@@ -96,7 +98,7 @@ def exists(s3: Any, key: str) -> bool:
 
 def test_ready(aws: tuple[Any, Any], jpeg_rotated: bytes) -> None:
     s3, dynamodb = aws
-    put_pending(dynamodb)
+    put_pending(dynamodb, declared=len(jpeg_rotated))
 
     result = handler_module.handler(upload(s3, jpeg_rotated))
 
@@ -113,6 +115,8 @@ def test_ready(aws: tuple[Any, Any], jpeg_rotated: bytes) -> None:
     assert usage is not None
     assert usage["bytesUsed"]["N"] == str(len(jpeg_rotated))
     assert usage["photoCount"]["N"] == "1"
+    # Declared = actual (the upload policy pins the size): the reservation is unchanged.
+    assert usage["bytesReserved"]["N"] == str(len(jpeg_rotated))
 
     for key, edge in ((THUMB, 400), (PREVIEW, 1600)):
         head = s3.head_object(Bucket=BUCKET, Key=key)
@@ -120,6 +124,16 @@ def test_ready(aws: tuple[Any, Any], jpeg_rotated: bytes) -> None:
         assert head["CacheControl"] == DERIVED_CACHE_CONTROL
         body = s3.get_object(Bucket=BUCKET, Key=key)["Body"].read()
         assert max(Image.open(io.BytesIO(body)).size) == edge
+
+
+def test_reservation_moves_to_the_actual_size(aws: tuple[Any, Any], jpeg_plain: bytes) -> None:
+    # Task 5.6b: bytesReserved must end up equal to bytesUsed once nothing is pending.
+    s3, dynamodb = aws
+    put_pending(dynamodb, declared=len(jpeg_plain) + 500)
+    handler_module.handler(upload(s3, jpeg_plain))
+    usage = get(dynamodb, USAGE_KEY)
+    assert usage is not None
+    assert usage["bytesUsed"]["N"] == usage["bytesReserved"]["N"] == str(len(jpeg_plain))
 
 
 def test_taken_at_falls_back_to_upload_time(aws: tuple[Any, Any], jpeg_plain: bytes) -> None:
@@ -148,6 +162,7 @@ def test_duplicate_event_is_idempotent(aws: tuple[Any, Any], jpeg_plain: bytes) 
     usage = get(dynamodb, USAGE_KEY)
     assert usage is not None
     assert usage["photoCount"]["N"] == "1"
+    assert usage["bytesReserved"]["N"] == usage["bytesUsed"]["N"]  # Moved once, not twice.
 
 
 def test_corrupt_marks_failed_without_raising(aws: tuple[Any, Any], corrupt: bytes) -> None:
@@ -165,6 +180,7 @@ def test_corrupt_marks_failed_without_raising(aws: tuple[Any, Any], corrupt: byt
     usage = get(dynamodb, USAGE_KEY)
     assert usage is not None
     assert usage["bytesUsed"]["N"] == str(len(corrupt))  # The original is still stored.
+    assert usage["bytesReserved"]["N"] == str(len(corrupt))
     assert not exists(s3, THUMB)
     assert not exists(s3, PREVIEW)
 
@@ -233,7 +249,8 @@ def test_photo_deleted_during_processing_cleans_up(
     assert result["results"][0]["status"] == "skipped"
     assert not exists(s3, THUMB)
     assert not exists(s3, PREVIEW)
-    assert get(dynamodb, USAGE_KEY) is None
+    # Nothing counted; releasing the reservation is the API delete's job.
+    assert get(dynamodb, USAGE_KEY) == {**USAGE_KEY, "bytesReserved": {"N": "1"}}
 
 
 def test_transient_errors_are_raised(aws: tuple[Any, Any], jpeg_plain: bytes) -> None:

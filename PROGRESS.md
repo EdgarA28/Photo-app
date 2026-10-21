@@ -15,20 +15,19 @@
 
 | | |
 |---|---|
-| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.7/5.10/5.11 done (API skeleton, upload URL, read/album routes), 6.1–6.7 done (thumbnail code) → next: 5.8, 5.9, 5.12, 5.13 or Phase 4 (auth) |
-| **Last updated** | 2026-10-21 |
+| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.7 (incl. 5.6a/b)/5.10/5.11 done (API skeleton, upload URL, read/album routes), 6.1–6.7 done (thumbnail code) → next: 5.8, 5.9, 5.12, 5.13 or Phase 4 (auth) |
+| **Last updated** | 2026-10-22 |
 | **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
 
 ## Next up
 
-1. **5.6b** quota reservation for pending uploads (security finding; touches the API repo, the thumbnail Lambda and delete).
-2. Remaining API routes: 5.8 download URL, 5.9 photo delete (extend `PhotoStorage` in `src/lib/storage.ts`; the fake is in `test/helpers.ts`), 5.12 sharing (Cognito email lookup: extend `UserDirectory` in `src/lib/users.ts`), 5.13 shared access (then open `GET /albums/{id}/photos` to recipients; their image URLs need CloudFront signing, 7.4). New tests can use `createTestApi()` from `test/helpers.ts`.
-3. Phase 4 (auth: Cognito + Google + pre-sign-up trigger): creates AWS resources, needs approval.
+1. Remaining API routes: 5.8 download URL, 5.9 photo delete (extend `PhotoStorage` in `src/lib/storage.ts`; the fake is in `test/helpers.ts`), 5.12 sharing (Cognito email lookup: extend `UserDirectory` in `src/lib/users.ts`), 5.13 shared access (then open `GET /albums/{id}/photos` to recipients; their image URLs need CloudFront signing, 7.4). New tests can use `createTestApi()` from `test/helpers.ts`.
+2. Phase 4 (auth: Cognito + Google + pre-sign-up trigger): creates AWS resources, needs approval.
    Dev app resources (table + photo bucket) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done.
-4. Thumbnails 6.8 (aarch64 packaging) + 6.9 (infra module, can be written and `tofu test`ed offline; deploy needs approval). IAM must include `s3:DeleteObject` on `thumbs/`+`previews/` (race cleanup) and Lambda JSON log format.
-5. Prod bootstrap (1.3/1.4/1.5 for prod) whenever the user approves it; it isn't needed until Phase 11.
-6. Add GitHub repo secrets/environments for the CI roles when Phase 10 starts.
+3. Thumbnails 6.8 (aarch64 packaging) + 6.9 (infra module, can be written and `tofu test`ed offline; deploy needs approval). IAM must include `s3:DeleteObject` on `thumbs/`+`previews/` (race cleanup) and Lambda JSON log format.
+4. Prod bootstrap (1.3/1.4/1.5 for prod) whenever the user approves it; it isn't needed until Phase 11.
+5. Add GitHub repo secrets/environments for the CI roles when Phase 10 starts.
 
 ---
 
@@ -111,7 +110,8 @@
 - [x] **5.7** `GET /photos` (GSI1, desc, cursor), `GET /photos/{id}` (FR-GAL-1/2)
 - [x] **5.6a** Re-sign an upload for an existing photo: optional `photoId` in `POST /photos/upload-url`; must be the caller's and still `pending` (else 404 / 409 `CONFLICT`); same key, type and size as the item; no new item. Prevents duplicate pending photos on retries (with 8.10 storing the `photoId`)
   - 200 on retry, quota re-checked against current usage (security review fix), `fileName` kept from the first request; 8 route tests + 1 schema test
-- [ ] **5.6b** Count pending uploads against the quota (security review 2026-10-21, MEDIUM): today every upload-url request checks only *counted* usage, so a user can request many URLs at once and exceed the quota without limit. Plan: `bytesPending` on the Usage item; `createPending` adds `sizeBytes` in the same transaction, conditional on `bytesUsed + bytesPending + sizeBytes ≤ quota` (quota passed in by the API); thumbnail Lambda moves pending → used in its final transaction (Python change); photo delete of a `pending` item and the 6.11 sweeper subtract it. Retries (5.6a) don't reserve again; their re-check then also counts the photo's own reservation, so subtract it
+- [x] **5.6b** Count pending uploads against the quota (security review 2026-10-21, MEDIUM): today every upload-url request checks only *counted* usage, so a user can request many URLs at once and exceed the quota without limit. Plan: `bytesPending` on the Usage item; `createPending` adds `sizeBytes` in the same transaction, conditional on `bytesUsed + bytesPending + sizeBytes ≤ quota` (quota passed in by the API); thumbnail Lambda moves pending → used in its final transaction (Python change); photo delete of a `pending` item and the 6.11 sweeper subtract it. Retries (5.6a) don't reserve again; their re-check then also counts the photo's own reservation, so subtract it
+  - Done as one combined counter `bytesReserved` (= bytesUsed + pending) instead of a separate `bytesPending`: DynamoDB conditions can't add, so the API checks `bytesReserved <= quota − size`. Retry check is `bytesReserved ≤ quota`. Lambda adds `actual − declared`. 6 new API tests (incl. parallel requests), 1 new Python test
 - [ ] **5.8** `GET /photos/{id}/download-url` (5 min, attachment + original filename) (FR-DL-1/2)
 - [ ] **5.9** `DELETE /photos/{id}`: S3 objects, item, memberships, usage update (FR-DEL-1)
 - [x] **5.10** Albums CRUD: `GET/POST /albums`, `PATCH/DELETE /albums/{id}` (FR-ALB-1)
@@ -235,6 +235,7 @@
 | 2026-10-21 | DynamoDB Local runs with `-disableTelemetry`: its startup telemetry call to AWS (Cognito Identity/Pinpoint) runs before the port opens and hung on a stalled TLS handshake, so the container never became ready. |
 | 2026-10-21 | Upload URL: 201; over quota → **413 `QUOTA_EXCEEDED`**; POST policy requires the **exact** declared size (`content-length-range` = sizeBytes..sizeBytes), so the quota check sees the real size; storage class INTELLIGENT_TIERING set via policy field. `api` module (5.4) must set `PHOTO_BUCKET` and grant `s3:PutObject` on `users/*/originals/*` (the POST is signed with the Lambda's credentials). Known gap: abandoned uploads leave `pending` items; needs cleanup later (e.g. TTL on pending items, or the client reusing its photoId). |
 | 2026-10-21 | Retry (5.6a): 200 with a fresh signature for the same key; 409 `CONFLICT` when the photo is no longer pending or type/size differ; 404 for unknown/foreign. The quota is re-checked on retry (security review: otherwise pending photos created early could bypass it later). Correction to 2026-10-19: the pending-upload quota gap is unbounded, not "slightly" → 5.6b. |
+| 2026-10-22 | **Quota reservation (5.6b):** Usage `bytesReserved` = bytesUsed + declared sizes of pending photos; the quota is checked against it, atomically with creating the pending item. Supersedes the 2026-10-19 note that pending uploads aren't counted. Abandoned uploads now hold quota until deleted or swept (6.11), which makes 6.11 more important. |
 | 2026-10-21 | Abandoned uploads: planned 5.6a (reuse `photoId` on retry) + 6.11 (daily sweeper for stale `pending` items); TTL rejected (blind to files that arrived but failed processing, leaves album memberships dangling). |
 
 ## Session log
@@ -260,3 +261,4 @@
 | 2026-10-21 | API route 5.6 `POST /photos/upload-url` (`src/lib/storage.ts`, S3 pre-signed POST, `PHOTO_BUCKET`). Lint/typecheck/format/build clean; non-DynamoDB tests pass (41). DynamoDB Local container unresponsive on this machine (also outside the sandbox and from inside the container), so the route tests haven't run. Nothing deployed. |
 | 2026-10-21 | 5.6a upload retry with `photoId` (no duplicate pending items). Security review flagged the pending-upload quota gap → task 5.6b. 153 TS tests pass. |
 | 2026-10-21 | Security review fix: upload retry (5.6a) now runs the quota check too. |
+| 2026-10-22 | 5.6b quota reservation: `bytesReserved` in Usage (API repo create/delete, route, thumbnail Lambda `_finish`). 160 TS + 74 Python tests pass. |

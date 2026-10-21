@@ -3,7 +3,9 @@
 Contract with the API (§8.2):
 - The API creates the Photo item with `status: pending` before the upload.
 - This function moves it to `ready` (width, height, takenAt, GSI1SK, actual sizeBytes) or
-  `failed`, and counts the stored original in the user's Usage item exactly once.
+  `failed`, and counts the stored original in the user's Usage item exactly once. The API
+  reserved the declared size in `bytesReserved` (task 5.6b); this moves that reservation to the
+  actual size (the upload policy pins the size, so the difference is normally 0).
 - The status condition makes it idempotent: S3 can deliver an event more than once and Lambda
   retries failed invocations, so anything not `pending` is skipped.
 
@@ -54,9 +56,10 @@ class Processor:
             return Outcome("skipped", "no photo item")
         if item.get("status", {}).get("S") != "pending":
             return Outcome("skipped", "already processed")
+        declared = int(item.get("sizeBytes", {}).get("N", "0"))
 
         if size > MAX_SOURCE_BYTES:
-            return self._fail(user_id, photo_id, size, f"source is {size} bytes", log)
+            return self._fail(user_id, photo_id, size, declared, f"source is {size} bytes", log)
 
         try:
             obj = self._s3.get_object(Bucket=bucket, Key=key)
@@ -66,13 +69,13 @@ class Processor:
             raise
         size = obj["ContentLength"]
         if size > MAX_SOURCE_BYTES:
-            return self._fail(user_id, photo_id, size, f"source is {size} bytes", log)
+            return self._fail(user_id, photo_id, size, declared, f"source is {size} bytes", log)
         data = obj["Body"].read()
 
         try:
             image = process_image(data)
         except PermanentImageError as e:
-            return self._fail(user_id, photo_id, size, str(e), log)
+            return self._fail(user_id, photo_id, size, declared, str(e), log)
 
         thumb, preview = thumb_key(user_id, photo_id), preview_key(user_id, photo_id)
         self._put_jpeg(bucket, thumb, image.thumb)
@@ -84,6 +87,7 @@ class Processor:
             user_id,
             photo_id,
             size,
+            declared,
             "SET #status = :ready, width = :w, height = :h, takenAt = :t, GSI1SK = :gsi, "
             "sizeBytes = :size, processedAt = :now",
             {
@@ -109,13 +113,20 @@ class Processor:
         return Outcome("ready")
 
     def _fail(
-        self, user_id: str, photo_id: str, size: int, reason: str, log: dict[str, str]
+        self,
+        user_id: str,
+        photo_id: str,
+        size: int,
+        declared: int,
+        reason: str,
+        log: dict[str, str],
     ) -> Outcome:
         logger.warning("Photo failed", extra={**log, "reason": reason})
         updated = self._finish(
             user_id,
             photo_id,
             size,
+            declared,
             "SET #status = :failed, failureReason = :reason, sizeBytes = :size, processedAt = :now",
             {":failed": {"S": "failed"}, ":reason": {"S": reason[:500]}},
         )
@@ -144,10 +155,12 @@ class Processor:
         user_id: str,
         photo_id: str,
         size: int,
+        declared: int,
         update_expression: str,
         values: dict[str, Any],
     ) -> bool:
-        """Applies the final status and counts the original in Usage, atomically.
+        """Applies the final status and counts the original in Usage, atomically: `size` is the
+        stored size, `declared` the size the API reserved when it created the item.
 
         Returns False if the photo is gone or no longer `pending`."""
         try:
@@ -175,10 +188,13 @@ class Processor:
                         "Update": {
                             "TableName": self._table,
                             "Key": {"PK": {"S": f"USER#{user_id}"}, "SK": {"S": "USAGE"}},
-                            "UpdateExpression": "ADD bytesUsed :size, photoCount :one",
+                            "UpdateExpression": (
+                                "ADD bytesUsed :size, photoCount :one, bytesReserved :delta"
+                            ),
                             "ExpressionAttributeValues": {
                                 ":size": {"N": str(size)},
                                 ":one": {"N": "1"},
+                                ":delta": {"N": str(size - declared)},
                             },
                         }
                     },
