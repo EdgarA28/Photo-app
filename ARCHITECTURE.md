@@ -47,7 +47,7 @@
 | Environment roots | `infra/envs/{dev,prod}` | 🚧 | Database + storage **deployed in dev**; prod validated only |
 | Infra modules: database, storage | `infra/modules/{database,storage}` | ✅ (dev) | Offline `tofu test` suites (7 runs) |
 | Infra modules: auth, api, thumbnails, frontend | `infra/modules/*` | 📋 | |
-| API Lambda | `apps/api` | 🚧 | Skeleton (5.1–5.3) + routes `GET /me`, `GET /photos`, `GET /photos/{id}`, album CRUD and album photos (5.5, 5.7, 5.10, 5.11); 83 tests (incl. DynamoDB Local). Upload/download/delete, sharing and media cookies not yet; not deployed |
+| API Lambda | `apps/api` | 🚧 | Skeleton (5.1–5.3) + routes `GET /me`, `POST /photos/upload-url`, `GET /photos`, `GET /photos/{id}`, album CRUD and album photos (5.5, 5.6, 5.7, 5.10, 5.11); 102 tests (incl. DynamoDB Local). Download/delete, sharing and media cookies not yet; not deployed |
 | Thumbnail Lambda | `services/thumbnails` | 🚧 | Handler, image pipeline, S3-key mirror + 73 pytest tests (6.1–6.7); not packaged or deployed yet (6.8–6.10) |
 | Auth trigger Lambda | `services/auth-triggers` | 📋 | Folder skeleton only |
 | Web app / PWA | `apps/web` | 📋 | Folder skeleton only |
@@ -147,6 +147,7 @@ Versions are what is **installed/locked today**; 📋 rows are chosen but not ye
 | @hono/aws-lambda | 1.0.0 | `apps/api` | Lambda adapter (API Gateway HTTP API event → Request); replaces the deprecated `hono/aws-lambda` | ✅ |
 | AWS SDK v3 (`client-dynamodb`, `lib-dynamodb`) | 3.1153.0 | `apps/api` | DynamoDB via the DocumentClient; bundled (not the runtime copy) | ✅ |
 | AWS SDK v3 (`client-cognito-identity-provider`) | 3.1153.0 | `apps/api` | Profile lookup by `sub` (`ListUsers`) for `GET /me`; email lookup for sharing (5.12) | ✅ |
+| AWS SDK v3 (`client-s3`, `s3-presigned-post`) | 3.1154.0 | `apps/api` | Pre-signed upload POST (5.6); download URLs and object deletes (5.8, 5.9) | ✅ |
 | AWS SDK v3 (S3, CloudFront signer) | — | `apps/api`, `services/auth-triggers` | Pre-signed URLs, signed cookies/URLs | 📋 |
 | React + Vite | — | `apps/web` | SPA | 📋 |
 | TanStack Router / Query / Virtual | — | `apps/web` | Routing, server state, virtualized grid | 📋 |
@@ -252,7 +253,7 @@ Photo-app/
 │       ├── src/index.ts         Lambda entry: config, clients, repositories, routes, @hono/aws-lambda `handle`
 │       ├── src/app.ts           Hono app: /api base path, body limit, /health, requireUser, error envelope
 │       ├── src/env.ts           Hono env type (Lambda event binding, `userId` variable)
-│       ├── src/lib/             auth.ts (JWT sub), errors.ts (AppError, orNotFound), validation.ts (Zod), log.ts, config.ts, users.ts (Cognito directory)
+│       ├── src/lib/             auth.ts (JWT sub), errors.ts (AppError, orNotFound), validation.ts (Zod), log.ts, config.ts, users.ts (Cognito directory), storage.ts (photo bucket: pre-signed POST)
 │       ├── src/repo/            DynamoDB layer: keys, cursor, db helpers, photos, albums, memberships, shares, usage
 │       ├── src/routes/          index.ts (Deps, registerRoutes), me.ts, photos.ts, albums.ts, present.ts (record → API object)
 │       └── test/                Vitest: app/middleware, cursor, config/directory, repositories and routes on DynamoDB Local
@@ -494,7 +495,7 @@ Access patterns and the "can user X see photo P" rule: see spec §8.2.
 - **Membership changes** are one transaction each over membership + photo `albumIds` + album `photoCount`, with conditions (album exists, photo exists = same owner, not already a member; on removal the membership's `ownerId` must be the caller, since membership keys carry no user), so duplicates and retries never double-count and nobody can add to or remove from another user's album. `listMemberships`/`hasPhoto` are not user-scoped: routes must check album ownership or a share first.
 - **Deletes** are ordered children-first and conditional so a retried request finishes an interrupted one: photo = memberships → item + Usage decrement in one transaction (conditioned on the status read, so it can't race the thumbnail Lambda's count); album = unlink photos → memberships + shares → album item.
 - **Pagination:** `queryPage` reads `limit + 1` items, so `nextCursor` is null exactly at the end; the cursor is base64url JSON of the last item's key attributes, and decoding rejects anything that isn't exactly those attributes for the caller's own partition.
-- Not yet covered: listing an album's photos by date taken (memberships are in upload order), quota check including pending uploads.
+- Not yet covered: listing an album's photos by date taken (memberships are in upload order), quota check including pending uploads, cleanup of `pending` items whose upload never happened (each upload-url call creates a new item, so an abandoned or re-requested upload leaves one behind).
 
 ---
 
@@ -502,13 +503,14 @@ Access patterns and the "can user X see photo P" rule: see spec §8.2.
 
 Contracts exist (✅ in `packages/shared`). Implemented routes are marked ✅ below; the rest are 📋. Base path `/api`, bearer = Cognito access token.
 
-**Request pipeline (✅, `apps/api/src/app.ts`):** body limit 64 KB → `GET /health` (public) → `requireUser` (JWT `sub` from `event.requestContext.authorizer.jwt.claims`, set by the API Gateway JWT authorizer) → route (`validate(target, schema)` with the shared Zod schemas, repositories, `orNotFound`) → `onError`. Every error leaves as `{error: {code, message}}`: `AppError` as thrown; Hono `HTTPException` by status (400 `VALIDATION_ERROR`, 413 `PAYLOAD_TOO_LARGE`, …); anything else is logged as JSON and returned as a generic 500 `INTERNAL_ERROR`. Unknown routes: 401 for anonymous callers, 404 `NOT_FOUND` for users. Routes are registered through `createApp({ routes: registerRoutes(deps) })`; `Deps` = repositories, a `UserDirectory` (Cognito) and `{ defaultQuotaBytes }`, built once per Lambda environment in `index.ts` and faked in tests.
+**Request pipeline (✅, `apps/api/src/app.ts`):** body limit 64 KB → `GET /health` (public) → `requireUser` (JWT `sub` from `event.requestContext.authorizer.jwt.claims`, set by the API Gateway JWT authorizer) → route (`validate(target, schema)` with the shared Zod schemas, repositories, `orNotFound`) → `onError`. Every error leaves as `{error: {code, message}}`: `AppError` as thrown; Hono `HTTPException` by status (400 `VALIDATION_ERROR`, 413 `PAYLOAD_TOO_LARGE`, …); anything else is logged as JSON and returned as a generic 500 `INTERNAL_ERROR`. Unknown routes: 401 for anonymous callers, 404 `NOT_FOUND` for users. Routes are registered through `createApp({ routes: registerRoutes(deps) })`; `Deps` = repositories, a `UserDirectory` (Cognito), a `PhotoStorage` (S3) and `{ defaultQuotaBytes }`, built once per Lambda environment in `index.ts` and faked in tests.
 
-**Runtime configuration (env vars, set by the `api` module in 5.4):** `TABLE_NAME`, `USER_POOL_ID`, `DEFAULT_QUOTA_BYTES` (positive integer; e.g. 2 GB dev, 10 GB prod). A missing or invalid value fails the cold start.
+**Runtime configuration (env vars, set by the `api` module in 5.4):** `TABLE_NAME`, `PHOTO_BUCKET`, `USER_POOL_ID`, `DEFAULT_QUOTA_BYTES` (positive integer; e.g. 2 GB dev, 10 GB prod). A missing or invalid value fails the cold start.
 
 **Response conventions (✅):**
 - Own image URLs are stable CloudFront paths, `/users/{sub}/thumbs/{photoId}.jpg` and `/users/{sub}/previews/{photoId}.jpg`, and only when `status = ready` (else `null`). Album `coverThumbUrl` is the cover's thumb path under the same rule.
 - `GET /me`: email and name come from Cognito (`ListUsers` filtered by `sub`, because access tokens carry neither and Google users' usernames aren't their `sub`); a token whose user is gone from the pool → 401. `quotaBytes` = the Usage item's override, else `DEFAULT_QUOTA_BYTES`.
+- `POST /photos/upload-url` → 201 `{photoId, upload: {url, fields}}`. Order: validate (type, 1 B–50 MB, name) → quota check → sign → put the `pending` item (signing is local and comes first, so a failure leaves no item). Quota = counted `bytesUsed` + `sizeBytes` must be ≤ quota, else **413 `QUOTA_EXCEEDED`**; pending uploads aren't counted. The POST policy pins bucket, exact key `users/{sub}/originals/{photoId}.{ext}`, `Content-Type`, `x-amz-storage-class: INTELLIGENT_TIERING` and `content-length-range` = exactly the declared size; expires after 15 min. The browser must send the returned `fields` (plus `file` last) as multipart form data to `url`.
 - `POST /albums` → 201 with the album. `PATCH` → 200 with the album; a cover that isn't in the album → 400 `VALIDATION_ERROR`. Deletes and `POST /albums/{id}/photos` → 204.
 - `POST /albums/{id}/photos` is idempotent (photos already in the album are fine) and checks all photos first: any unknown or foreign photo → 404 `Photo not found` and nothing is added.
 - `GET /albums/{id}/photos` lists in photo upload order (memberships are keyed by the photo ULID; ordering by date taken would need another index, §8.2) and is **owner-only** until sharing (5.12/5.13) adds recipients with signed URLs.
@@ -518,7 +520,7 @@ Contracts exist (✅ in `packages/shared`). Implemented routes are marked ✅ be
 | `POST` | `/session/media-cookie` | — | `mediaCookieResponseSchema` |
 | `DELETE` | `/session/media-cookie` | — | none (`204`, expires the cookies; logout, FR-AUTH-5) |
 | `GET` | `/me` ✅ | — | `meResponseSchema` (200) |
-| `POST` | `/photos/upload-url` | `uploadUrlRequestSchema` | `uploadUrlResponseSchema` |
+| `POST` | `/photos/upload-url` ✅ | `uploadUrlRequestSchema` | `uploadUrlResponseSchema` (201) |
 | `GET` | `/photos` ✅ | `listPhotosQuerySchema` (query) | `photoPageSchema` (200) |
 | `GET` | `/photos/{photoId}` ✅ | — | `photoSchema` (200) |
 | `GET` | `/photos/{photoId}/download-url` | — | `downloadUrlResponseSchema` |
@@ -564,7 +566,7 @@ sequenceDiagram
   A-->>U: Set-Cookie: CloudFront signed cookies for /users/{sub}/*
 ```
 
-### 10.2 Upload & processing 🚧 (contracts ✅, thumbnail code ✅, API 📋, not deployed)
+### 10.2 Upload & processing 🚧 (contracts ✅, thumbnail code ✅, API ✅, not deployed)
 
 ```mermaid
 sequenceDiagram
@@ -575,8 +577,10 @@ sequenceDiagram
   participant S as S3 photo bucket
   participant T as Thumbnail Lambda
   U->>A: POST /photos/upload-url {fileName, contentType, sizeBytes}<br/>✅ uploadUrlRequestSchema
-  A->>D: check Usage vs quota, put Photo {status: pending}
-  A-->>U: {photoId, upload{url, fields}}<br/>✅ newId(), originalKey()
+  A->>D: ✅ check Usage vs quota (413 QUOTA_EXCEEDED)
+  A->>A: ✅ sign POST (key, type, exact size, INTELLIGENT_TIERING, 15 min)
+  A->>D: ✅ put Photo {status: pending}
+  A-->>U: ✅ 201 {photoId, upload{url, fields}}
   U->>S: POST file to users/{sub}/originals/{photoId}.{ext}<br/>(policy limits size + content type)
   S-)T: ObjectCreated
   T->>T: ✅ parse_original_key() → ignore anything else
@@ -651,9 +655,10 @@ Bootstrap uses local state per workspace instead of S3.
 | State protection | ✅ (dev) | Versioning, SSE-S3, ACLs disabled, public access blocked, TLS-only policy, `prevent_destroy` |
 | State client-side encryption | 📋 deferred | Task 12.5 (state will contain the Google client secret) |
 | Cost guardrail | ✅ | Organization budget $5/month with email alerts |
+| Upload URL constraints (NFR-SEC-6) | ✅ code | Pre-signed POST bound to one key under the caller's prefix, one allowed content type, exact declared size, 15 min |
 | Strict input validation | ✅ | Zod schemas: allowed types, size cap, ID formats, trimmed names, normalised emails; applied in the API by `validate()`; JSON bodies capped at 64 KB |
 | Key-format hardening | ✅ | Builders reject invalid IDs (no path injection); parser accepts only exact originals |
-| Tenant isolation (NFR-SEC-1/2) | 🚧 | ✅ `requireUser` takes the user ID only from the authorizer's JWT `sub` (must be a lowercase UUID, else 401); ✅ repositories key every user-owned lookup by that ID, so foreign items read as missing and `orNotFound` → 404; ✅ pagination cursors are bound to the caller's partition; ✅ route tests show other users' photos and albums give the same 404 as missing ones on every implemented route (`/photos/{id}`, all album routes, foreign photos in add-to-album) and foreign cursors are rejected. 📋 full suite over all routes (5.14) |
+| Tenant isolation (NFR-SEC-1/2) | 🚧 | ✅ `requireUser` takes the user ID only from the authorizer's JWT `sub` (must be a lowercase UUID, else 401); ✅ repositories key every user-owned lookup by that ID, so foreign items read as missing and `orNotFound` → 404; ✅ pagination cursors are bound to the caller's partition; ✅ route tests show other users' photos and albums give the same 404 as missing ones on every implemented route (`/photos/{id}`, uploads only ever under the caller's own prefix and quota, all album routes, foreign photos in add-to-album) and foreign cursors are rejected. 📋 full suite over all routes (5.14) |
 | Private photo bucket (NFR-SEC-3/4) | ✅ (dev) | Public access block, ACLs off, SSE-S3, TLS-only policy, CORS limited to app origins |
 | Data deletion guard | ✅ code (prod settings) | Table deletion protection + no `force_destroy` by default; only dev opts out |
 | CloudFront OAC / signed URLs (NFR-SEC-3) | 📋 | Phase 7 |
@@ -799,4 +804,5 @@ Not started. Target design: spec §12 (TanStack Router file routes with an authe
 | 2026-10-20 | Album update checks ownership before the cover-membership lookup (closes an existence oracle on other users' albums). |
 | 2026-10-20 | Planned route `DELETE /session/media-cookie` (spec v0.3) added to the API surface. |
 | 2026-10-20 | Routes 5.5 (`GET /me`), 5.7 (`GET /photos`, `GET /photos/{id}`), 5.10–5.11 (albums CRUD, album photos): `src/routes/`, Cognito `UserDirectory`, config `USER_POOL_ID` + `DEFAULT_QUOTA_BYTES`, response conventions (§9), status of §10.3/§10.6 and tenant-isolation row. Cognito SDK added (bundle now 1.1 MB). |
+| 2026-10-21 | Route 5.6 `POST /photos/upload-url`: `lib/storage.ts` (`PhotoStorage`, S3 pre-signed POST), config `PHOTO_BUCKET`, `Deps.storage`, response conventions + quota rule (§9), upload flow (§10.2), NFR-SEC-6 row. S3 SDK added (bundle now 1.3 MB). |
 | 2026-10-21 | Test setup: DynamoDB Local started with `-disableTelemetry` (its startup telemetry call could hang the container). |

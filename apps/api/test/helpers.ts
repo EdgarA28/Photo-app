@@ -4,6 +4,7 @@ import { newId } from "@photo-app/shared";
 import { randomUUID } from "node:crypto";
 import { inject } from "vitest";
 import { createApp } from "../src/app";
+import type { PhotoStorage, UploadTarget } from "../src/lib/storage";
 import type { UserDirectory, UserProfile } from "../src/lib/users";
 import { createDocumentClient, createRepositories, type Db } from "../src/repo";
 import { registerRoutes } from "../src/routes";
@@ -118,17 +119,34 @@ export async function markReady(
 
 export const TEST_DEFAULT_QUOTA = 2 * 1024 ** 3;
 
+export const TEST_UPLOAD_URL = "https://photos.test.example/";
+
 /**
  * The real app and routes on a fresh DynamoDB Local table, with a fake Cognito directory
- * (`profiles`). `api(as, …)` sends a request as user `as` (null = anonymous), the way API Gateway
+ * (`profiles`) and a fake photo bucket that records upload targets (`uploads`). `api(as, …)` sends a request as user `as` (null = anonymous), the way API Gateway
  * delivers it: the JWT `sub` in the authorizer claims.
  */
 export async function createTestApi() {
   const { db, repos } = await createTestRepos();
   const profiles = new Map<string, UserProfile>();
   const users: UserDirectory = { getProfile: async (userId) => profiles.get(userId) ?? null };
+  const uploads: UploadTarget[] = [];
+  const storage: PhotoStorage = {
+    createUploadPost: async (target) => {
+      uploads.push(target);
+      return {
+        url: TEST_UPLOAD_URL,
+        fields: { key: target.key, "Content-Type": target.contentType },
+      };
+    },
+  };
   const app = createApp({
-    routes: registerRoutes({ repos, users, config: { defaultQuotaBytes: TEST_DEFAULT_QUOTA } }),
+    routes: registerRoutes({
+      repos,
+      users,
+      storage,
+      config: { defaultQuotaBytes: TEST_DEFAULT_QUOTA },
+    }),
   });
 
   async function api(as: string | null, method: string, path: string, body?: unknown) {
@@ -150,5 +168,5 @@ export async function createTestApi() {
     return { status: res.status, body: (text ? JSON.parse(text) : null) as unknown };
   }
 
-  return { db, repos, profiles, api };
+  return { db, repos, profiles, uploads, storage, api };
 }

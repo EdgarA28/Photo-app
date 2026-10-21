@@ -1,5 +1,6 @@
 import type { Hono } from "hono";
 import type { AppEnv } from "../env";
+import type { PhotoStorage } from "../lib/storage";
 import type { UserDirectory } from "../lib/users";
 import type { Repositories } from "../repo";
 import { albumRoutes } from "./albums";
@@ -10,6 +11,7 @@ import { photoRoutes } from "./photos";
 export interface Deps {
   repos: Repositories;
   users: UserDirectory;
+  storage: PhotoStorage;
   config: { defaultQuotaBytes: number };
 }
 

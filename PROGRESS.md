@@ -15,14 +15,14 @@
 
 | | |
 |---|---|
-| **Phase** | 3 done (dev), 5.1–5.3 + 5.5/5.7/5.10/5.11 done (API skeleton + read/album routes), 6.1–6.7 done (thumbnail code) → next: API routes needing S3/Cognito/CloudFront (5.6, 5.8, 5.9, 5.12, 5.13) or Phase 4 (auth) |
+| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.7/5.10/5.11 done (API skeleton, upload URL, read/album routes), 6.1–6.7 done (thumbnail code) → next: 5.8, 5.9, 5.12, 5.13 or Phase 4 (auth) |
 | **Last updated** | 2026-10-21 |
 | **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
 
 ## Next up
 
-1. Remaining API routes: 5.6 upload URL, 5.8 download URL, 5.9 photo delete (need an S3 client: add to `Deps` in `src/routes/index.ts`, fake in tests), 5.12 sharing (Cognito email lookup: extend `UserDirectory` in `src/lib/users.ts`), 5.13 shared access (then open `GET /albums/{id}/photos` to recipients; their image URLs need CloudFront signing, 7.4). 5.6 follows the Photo item lifecycle in ARCHITECTURE.md §8.2. New tests can use `createTestApi()` from `test/helpers.ts`.
+1. Remaining API routes: 5.8 download URL, 5.9 photo delete (extend `PhotoStorage` in `src/lib/storage.ts`; the fake is in `test/helpers.ts`), 5.12 sharing (Cognito email lookup: extend `UserDirectory` in `src/lib/users.ts`), 5.13 shared access (then open `GET /albums/{id}/photos` to recipients; their image URLs need CloudFront signing, 7.4). New tests can use `createTestApi()` from `test/helpers.ts`.
 2. Phase 4 (auth: Cognito + Google + pre-sign-up trigger): creates AWS resources, needs approval.
    Dev app resources (table + photo bucket) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done.
 3. Thumbnails 6.8 (aarch64 packaging) + 6.9 (infra module, can be written and `tofu test`ed offline; deploy needs approval). IAM must include `s3:DeleteObject` on `thumbs/`+`previews/` (race cleanup) and Lambda JSON log format.
@@ -105,8 +105,10 @@
   - 47 API tests (app/middleware, cursor tampering, repositories on DynamoDB Local in Docker); bundle 474 KB, smoke-tested by invoking `dist/index.mjs`
 - [ ] **5.4** `api` infra module: HTTP API, JWT authorizer, Lambda, least-privilege IAM, throttling, 30-day logs (NFR-SEC-7/9, NFR-OPS-2)
 - [x] **5.5** `GET /health` (for smoke tests) + `GET /me` (usage + quota) (FR-ACC-1, FR-ACC-2). Profile from Cognito `ListUsers` by `sub`; quota = Usage override or `DEFAULT_QUOTA_BYTES`
-- [ ] **5.6** `POST /photos/upload-url`: quota check, `pending` item, pre-signed POST with size/type conditions (FR-UP-3/4/7, NFR-SEC-6)
+- [x] **5.6** `POST /photos/upload-url`: quota check, `pending` item, pre-signed POST with size/type conditions (FR-UP-3/4/7, NFR-SEC-6)
+  - `PhotoStorage` (`src/lib/storage.ts`) with a fake in tests; env `PHOTO_BUCKET`; 19 new tests (102 API tests, 146 TS repo-wide, all pass); bundle 1.3 MB
 - [x] **5.7** `GET /photos` (GSI1, desc, cursor), `GET /photos/{id}` (FR-GAL-1/2)
+- [ ] **5.6a** Re-sign an upload for an existing photo: optional `photoId` in `POST /photos/upload-url`; must be the caller's and still `pending` (else 404 / 409 `CONFLICT`); same key, type and size as the item; no new item. Prevents duplicate pending photos on retries (with 8.10 storing the `photoId`)
 - [ ] **5.8** `GET /photos/{id}/download-url` (5 min, attachment + original filename) (FR-DL-1/2)
 - [ ] **5.9** `DELETE /photos/{id}`: S3 objects, item, memberships, usage update (FR-DEL-1)
 - [x] **5.10** Albums CRUD: `GET/POST /albums`, `PATCH/DELETE /albums/{id}` (FR-ALB-1)
@@ -128,6 +130,7 @@
   - 73 tests (key vectors, imaging, handler/processor on moto S3 + DynamoDB); fixtures generated in `conftest.py`, no binaries in git
 - [ ] **6.8** Packaging: manylinux2014 aarch64 wheels → zip
 - [ ] **6.9** `thumbnails` infra module: Lambda (1536 MB, 60 s), IAM (read `originals/`, write `thumbs/`+`previews/`), S3 notification, retries 2×, SQS DLQ 14 days, logs (NFR-SEC-7)
+- [ ] **6.11** Stale-pending sweeper (abandoned uploads): scheduled Lambda (EventBridge, daily) finds `pending` photos older than 24 h; `HeadObject` on `originalKey` → missing: delete the item via the same logic as `repos.photos.delete` (memberships, conditional on `status = pending`); present: leave it and log a warning (processing problem, see DLQ). Needs a way to find old pending items without scanning every user (e.g. sparse GSI on pending items, or a Scan with filter while small); IAM: `s3:HeadObject`/`GetObject` on `users/*/originals/*`, table read/write. New AWS resources, **needs approval**. Complements upload-photo reuse in 5.6a
 - [ ] **6.10** End-to-end check: upload via pre-signed POST → thumb ≤ 5 s (NFR-PERF-1)
 
 ## Phase 7 — CloudFront & media access (§5, §13.1 `frontend`)
@@ -227,6 +230,8 @@
 | 2026-10-20 | `GET /me` reads email/name from Cognito (`ListUsers` filtered by `sub`) because access tokens carry neither; needs `cognito-idp:ListUsers` in the 5.4 IAM policy. A token whose user is gone from the pool → 401. API env vars now `TABLE_NAME`, `USER_POOL_ID`, `DEFAULT_QUOTA_BYTES` (5.4 must set them). |
 | 2026-10-20 | Response choices: `POST /albums` → 201; cover not in album → 400 `VALIDATION_ERROR`; `POST /albums/{id}/photos` → 204, idempotent, all-or-nothing 404 if any photo is unknown/foreign; own image URLs are relative CloudFront paths (`/users/{sub}/thumbs|previews/{id}.jpg`), null until `ready`. |
 | 2026-10-21 | DynamoDB Local runs with `-disableTelemetry`: its startup telemetry call to AWS (Cognito Identity/Pinpoint) runs before the port opens and hung on a stalled TLS handshake, so the container never became ready. |
+| 2026-10-21 | Upload URL: 201; over quota → **413 `QUOTA_EXCEEDED`**; POST policy requires the **exact** declared size (`content-length-range` = sizeBytes..sizeBytes), so the quota check sees the real size; storage class INTELLIGENT_TIERING set via policy field. `api` module (5.4) must set `PHOTO_BUCKET` and grant `s3:PutObject` on `users/*/originals/*` (the POST is signed with the Lambda's credentials). Known gap: abandoned uploads leave `pending` items; needs cleanup later (e.g. TTL on pending items, or the client reusing its photoId). |
+| 2026-10-21 | Abandoned uploads: planned 5.6a (reuse `photoId` on retry) + 6.11 (daily sweeper for stale `pending` items); TTL rejected (blind to files that arrived but failed processing, leaves album memberships dangling). |
 
 ## Session log
 
@@ -248,3 +253,4 @@
 | 2026-10-20 | Spec v0.3: added `DELETE /session/media-cookie` + logout flow (HttpOnly media cookies can only be cleared by a server response). Tasks 7.3 and 8.13 updated. |
 | 2026-10-20 | API routes 5.5 `GET /me`, 5.7 `GET /photos` + `/photos/{id}`, 5.10–5.11 albums + album photos (`src/routes/`, Cognito `UserDirectory`, config). 127 tests pass repo-wide; lint/typecheck/format clean. Nothing deployed. |
 | 2026-10-21 | Test fix: DynamoDB Local hung at startup on its telemetry call to AWS; now started with `-disableTelemetry` (`test/dynamodb-local.ts`). 83 API tests pass again. |
+| 2026-10-21 | API route 5.6 `POST /photos/upload-url` (`src/lib/storage.ts`, S3 pre-signed POST, `PHOTO_BUCKET`). Lint/typecheck/format/build clean; non-DynamoDB tests pass (41). DynamoDB Local container unresponsive on this machine (also outside the sandbox and from inside the container), so the route tests haven't run. Nothing deployed. |

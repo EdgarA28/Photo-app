@@ -1,6 +1,8 @@
 /** Runtime configuration from Lambda environment variables (set by the `api` infra module, 5.4). */
 export interface Config {
   tableName: string;
+  /** Photo bucket for pre-signed uploads (5.6) and downloads (5.8). */
+  photoBucket: string;
   /** Cognito user pool for profile and email lookups (GET /me, sharing). */
   userPoolId: string;
   /** Quota for users without a per-user override in their Usage item (FR-ACC-2). */
@@ -10,6 +12,7 @@ export interface Config {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     tableName: required(env, "TABLE_NAME"),
+    photoBucket: required(env, "PHOTO_BUCKET"),
     userPoolId: required(env, "USER_POOL_ID"),
     defaultQuotaBytes: positiveInteger(env, "DEFAULT_QUOTA_BYTES"),
   };
