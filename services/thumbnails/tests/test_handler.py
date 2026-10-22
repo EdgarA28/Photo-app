@@ -214,11 +214,42 @@ def test_url_encoded_key_is_decoded(aws: tuple[Any, Any], jpeg_plain: bytes) -> 
     assert handler_module.handler(event)["results"][0]["status"] == "ready"
 
 
-def test_missing_item_is_skipped(aws: tuple[Any, Any], jpeg_plain: bytes) -> None:
-    s3, _ = aws
+def test_original_without_item_is_deleted(aws: tuple[Any, Any], jpeg_plain: bytes) -> None:
+    # Task 6.12: e.g. a pending photo deleted (5.9) while its upload POST was still valid.
+    s3, dynamodb = aws
     result = handler_module.handler(upload(s3, jpeg_plain))
-    assert result["results"][0]["reason"] == "no photo item"
+    assert result["results"][0] == {
+        "key": ORIGINAL,
+        "status": "skipped",
+        "reason": "orphaned original deleted",
+    }
+    assert not exists(s3, ORIGINAL)
     assert not exists(s3, THUMB)
+    assert not exists(s3, PREVIEW)
+    # Nothing was counted: there is no Usage item to adjust.
+    assert "Item" not in dynamodb.get_item(TableName=TABLE, Key=USAGE_KEY)
+
+
+def test_orphan_cleanup_is_idempotent(aws: tuple[Any, Any], jpeg_plain: bytes) -> None:
+    # S3 delivers events at least once: a second event for the deleted key must not fail.
+    s3, _ = aws
+    event = upload(s3, jpeg_plain)
+    handler_module.handler(event)
+    assert handler_module.handler(event)["results"][0]["reason"] == "orphaned original deleted"
+
+
+def test_original_of_another_user_is_not_touched(aws: tuple[Any, Any], jpeg_plain: bytes) -> None:
+    # Only the event's own key is deleted, never anything derived from other users' items.
+    s3, dynamodb = aws
+    put_pending(dynamodb)
+    other = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+    orphan = f"users/{other}/originals/{PHOTO}.jpg"
+    s3.put_object(Bucket=BUCKET, Key=orphan, Body=jpeg_plain)
+    s3.put_object(Bucket=BUCKET, Key=ORIGINAL, Body=jpeg_plain)
+
+    handler_module.handler(s3_event(orphan, len(jpeg_plain)))
+    assert not exists(s3, orphan)
+    assert exists(s3, ORIGINAL)
 
 
 def test_missing_original_is_skipped(aws: tuple[Any, Any]) -> None:

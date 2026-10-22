@@ -15,19 +15,18 @@
 
 | | |
 |---|---|
-| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.15 (incl. 5.6a/b) done (all API routes except media cookies, incl. usernames), 6.1–6.7 done (thumbnail code) → next: 6.12 (small) or Phase 4 (auth) |
+| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.15 (incl. 5.6a/b) done (all API routes except media cookies, incl. usernames), 6.1–6.7 + 6.12 done (thumbnail code) → next: Phase 4 (auth) |
 | **Last updated** | 2026-10-22 |
 | **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
 
 ## Next up
 
-1. Small follow-up: 6.12 (thumbnail Lambda deletes originals that have no photo item). New tests can use `createTestApi()` from `test/helpers.ts`.
-2. Phase 4 (auth: Cognito + Google + pre-sign-up trigger): creates AWS resources, needs approval.
+1. Phase 4 (auth: Cognito + Google + pre-sign-up trigger): creates AWS resources, needs approval.
    Dev app resources (table + photo bucket) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done.
-3. Thumbnails 6.8 (aarch64 packaging) + 6.9 (infra module, can be written and `tofu test`ed offline; deploy needs approval). IAM must include `s3:DeleteObject` on `thumbs/`+`previews/` (race cleanup) and Lambda JSON log format.
-4. Prod bootstrap (1.3/1.4/1.5 for prod) whenever the user approves it; it isn't needed until Phase 11.
-5. Add GitHub repo secrets/environments for the CI roles when Phase 10 starts.
+2. Thumbnails 6.8 (aarch64 packaging) + 6.9 (infra module, can be written and `tofu test`ed offline; deploy needs approval). IAM must include `s3:DeleteObject` on `thumbs/`+`previews/` (race cleanup) and on `originals/` (orphan cleanup, 6.12), and Lambda JSON log format.
+3. Prod bootstrap (1.3/1.4/1.5 for prod) whenever the user approves it; it isn't needed until Phase 11.
+4. Add GitHub repo secrets/environments for the CI roles when Phase 10 starts.
 
 ---
 
@@ -157,9 +156,9 @@
 - [x] **6.7** pytest fixtures: JPEG with orientation, PNG with alpha, HEIC, corrupt file
   - 73 tests (key vectors, imaging, handler/processor on moto S3 + DynamoDB); fixtures generated in `conftest.py`, no binaries in git
 - [ ] **6.8** Packaging: manylinux2014 aarch64 wheels → zip
-- [ ] **6.9** `thumbnails` infra module: Lambda (1536 MB, 60 s), IAM (read `originals/`, write `thumbs/`+`previews/`), S3 notification, retries 2×, SQS DLQ 14 days, logs (NFR-SEC-7)
+- [ ] **6.9** `thumbnails` infra module: Lambda (1536 MB, 60 s), IAM (read + delete `originals/`, write + delete `thumbs/`+`previews/`), S3 notification, retries 2×, SQS DLQ 14 days, logs (NFR-SEC-7)
 - [ ] **6.11** Stale-pending sweeper (abandoned uploads): scheduled Lambda (EventBridge, daily) finds `pending` photos older than 24 h; `HeadObject` on `originalKey` → missing: delete the item via the same logic as `repos.photos.delete` (memberships, conditional on `status = pending`); present: leave it and log a warning (processing problem, see DLQ). Needs a way to find old pending items without scanning every user (e.g. sparse GSI on pending items, or a Scan with filter while small); IAM: `s3:HeadObject`/`GetObject` on `users/*/originals/*`, table read/write. New AWS resources, **needs approval**. Complements upload-photo reuse in 5.6a
-- [ ] **6.12** Orphaned originals: a `pending` photo deleted (5.9) while its upload POST is still valid (≤ 15 min) can still receive the original; the Lambda then logs "no photo item" and skips, leaving an unreferenced, uncounted original. Fix: on "no photo item", delete the original (safe: the item is always written before the POST is handed out, and the read is consistent). IAM: `s3:DeleteObject` on `originals/` too
+- [x] **6.12** Orphaned originals: a `pending` photo deleted (5.9) while its upload POST is still valid (≤ 15 min) can still receive the original; the Lambda then logs "no photo item" and skips, leaving an unreferenced, uncounted original. Fix: on "no photo item", delete the original (safe: the item is always written before the POST is handed out, and the read is consistent). IAM: `s3:DeleteObject` on `originals/` too
 - [ ] **6.10** End-to-end check: upload via pre-signed POST → thumb ≤ 5 s (NFR-PERF-1)
 
 ## Phase 7 — CloudFront & media access (§5, §13.1 `frontend`)
@@ -299,3 +298,4 @@
 | 2026-10-22 | API 5.13 recipient read access (`routes/access.ts`, `?albumId=` on download URL); security-review fix to 5.12 (verified, unique email match). 216 TS tests pass; lint/typecheck/format/build clean. Nothing deployed. |
 | 2026-10-22 | API 5.15 usernames + share by username (`repo/usernames.ts`, `PUT /me/username`, shared schemas). 254 tests pass (188 API, 66 shared); lint/typecheck/format/build clean. Nothing deployed. |
 | 2026-10-22 | 5.14 tenant-isolation suite: 35 tests (28 foreign-vs-missing cases, coverage check, list/cursor checks, final snapshot); verified by reintroducing two isolation bugs. 289 tests pass repo-wide; lint/typecheck/format clean. |
+| 2026-10-22 | 6.12 orphaned originals: thumbnail Lambda deletes an original that has no Photo item. 76 Python tests pass; ruff clean. Nothing deployed. |

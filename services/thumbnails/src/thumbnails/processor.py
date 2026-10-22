@@ -8,6 +8,9 @@ Contract with the API (§8.2):
   actual size (the upload policy pins the size, so the difference is normally 0).
 - The status condition makes it idempotent: S3 can deliver an event more than once and Lambda
   retries failed invocations, so anything not `pending` is skipped.
+- An original without a Photo item is an orphan and gets deleted (task 6.12): the API writes the
+  item before it hands out the upload POST, so a missing item means the photo was deleted, e.g.
+  while its upload was still in flight (the POST stays valid for 15 min).
 
 Errors: corrupt/unsupported images are permanent (mark `failed`, return normally). Everything
 else (S3/DynamoDB/network) is transient and raised, so Lambda retries and then uses the DLQ.
@@ -52,8 +55,11 @@ class Processor:
 
         item = self._get_photo(user_id, photo_id)
         if item is None:
-            logger.warning("No photo item for original", extra=log)
-            return Outcome("skipped", "no photo item")
+            # Consistent read, so the item really is gone. Nothing counts this original against
+            # the quota and nobody can see or delete it, so it must not stay (6.12).
+            self._s3.delete_object(Bucket=bucket, Key=key)
+            logger.warning("Deleted original without a photo item", extra=log)
+            return Outcome("skipped", "orphaned original deleted")
         if item.get("status", {}).get("S") != "pending":
             return Outcome("skipped", "already processed")
         declared = int(item.get("sizeBytes", {}).get("N", "0"))
