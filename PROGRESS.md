@@ -15,14 +15,14 @@
 
 | | |
 |---|---|
-| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.13 + 5.15 (incl. 5.6a/b) done (all API routes except media cookies, incl. usernames), 6.1–6.7 done (thumbnail code) → next: 5.14/6.12 (small) or Phase 4 (auth) |
+| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.15 (incl. 5.6a/b) done (all API routes except media cookies, incl. usernames), 6.1–6.7 done (thumbnail code) → next: 6.12 (small) or Phase 4 (auth) |
 | **Last updated** | 2026-10-22 |
 | **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
 
 ## Next up
 
-1. Small API follow-ups: 5.14 tenant-isolation suite (every route with another user's IDs → 404; most cases exist per route file, collect them), 6.12 (thumbnail Lambda deletes originals that have no photo item). New tests can use `createTestApi()` from `test/helpers.ts`.
+1. Small follow-up: 6.12 (thumbnail Lambda deletes originals that have no photo item). New tests can use `createTestApi()` from `test/helpers.ts`.
 2. Phase 4 (auth: Cognito + Google + pre-sign-up trigger): creates AWS resources, needs approval.
    Dev app resources (table + photo bucket) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done.
 3. Thumbnails 6.8 (aarch64 packaging) + 6.9 (infra module, can be written and `tofu test`ed offline; deploy needs approval). IAM must include `s3:DeleteObject` on `thumbs/`+`previews/` (race cleanup) and Lambda JSON log format.
@@ -119,7 +119,7 @@
   - 83 API tests (36 new: routes on DynamoDB Local with a fake Cognito directory, config, directory); bundle 1.1 MB (Cognito client), smoke-tested
 - [x] **5.12** Sharing: `GET/POST /albums/{id}/shares`, `DELETE …/shares/{userId}`, `GET /shared-albums`; lookup user by email in Cognito (FR-SHR-1..4)
 - [x] **5.13** Access check "can user X see photo P" for shared albums (§8.2)
-- [ ] **5.14** Tenant-isolation test suite: every route with another user's IDs → 404
+- [x] **5.14** Tenant-isolation test suite: every route with another user's IDs → 404 (`test/tenant-isolation.test.ts`: identical response to missing IDs, coverage checked against `app.routes`)
 - [x] **5.15** Usernames + share by username (FR-ACC-3, FR-SHR-5, spec v0.4 §8.2/§9, D-8). No AWS resources (same table, no new index)
   - [x] **Shared package:** `usernameSchema` (trim, strip one leading `@`, lowercase, then `^[a-z0-9](?:[a-z0-9._]{1,28}[a-z0-9])$`, no `..`, not in `RESERVED_USERNAMES`: admin, administrator, root, support, help, security, system, api, www, mail, photoapp, photo-app, me, null, undefined, anonymous); constants `USERNAME_MIN/MAX_LENGTH` (3/30), `USERNAME_HOLD_DAYS` (30); error code `USERNAME_TAKEN`; `setUsernameRequestSchema {username}`; `meResponseSchema.username: string|null`; `createShareRequestSchema` = exactly one of `{email}` / `{username}`; `albumShareSchema` → `{userId, email: string|null, username: string|null, sharedAt}`; `sharedAlbumSchema` + `ownerUsername: string|null`. Schema tests (valid, too short/long, bad chars, `..`, edges `.`/`_`, reserved, `@Ana_R` → `ana_r`)
   - [x] **Keys:** `usernamePk(name)` = `USERNAME#{name}`, `USERNAME_SK` = `USERNAME`, `PROFILE_SK` = `PROFILE`
@@ -267,6 +267,7 @@
 | 2026-10-22 | **Shared access (5.13):** recipients reach a photo only via `?albumId=` (share → membership → photo under the share's owner); no global photo-by-ID index. Recipients see `ready` photos only (pending/failed → hidden, 404 on download); image URLs null until 7.4. Recipients download originals with EXIF/GPS (FR-DL-1 says originals; worth a note in the share UI, 8.12). **Security review of 5.12:** a user could set an unverified email equal to someone else's and receive their shares → lookup now requires `email_verified = "true"` and exactly one match; pool must require verification before email updates (4.1) and map Google `email_verified` (4.4). |
 | 2026-10-22 | **Usernames (5.15, spec v0.4):** optional, unique, changeable usernames as an alternative way to share (FR-ACC-3, FR-SHR-5). Kept in DynamoDB (claim item `USERNAME#{name}` for uniqueness + profile item), **not** Cognito `preferred_username` (its uniqueness needs alias sign-in, fixed at pool creation, and would make it a login name). Released names held 30 days for the former owner (D-8). Shares by username store no email, so the owner doesn't learn it. Email sharing stays. |
 | 2026-10-22 | **5.15 as built:** share items made by username store neither email nor username (lists read the current name from the profile, so nothing goes stale). Username transactions retry on `TransactionConflict` (concurrent transactions on the same items; DynamoDB Local doesn't reproduce it reliably). Not done: rename cooldown, so a user can hold several names by renaming repeatedly (each held 30 days); add a limit if squatting becomes a problem. |
+| 2026-10-22 | **Tenant-isolation suite (5.14):** the bar is "foreign ID ≡ missing ID" (same status *and* body), not just 404, so a different message can't leak existence. New routes must add a case to `test/tenant-isolation.test.ts` or an exemption with a reason (routes without resource IDs only), else the coverage test fails. |
 | 2026-10-21 | Abandoned uploads: planned 5.6a (reuse `photoId` on retry) + 6.11 (daily sweeper for stale `pending` items); TTL rejected (blind to files that arrived but failed processing, leaves album memberships dangling). |
 
 ## Session log
@@ -297,3 +298,4 @@
 | 2026-10-22 | API 5.12 sharing: `GET/POST /albums/{id}/shares`, `DELETE …/shares/{userId}`, `GET /shared-albums` (`routes/shares.ts`, `UserDirectory.findByEmail`, `shares.create`, `albums.getMany`). 201 TS tests pass; lint/typecheck/format/build clean. Nothing deployed. |
 | 2026-10-22 | API 5.13 recipient read access (`routes/access.ts`, `?albumId=` on download URL); security-review fix to 5.12 (verified, unique email match). 216 TS tests pass; lint/typecheck/format/build clean. Nothing deployed. |
 | 2026-10-22 | API 5.15 usernames + share by username (`repo/usernames.ts`, `PUT /me/username`, shared schemas). 254 tests pass (188 API, 66 shared); lint/typecheck/format/build clean. Nothing deployed. |
+| 2026-10-22 | 5.14 tenant-isolation suite: 35 tests (28 foreign-vs-missing cases, coverage check, list/cursor checks, final snapshot); verified by reintroducing two isolation bugs. 289 tests pass repo-wide; lint/typecheck/format clean. |

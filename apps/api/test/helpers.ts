@@ -219,5 +219,5 @@ export async function createTestApi() {
     return { status: res.status, body: (text ? JSON.parse(text) : null) as unknown };
   }
 
-  return { db, repos, profiles, uploads, downloads, deletes, hooks, storage, api };
+  return { db, repos, profiles, uploads, downloads, deletes, hooks, storage, app, api };
 }
