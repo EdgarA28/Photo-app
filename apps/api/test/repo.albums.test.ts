@@ -194,7 +194,7 @@ describe("album delete", () => {
     const [p1] = await photos(owner, 1);
     await repos.albums.addPhotos(owner, a.albumId, [p1!], nextIso());
     await repos.albums.addPhotos(owner, keep.albumId, [p1!], nextIso());
-    await repos.shares.put({
+    await repos.shares.create({
       albumId: a.albumId,
       ownerId: owner,
       userId: friend,
@@ -214,7 +214,7 @@ describe("album delete", () => {
 });
 
 describe("shares", () => {
-  test("put, get, list both ways, revoke", async () => {
+  test("create, get, list both ways, revoke", async () => {
     const owner = newUserId();
     const friend = newUserId();
     const a = await album(owner, "A");
@@ -226,9 +226,13 @@ describe("shares", () => {
       email: "f@example.com",
       sharedAt: nextIso(),
     };
-    await repos.shares.put(share);
-    await repos.shares.put(share); // Idempotent.
-    await repos.shares.put({ ...share, albumId: b.albumId });
+    expect(await repos.shares.create(share)).toEqual({ created: true, share });
+    // Sharing again keeps the original share and its date.
+    expect(await repos.shares.create({ ...share, sharedAt: nextIso() })).toEqual({
+      created: false,
+      share,
+    });
+    await repos.shares.create({ ...share, albumId: b.albumId });
 
     expect(await repos.shares.get(a.albumId, friend)).toEqual(share);
     expect(await repos.shares.get(a.albumId, owner)).toBeNull();
@@ -250,6 +254,44 @@ describe("shares", () => {
     expect(await repos.shares.delete(a.albumId, friend)).toBe(true);
     expect(await repos.shares.delete(a.albumId, friend)).toBe(false);
     expect(await repos.shares.get(a.albumId, friend)).toBeNull();
+  });
+});
+
+describe("shares.create", () => {
+  test("needs the owner's album: missing, deleted or someone else's → album-not-found", async () => {
+    const owner = newUserId();
+    const friend = newUserId();
+    const a = await album(owner);
+    const share = (albumId: string, ownerId = owner) => ({
+      albumId,
+      ownerId,
+      userId: friend,
+      email: "f@example.com",
+      sharedAt: nextIso(),
+    });
+
+    expect(await repos.shares.create(share(newId()))).toBe("album-not-found");
+    // Right album ID, wrong owner.
+    expect(await repos.shares.create(share(a.albumId, friend))).toBe("album-not-found");
+    await repos.albums.delete(owner, a.albumId);
+    expect(await repos.shares.create(share(a.albumId))).toBe("album-not-found");
+    expect(await repos.shares.listForRecipient(friend, { limit: 10 })).toMatchObject({ items: [] });
+  });
+});
+
+describe("albums.getMany", () => {
+  test("albums of several owners; missing ones left out", async () => {
+    const [x, y] = [newUserId(), newUserId()];
+    const a = await album(x, "A");
+    const b = await album(y, "B");
+    const found = await repos.albums.getMany([
+      { ownerId: x, albumId: a.albumId },
+      { ownerId: y, albumId: b.albumId },
+      { ownerId: x, albumId: b.albumId }, // Wrong owner.
+      { ownerId: x, albumId: a.albumId }, // Duplicate.
+    ]);
+    expect(found.map((r) => r.name).sort()).toEqual(["A", "B"]);
+    expect(await repos.albums.getMany([])).toEqual([]);
   });
 });
 

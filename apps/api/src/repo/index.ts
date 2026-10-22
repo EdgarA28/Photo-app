@@ -8,7 +8,7 @@ export type { AlbumRecord, AlbumUpdate, MembershipRecord } from "./albums";
 export { createDocumentClient, type Db } from "./db";
 export type { AddResult } from "./memberships";
 export type { NewPhoto, PhotoRecord } from "./photos";
-export type { ShareRecord } from "./shares";
+export type { CreateShareResult, ShareRecord } from "./shares";
 export type { UsageRecord } from "./usage";
 
 /** DynamoDB access for the API (task 5.3). Routes get this object; nothing else touches the table. */

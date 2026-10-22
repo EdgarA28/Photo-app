@@ -23,8 +23,9 @@ const albumPhotoParam = z.object({ albumId: idSchema, photoId: idSchema });
 
 /**
  * The caller's own albums (FR-ALB-1, FR-ALB-2). Every route looks the album up under the caller's
- * partition, so other users' albums are 404 (NFR-SEC-2). Share recipients reading an album's photos
- * come with sharing (5.12/5.13); until then `GET /albums/{id}/photos` is owner-only.
+ * partition, so other users' albums are 404 (NFR-SEC-2), including for share recipients, who
+ * can't modify them (FR-SHR-4). Recipients reading an album's photos come with 5.13; until then
+ * `GET /albums/{id}/photos` is owner-only. Shares themselves are in shares.ts.
  */
 export function albumRoutes(app: Hono<AppEnv>, { repos }: Deps): void {
   app.get("/albums", async (c) => {

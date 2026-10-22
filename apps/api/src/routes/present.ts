@@ -1,5 +1,5 @@
-import { previewKey, thumbKey, type Album, type Photo } from "@photo-app/shared";
-import type { AlbumRecord, PhotoRecord } from "../repo";
+import { previewKey, thumbKey, type Album, type Photo, type SharedAlbum } from "@photo-app/shared";
+import type { AlbumRecord, PhotoRecord, ShareRecord } from "../repo";
 
 /**
  * Repository records → API objects (§9). Own images use stable CloudFront paths under
@@ -34,4 +34,12 @@ export function toAlbum(record: AlbumRecord, cover: PhotoRecord | null | undefin
     coverThumbUrl: cover ? toPhoto(cover).thumbUrl : null,
     photoCount: Math.max(0, record.photoCount),
   };
+}
+
+/**
+ * An album as its share recipient sees it (FR-SHR-3). The cover is the owner's photo, which the
+ * recipient's media cookie doesn't cover: `coverThumbUrl` stays null until signed URLs (7.4).
+ */
+export function toSharedAlbum(album: AlbumRecord, share: ShareRecord): SharedAlbum {
+  return { ...toAlbum(album, null), ownerId: album.ownerId, sharedAt: share.sharedAt };
 }

@@ -39,7 +39,13 @@ describe("loadConfig", () => {
 });
 
 describe("cognitoUserDirectory", () => {
-  function directory(users: { Attributes: { Name: string; Value: string }[] }[]) {
+  function directory(
+    users: {
+      Attributes: { Name: string; Value: string }[];
+      UserStatus?: string;
+      Enabled?: boolean;
+    }[],
+  ) {
     const send = vi.fn(async (_command: unknown) => ({ Users: users }));
     const client = { send } as unknown as CognitoIdentityProviderClient;
     return { send, users: cognitoUserDirectory(client, "us-east-1_pool") };
@@ -71,6 +77,42 @@ describe("cognitoUserDirectory", () => {
     expect(
       await directory([{ Attributes: [{ Name: "name", Value: "x" }] }]).users.getProfile(USER),
     ).toBeNull();
+  });
+
+  test("findByEmail: filters by email and returns the confirmed, enabled user's sub", async () => {
+    const OTHER = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+    const user = (sub: string, extra: object = {}) => ({
+      Attributes: [
+        { Name: "sub", Value: sub },
+        { Name: "email", Value: "ada@example.com" },
+      ],
+      ...extra,
+    });
+    const { send, users } = directory([
+      user(OTHER, { UserStatus: "UNCONFIRMED", Enabled: true }),
+      user(OTHER, { UserStatus: "CONFIRMED", Enabled: false }),
+      user(USER, { UserStatus: "EXTERNAL_PROVIDER", Enabled: true }),
+    ]);
+    expect(await users.findByEmail("ada@example.com")).toEqual({
+      userId: USER,
+      email: "ada@example.com",
+    });
+    expect(send.mock.calls[0]![0]).toMatchObject({
+      input: { UserPoolId: "us-east-1_pool", Filter: 'email = "ada@example.com"' },
+    });
+  });
+
+  test("findByEmail: nobody, only unconfirmed users, or a filter-breaking value → null", async () => {
+    expect(await directory([]).users.findByEmail("a@b.co")).toBeNull();
+    expect(
+      await directory([
+        { Attributes: [{ Name: "sub", Value: USER }], UserStatus: "UNCONFIRMED" } as never,
+      ]).users.findByEmail("a@b.co"),
+    ).toBeNull();
+    const { send, users } = directory([]);
+    expect(await users.findByEmail('a" or email ^= "')).toBeNull();
+    expect(await users.findByEmail("a\\@b.co")).toBeNull();
+    expect(send).not.toHaveBeenCalled();
   });
 
   test("never builds a filter from a malformed sub", async () => {

@@ -6,6 +6,7 @@ import type { Repositories } from "../repo";
 import { albumRoutes } from "./albums";
 import { meRoutes } from "./me";
 import { photoRoutes } from "./photos";
+import { shareRoutes } from "./shares";
 
 /** What route handlers may use. Built once per Lambda environment in index.ts; faked in tests. */
 export interface Deps {
@@ -21,5 +22,6 @@ export function registerRoutes(deps: Deps): (app: Hono<AppEnv>) => void {
     meRoutes(app, deps);
     photoRoutes(app, deps);
     albumRoutes(app, deps);
+    shareRoutes(app, deps);
   };
 }

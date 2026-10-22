@@ -47,7 +47,7 @@
 | Environment roots | `infra/envs/{dev,prod}` | 🚧 | Database + storage **deployed in dev**; prod validated only |
 | Infra modules: database, storage | `infra/modules/{database,storage}` | ✅ (dev) | Offline `tofu test` suites (7 runs) |
 | Infra modules: auth, api, thumbnails, frontend | `infra/modules/*` | 📋 | |
-| API Lambda | `apps/api` | 🚧 | Skeleton (5.1–5.3) + routes `GET /me`, `POST /photos/upload-url` (incl. retry), `GET /photos`, `GET /photos/{id}`, `GET /photos/{id}/download-url`, `DELETE /photos/{id}`, album CRUD and album photos (5.5, 5.6, 5.6a/b, 5.7–5.11); 133 tests (incl. DynamoDB Local). Sharing and media cookies not yet; not deployed |
+| API Lambda | `apps/api` | 🚧 | Skeleton (5.1–5.3) + routes `GET /me`, `POST /photos/upload-url` (incl. retry), `GET /photos`, `GET /photos/{id}`, `GET /photos/{id}/download-url`, `DELETE /photos/{id}`, album CRUD, album photos and sharing (5.5, 5.6, 5.6a/b, 5.7–5.12); 156 tests (incl. DynamoDB Local). Recipient access to shared photos (5.13) and media cookies not yet; not deployed |
 | Thumbnail Lambda | `services/thumbnails` | 🚧 | Handler, image pipeline, S3-key mirror + 73 pytest tests (6.1–6.7); not packaged or deployed yet (6.8–6.10) |
 | Auth trigger Lambda | `services/auth-triggers` | 📋 | Folder skeleton only |
 | Web app / PWA | `apps/web` | 📋 | Folder skeleton only |
@@ -253,9 +253,9 @@ Photo-app/
 │       ├── src/index.ts         Lambda entry: config, clients, repositories, routes, @hono/aws-lambda `handle`
 │       ├── src/app.ts           Hono app: /api base path, body limit, /health, requireUser, error envelope
 │       ├── src/env.ts           Hono env type (Lambda event binding, `userId` variable)
-│       ├── src/lib/             auth.ts (JWT sub), errors.ts (AppError, orNotFound), validation.ts (Zod), log.ts, config.ts, users.ts (Cognito directory), storage.ts (photo bucket: pre-signed POST, pre-signed download GET, object deletes)
+│       ├── src/lib/             auth.ts (JWT sub), errors.ts (AppError, orNotFound), validation.ts (Zod), log.ts, config.ts, users.ts (Cognito directory: profile by sub, user by email), storage.ts (photo bucket: pre-signed POST, pre-signed download GET, object deletes)
 │       ├── src/repo/            DynamoDB layer: keys, cursor, db helpers, photos, albums, memberships, shares, usage
-│       ├── src/routes/          index.ts (Deps, registerRoutes), me.ts, photos.ts, albums.ts, present.ts (record → API object)
+│       ├── src/routes/          index.ts (Deps, registerRoutes), me.ts, photos.ts, albums.ts, shares.ts, present.ts (record → API object)
 │       └── test/                Vitest: app/middleware, cursor, config/directory, repositories and routes on DynamoDB Local
 │
 ├── services/
@@ -493,7 +493,7 @@ Access patterns and the "can user X see photo P" rule: see spec §8.2.
 | Photo | `entity: "photo"`, `userId`, `photoId`, `originalKey`, `albumIds` (string set: reverse index of album memberships, maintained with each membership change) |
 | Album | `entity: "album"`, `ownerId`, `albumId`, `photoCount` (kept by membership transactions), optional `coverPhotoId` (must be a member; album ownership is checked before membership, so the cover check can't reveal another user's album contents) |
 | Album membership | `entity: "membership"`, `albumId`, `photoId`, `ownerId`, `addedAt` |
-| Album share | `entity: "share"`, `albumId`, `ownerId`, `userId` (recipient), `email`, `sharedAt` |
+| Album share | `entity: "share"`, `albumId`, `ownerId`, `userId` (recipient), `email`, `sharedAt`. Created in one transaction with a `ConditionCheck` that the owner's album exists, and only if the share doesn't exist yet (sharing again keeps the first `sharedAt`) |
 | Usage | API writes only `bytesReserved` (reserve on create, release on delete) and the decrements on delete; `quotaBytes` optional per-user override |
 
 - **Membership changes** are one transaction each over membership + photo `albumIds` + album `photoCount`, with conditions (album exists, photo exists = same owner, not already a member; on removal the membership's `ownerId` must be the caller, since membership keys carry no user), so duplicates and retries never double-count and nobody can add to or remove from another user's album. `listMemberships`/`hasPhoto` are not user-scoped: routes must check album ownership or a share first.
@@ -522,6 +522,10 @@ Contracts exist (✅ in `packages/shared`). Implemented routes are marked ✅ be
 - `DELETE /photos/{id}` → 204. Order: read the item (unknown/foreign → 404) → `DeleteObjects` for original, thumb and preview → `repos.photos.delete` (memberships with album count/cover fixes, then the item and the Usage release in one transaction). Objects go first so a failure part-way leaves a photo that a retry can still find; the reverse order could leave files nobody references. If the item's status changed in between (the thumbnail Lambda finished and wrote thumb/preview after our object delete), the objects are deleted a second time. Concurrently deleted → still 204; deleting again → 404.
 - `POST /albums` → 201 with the album. `PATCH` → 200 with the album; a cover that isn't in the album → 400 `VALIDATION_ERROR`. Deletes and `POST /albums/{id}/photos` → 204.
 - `POST /albums/{id}/photos` is idempotent (photos already in the album are fine) and checks all photos first: any unknown or foreign photo → 404 `Photo not found` and nothing is added.
+- **Sharing (5.12):** `/albums/{id}/shares` routes are owner-only: the album is looked up under the caller's partition first, so recipients and strangers get 404 and can't re-share or revoke (FR-SHR-4). The ownership check also comes **before** the email lookup, so non-owners can't use the route to find out which emails are registered.
+  - `POST` → 201 with the new share, 200 with the existing one when already shared (idempotent, first `sharedAt` kept). The email (trimmed + lowercased by the schema) is resolved with Cognito `ListUsers` filter `email = "…"`; users that are `UNCONFIRMED` or disabled are ignored. No match → 404 **`SHARE_TARGET_NOT_FOUND`**; own email → 400 `VALIDATION_ERROR`. Owners can therefore learn whether an email is registered (inherent to share-by-email, FR-SHR-1; throttling in 5.4 limits it).
+  - `GET` → `{items}` oldest share first. `DELETE …/shares/{userId}` → 204, not shared → 404.
+  - `GET /shared-albums` → GSI1 `SHAREDWITH#{sub}` page (album-ID order), albums read with one BatchGet; a share whose album is gone (album delete removes shares after listing them) is skipped. `coverThumbUrl` is **null** for shared albums until signed URLs (7.4): the owner's thumb path isn't covered by the recipient's media cookie. Shared albums never appear in the recipient's `GET /albums`, and every album mutation stays 404 for them.
 - `GET /albums/{id}/photos` lists in photo upload order (memberships are keyed by the photo ULID; ordering by date taken would need another index, §8.2) and is **owner-only** until sharing (5.12/5.13) adds recipients with signed URLs.
 
 | Method | Path | Request schema | Response schema |
@@ -541,10 +545,10 @@ Contracts exist (✅ in `packages/shared`). Implemented routes are marked ✅ be
 | `GET` | `/albums/{albumId}/photos` ✅ (owner only so far) | `pageQuerySchema` (query) | `photoPageSchema` (200) |
 | `POST` | `/albums/{albumId}/photos` ✅ | `addAlbumPhotosRequestSchema` | 204 |
 | `DELETE` | `/albums/{albumId}/photos/{photoId}` ✅ | — | 204 |
-| `GET` | `/albums/{albumId}/shares` | — | `albumShareListSchema` |
-| `POST` | `/albums/{albumId}/shares` | `createShareRequestSchema` | `albumShareSchema` |
-| `DELETE` | `/albums/{albumId}/shares/{userId}` | — | 204 |
-| `GET` | `/shared-albums` | `pageQuerySchema` (query) | `sharedAlbumPageSchema` |
+| `GET` | `/albums/{albumId}/shares` ✅ | — | `albumShareListSchema` (200) |
+| `POST` | `/albums/{albumId}/shares` ✅ | `createShareRequestSchema` | `albumShareSchema` (201 new, 200 existing) |
+| `DELETE` | `/albums/{albumId}/shares/{userId}` ✅ | — | 204 |
+| `GET` | `/shared-albums` ✅ | `pageQuerySchema` (query) | `sharedAlbumPageSchema` (200) |
 | `GET` | `/health` ✅ | — | `{status: "ok"}`, no auth |
 
 Errors on every route: `apiErrorSchema`. Success status codes of the 📋 routes are finalised with their handlers.
@@ -634,7 +638,7 @@ Failure paths: corrupt/unsupported → `status: failed`, no retry; transient →
 
 `DELETE /photos/{id}` → ownership check → delete original/thumb/preview objects → delete album memberships, then the Photo item with the Usage decrement → objects again if the thumbnail Lambda finished meanwhile. Known gap: a `pending` photo deleted while its upload POST is still valid (≤ 15 min) can still receive the original afterwards; the thumbnail Lambda then finds no item and skips it, leaving an unreferenced original (task 6.12).
 
-### 10.6 Albums & sharing 🚧 (albums ✅ API, sharing 📋)
+### 10.6 Albums & sharing 🚧 (albums ✅ API, sharing ✅ API, recipient photo access 📋)
 
 Owner creates albums (`Album` item under their partition), adds photos (membership items under the album partition), shares by email (API resolves the email to a Cognito `sub` → share item with `GSI1PK = SHAREDWITH#{sub}`). Recipients list via GSI1 and read photos through signed URLs. Read-only for recipients.
 
@@ -668,7 +672,7 @@ Bootstrap uses local state per workspace instead of S3.
 | Download URLs | ✅ code | Pre-signed GET for one original of the caller's own photo, 5 min, attachment disposition signed in (can't be turned into inline rendering) |
 | Strict input validation | ✅ | Zod schemas: allowed types, size cap, ID formats, trimmed names, normalised emails; applied in the API by `validate()`; JSON bodies capped at 64 KB |
 | Key-format hardening | ✅ | Builders reject invalid IDs (no path injection); parser accepts only exact originals |
-| Tenant isolation (NFR-SEC-1/2) | 🚧 | ✅ `requireUser` takes the user ID only from the authorizer's JWT `sub` (must be a lowercase UUID, else 401); ✅ repositories key every user-owned lookup by that ID, so foreign items read as missing and `orNotFound` → 404; ✅ pagination cursors are bound to the caller's partition; ✅ route tests show other users' photos and albums give the same 404 as missing ones on every implemented route (`/photos/{id}`, its download URL and delete, uploads only ever under the caller's own prefix and quota, all album routes, foreign photos in add-to-album) and foreign cursors are rejected. 📋 full suite over all routes (5.14) |
+| Tenant isolation (NFR-SEC-1/2) | 🚧 | ✅ `requireUser` takes the user ID only from the authorizer's JWT `sub` (must be a lowercase UUID, else 401); ✅ repositories key every user-owned lookup by that ID, so foreign items read as missing and `orNotFound` → 404; ✅ pagination cursors are bound to the caller's partition; ✅ route tests show other users' photos and albums give the same 404 as missing ones on every implemented route (`/photos/{id}`, its download URL and delete, uploads only ever under the caller's own prefix and quota, all album routes, foreign photos in add-to-album, share management by recipients and strangers) and foreign cursors are rejected. 📋 full suite over all routes (5.14) |
 | Private photo bucket (NFR-SEC-3/4) | ✅ (dev) | Public access block, ACLs off, SSE-S3, TLS-only policy, CORS limited to app origins |
 | Data deletion guard | ✅ code (prod settings) | Table deletion protection + no `force_destroy` by default; only dev opts out |
 | CloudFront OAC / signed URLs (NFR-SEC-3) | 📋 | Phase 7 |
@@ -820,3 +824,4 @@ Not started. Target design: spec §12 (TanStack Router file routes with an authe
 | 2026-10-21 | Upload retry re-checks the quota (security review: pending photos created while storage was empty could otherwise all be uploaded after the quota filled). |
 | 2026-10-22 | 5.6b: quota reservation for pending uploads. Usage `bytesReserved` (§8.2 contract: API reserves on create, Lambda adjusts to actual size, deletes release), upload-url order and retry rule (§9), upload flow (§10.2). Closes the pending-upload quota gap. |
 | 2026-10-22 | Routes 5.8 `GET /photos/{id}/download-url` and 5.9 `DELETE /photos/{id}`: `PhotoStorage.createDownloadUrl`/`deleteObjects`, `attachmentDisposition`, response conventions and delete order (§9), `api` role permissions (§9), §10.4/§10.5 status, download-URL security row. `@aws-sdk/s3-request-presigner` added; all AWS SDK packages moved to 3.1155.0. |
+| 2026-10-22 | Sharing 5.12: `/albums/{id}/shares` (list, share by email, revoke) and `GET /shared-albums` in `routes/shares.ts`; `UserDirectory.findByEmail` (Cognito `ListUsers` by email), `shares.create` (transaction with album `ConditionCheck`, replaces `put`), `albums.getMany`, `toSharedAlbum`. Conventions (§9), share item (§8.2), §10.6 status, tenant-isolation row. |

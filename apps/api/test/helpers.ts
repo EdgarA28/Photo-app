@@ -153,7 +153,7 @@ export const TEST_DOWNLOAD_URL = "https://photos.test.example/download";
 
 /**
  * The real app and routes on a fresh DynamoDB Local table, with a fake Cognito directory
- * (`profiles`) and a fake photo bucket that records upload targets (`uploads`), download targets
+ * (`profiles`, also searched by email) and a fake photo bucket that records upload targets (`uploads`), download targets
  * (`downloads`) and object deletes (`deletes`, one entry per call; `onDelete` runs inside each
  * call, to simulate races). `api(as, …)` sends a request as user `as` (null = anonymous), the
  * way API Gateway delivers it: the JWT `sub` in the authorizer claims.
@@ -161,7 +161,15 @@ export const TEST_DOWNLOAD_URL = "https://photos.test.example/download";
 export async function createTestApi() {
   const { db, repos } = await createTestRepos();
   const profiles = new Map<string, UserProfile>();
-  const users: UserDirectory = { getProfile: async (userId) => profiles.get(userId) ?? null };
+  const users: UserDirectory = {
+    getProfile: async (userId) => profiles.get(userId) ?? null,
+    findByEmail: async (email) => {
+      for (const [userId, profile] of profiles) {
+        if (profile.email === email) return { userId, email };
+      }
+      return null;
+    },
+  };
   const uploads: UploadTarget[] = [];
   const downloads: DownloadTarget[] = [];
   const deletes: string[][] = [];

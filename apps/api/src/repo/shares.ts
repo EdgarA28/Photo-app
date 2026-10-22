@@ -1,11 +1,19 @@
-import { DeleteCommand, GetCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, GetCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import type { Page } from "@photo-app/shared";
-import { isConditionalCheckFailed, queryAll, queryPage, stripKeys, type Db } from "./db";
+import {
+  conditionFailedAt,
+  isConditionalCheckFailed,
+  queryAll,
+  queryPage,
+  stripKeys,
+  type Db,
+} from "./db";
 import {
   ALBUM_SK_PREFIX,
   GSI1,
   GSI1_KEY_ATTRIBUTES,
   SHARE_SK_PREFIX,
+  albumKey,
   albumPk,
   albumSk,
   shareKey,
@@ -23,31 +31,59 @@ export interface ShareRecord {
   sharedAt: string;
 }
 
+export type CreateShareResult = { created: boolean; share: ShareRecord } | "album-not-found";
+
 export function sharesRepo(db: Db) {
+  const shareItem = (share: ShareRecord) => ({
+    ...shareKey(share.albumId, share.userId),
+    GSI1PK: sharedWithPk(share.userId),
+    GSI1SK: albumSk(share.albumId),
+    entity: "share",
+    ...share,
+  });
+
   return {
-    /** Creates or refreshes a share (re-sharing to the same user is idempotent). */
-    async put(share: ShareRecord): Promise<ShareRecord> {
-      await db.client.send(
-        new PutCommand({
-          TableName: db.table,
-          Item: {
-            ...shareKey(share.albumId, share.userId),
-            GSI1PK: sharedWithPk(share.userId),
-            GSI1SK: albumSk(share.albumId),
-            entity: "share",
-            ...share,
-          },
-        }),
-      );
-      return share;
+    /**
+     * Shares an album (POST /albums/{id}/shares, FR-SHR-1), only while the owner's album exists
+     * (checked in the same transaction). An existing share is kept as it is (its `sharedAt`
+     * stays), so sharing twice is harmless: `created` tells the two apart.
+     */
+    async create(share: ShareRecord): Promise<CreateShareResult> {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await db.client.send(
+            new TransactWriteCommand({
+              TransactItems: [
+                {
+                  ConditionCheck: {
+                    TableName: db.table,
+                    Key: albumKey(share.ownerId, share.albumId),
+                    ConditionExpression: "attribute_exists(PK)",
+                  },
+                },
+                {
+                  Put: {
+                    TableName: db.table,
+                    Item: shareItem(share),
+                    ConditionExpression: "attribute_not_exists(PK)",
+                  },
+                },
+              ],
+            }),
+          );
+          return { created: true, share };
+        } catch (err) {
+          if (conditionFailedAt(err, 0)) return "album-not-found";
+          if (!conditionFailedAt(err, 1)) throw err;
+        }
+        const existing = await getShare(db, share.albumId, share.userId);
+        if (existing) return { created: false, share: existing };
+        // Revoked between our write and read: try again.
+      }
+      throw new Error(`Share of album ${share.albumId} kept changing while being created`);
     },
 
-    async get(albumId: string, userId: string): Promise<ShareRecord | null> {
-      const output = await db.client.send(
-        new GetCommand({ TableName: db.table, Key: shareKey(albumId, userId) }),
-      );
-      return output.Item ? stripKeys<ShareRecord>(output.Item) : null;
-    },
+    get: (albumId: string, userId: string) => getShare(db, albumId, userId),
 
     /** Who an album is shared with (owner's view, not paginated). */
     async listForAlbum(albumId: string): Promise<ShareRecord[]> {
@@ -94,4 +130,11 @@ export function sharesRepo(db: Db) {
       }
     },
   };
+}
+
+async function getShare(db: Db, albumId: string, userId: string): Promise<ShareRecord | null> {
+  const output = await db.client.send(
+    new GetCommand({ TableName: db.table, Key: shareKey(albumId, userId), ConsistentRead: true }),
+  );
+  return output.Item ? stripKeys<ShareRecord>(output.Item) : null;
 }

@@ -2,6 +2,7 @@ import { DeleteCommand, GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/l
 import type { Page } from "@photo-app/shared";
 import {
   batchDelete,
+  batchGet,
   isConditionalCheckFailed,
   queryAll,
   queryPage,
@@ -64,6 +65,19 @@ export function albumsRepo(db: Db) {
     },
 
     get: (ownerId: string, albumId: string) => getAlbum(db, ownerId, albumId),
+
+    /**
+     * Several albums, possibly of different owners (GET /shared-albums). Missing ones are left
+     * out. Not scoped to a user: the caller must hold a share for each.
+     */
+    async getMany(refs: { ownerId: string; albumId: string }[]): Promise<AlbumRecord[]> {
+      if (refs.length === 0) return [];
+      const keys = new Map(
+        refs.map((r) => [`${r.ownerId}/${r.albumId}`, albumKey(r.ownerId, r.albumId)]),
+      );
+      const items = await batchGet(db, [...keys.values()]);
+      return items.map((item) => stripKeys<AlbumRecord>(item));
+    },
 
     /** All of a user's albums, oldest first (GET /albums is not paginated). */
     async list(ownerId: string): Promise<AlbumRecord[]> {
