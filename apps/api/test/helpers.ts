@@ -4,7 +4,7 @@ import { newId } from "@photo-app/shared";
 import { randomUUID } from "node:crypto";
 import { inject } from "vitest";
 import { createApp } from "../src/app";
-import type { PhotoStorage, UploadTarget } from "../src/lib/storage";
+import type { DownloadTarget, PhotoStorage, UploadTarget } from "../src/lib/storage";
 import type { UserDirectory, UserProfile } from "../src/lib/users";
 import {
   createDocumentClient,
@@ -149,17 +149,23 @@ export async function markReady(
 export const TEST_DEFAULT_QUOTA = 2 * 1024 ** 3;
 
 export const TEST_UPLOAD_URL = "https://photos.test.example/";
+export const TEST_DOWNLOAD_URL = "https://photos.test.example/download";
 
 /**
  * The real app and routes on a fresh DynamoDB Local table, with a fake Cognito directory
- * (`profiles`) and a fake photo bucket that records upload targets (`uploads`). `api(as, …)` sends a request as user `as` (null = anonymous), the way API Gateway
- * delivers it: the JWT `sub` in the authorizer claims.
+ * (`profiles`) and a fake photo bucket that records upload targets (`uploads`), download targets
+ * (`downloads`) and object deletes (`deletes`, one entry per call; `onDelete` runs inside each
+ * call, to simulate races). `api(as, …)` sends a request as user `as` (null = anonymous), the
+ * way API Gateway delivers it: the JWT `sub` in the authorizer claims.
  */
 export async function createTestApi() {
   const { db, repos } = await createTestRepos();
   const profiles = new Map<string, UserProfile>();
   const users: UserDirectory = { getProfile: async (userId) => profiles.get(userId) ?? null };
   const uploads: UploadTarget[] = [];
+  const downloads: DownloadTarget[] = [];
+  const deletes: string[][] = [];
+  const hooks: { onDelete?: (keys: string[]) => Promise<void> } = {};
   const storage: PhotoStorage = {
     createUploadPost: async (target) => {
       uploads.push(target);
@@ -167,6 +173,14 @@ export async function createTestApi() {
         url: TEST_UPLOAD_URL,
         fields: { key: target.key, "Content-Type": target.contentType },
       };
+    },
+    createDownloadUrl: async (target) => {
+      downloads.push(target);
+      return `${TEST_DOWNLOAD_URL}?key=${encodeURIComponent(target.key)}`;
+    },
+    deleteObjects: async (keys) => {
+      deletes.push(keys);
+      await hooks.onDelete?.(keys);
     },
   };
   const app = createApp({
@@ -197,5 +211,5 @@ export async function createTestApi() {
     return { status: res.status, body: (text ? JSON.parse(text) : null) as unknown };
   }
 
-  return { db, repos, profiles, uploads, storage, api };
+  return { db, repos, profiles, uploads, downloads, deletes, hooks, storage, api };
 }

@@ -1,10 +1,10 @@
-/** Config loading, the Cognito user directory (5.5) and the photo bucket (5.6). */
+/** Config loading, the Cognito user directory (5.5) and the photo bucket (5.6, 5.8, 5.9). */
 import type { CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
-import { S3Client } from "@aws-sdk/client-s3";
-import { UPLOAD_URL_TTL_SECONDS } from "@photo-app/shared";
+import { DeleteObjectsCommand, S3Client } from "@aws-sdk/client-s3";
+import { DOWNLOAD_URL_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS } from "@photo-app/shared";
 import { describe, expect, test, vi } from "vitest";
 import { loadConfig } from "../src/lib/config";
-import { s3PhotoStorage } from "../src/lib/storage";
+import { attachmentDisposition, s3PhotoStorage } from "../src/lib/storage";
 import { cognitoUserDirectory } from "../src/lib/users";
 
 const USER = "3f1c2b4a-9d8e-4f7a-b6c5-1a2b3c4d5e6f";
@@ -120,5 +120,61 @@ describe("s3PhotoStorage", () => {
     const ttl = (Date.parse(policy.expiration) - before) / 1000;
     expect(ttl).toBeGreaterThan(UPLOAD_URL_TTL_SECONDS - 5);
     expect(ttl).toBeLessThanOrEqual(UPLOAD_URL_TTL_SECONDS + 5);
+  });
+
+  test("download URL: pre-signed GET for the key, 5 min, attachment under the file name (FR-DL-1/2)", async () => {
+    const url = new URL(await storage.createDownloadUrl({ key, fileName: "Beach day.heic" }));
+
+    expect(url.origin + url.pathname).toBe(
+      `https://photo-bucket.s3.us-east-1.amazonaws.com/${key}`,
+    );
+    expect(url.searchParams.get("X-Amz-Expires")).toBe(String(DOWNLOAD_URL_TTL_SECONDS));
+    expect(url.searchParams.get("response-content-disposition")).toBe(
+      `attachment; filename="Beach day.heic"; filename*=UTF-8''Beach%20day.heic`,
+    );
+    // The disposition is covered by the signature, so it can't be changed by the holder.
+    expect(url.searchParams.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test("deleteObjects: one quiet DeleteObjects call; per-key errors are thrown", async () => {
+    const send = vi.spyOn(client, "send");
+    send.mockResolvedValueOnce({} as never);
+    await storage.deleteObjects([key, "other"]);
+    const command = send.mock.calls[0]![0] as DeleteObjectsCommand;
+    expect(command).toBeInstanceOf(DeleteObjectsCommand);
+    expect(command.input).toEqual({
+      Bucket: "photo-bucket",
+      Delete: { Objects: [{ Key: key }, { Key: "other" }], Quiet: true },
+    });
+
+    send.mockResolvedValueOnce({ Errors: [{ Key: key, Code: "AccessDenied" }] } as never);
+    await expect(storage.deleteObjects([key])).rejects.toThrow(`${key} (AccessDenied)`);
+
+    send.mockClear();
+    await storage.deleteObjects([]);
+    expect(send).not.toHaveBeenCalled();
+    send.mockRestore();
+  });
+});
+
+describe("attachmentDisposition (FR-DL-2)", () => {
+  test.each([
+    ["IMG_0001.JPG", `attachment; filename="IMG_0001.JPG"; filename*=UTF-8''IMG_0001.JPG`],
+    // Non-ASCII: placeholder in the fallback, exact name in filename*.
+    [
+      "Café 🌅.jpg",
+      `attachment; filename="Caf_ _.jpg"; filename*=UTF-8''Caf%C3%A9%20%F0%9F%8C%85.jpg`,
+    ],
+    // Quotes and backslashes can't break out of the quoted fallback.
+    ['a"b\\c.png', `attachment; filename="a_b_c.png"; filename*=UTF-8''a%22b%5Cc.png`],
+    // RFC 8187 attr-chars: ' ( ) * are encoded too.
+    [
+      "it's (1).webp",
+      `attachment; filename="it's (1).webp"; filename*=UTF-8''it%27s%20%281%29.webp`,
+    ],
+    // An unpaired surrogate (valid JSON, invalid UTF-16) becomes U+FFFD instead of throwing.
+    ["x\ud800.jpg", `attachment; filename="x_.jpg"; filename*=UTF-8''x%EF%BF%BD.jpg`],
+  ])("%s", (name, expected) => {
+    expect(attachmentDisposition(name)).toBe(expected);
   });
 });

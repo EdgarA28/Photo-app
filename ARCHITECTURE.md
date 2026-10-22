@@ -47,7 +47,7 @@
 | Environment roots | `infra/envs/{dev,prod}` | 🚧 | Database + storage **deployed in dev**; prod validated only |
 | Infra modules: database, storage | `infra/modules/{database,storage}` | ✅ (dev) | Offline `tofu test` suites (7 runs) |
 | Infra modules: auth, api, thumbnails, frontend | `infra/modules/*` | 📋 | |
-| API Lambda | `apps/api` | 🚧 | Skeleton (5.1–5.3) + routes `GET /me`, `POST /photos/upload-url` (incl. retry), `GET /photos`, `GET /photos/{id}`, album CRUD and album photos (5.5, 5.6, 5.6a, 5.7, 5.10, 5.11); 109 tests (incl. DynamoDB Local). Download/delete, sharing and media cookies not yet; not deployed |
+| API Lambda | `apps/api` | 🚧 | Skeleton (5.1–5.3) + routes `GET /me`, `POST /photos/upload-url` (incl. retry), `GET /photos`, `GET /photos/{id}`, `GET /photos/{id}/download-url`, `DELETE /photos/{id}`, album CRUD and album photos (5.5, 5.6, 5.6a/b, 5.7–5.11); 133 tests (incl. DynamoDB Local). Sharing and media cookies not yet; not deployed |
 | Thumbnail Lambda | `services/thumbnails` | 🚧 | Handler, image pipeline, S3-key mirror + 73 pytest tests (6.1–6.7); not packaged or deployed yet (6.8–6.10) |
 | Auth trigger Lambda | `services/auth-triggers` | 📋 | Folder skeleton only |
 | Web app / PWA | `apps/web` | 📋 | Folder skeleton only |
@@ -145,9 +145,9 @@ Versions are what is **installed/locked today**; 📋 rows are chosen but not ye
 | boto3 | 1.43.114 (dev only) | `services/thumbnails` | AWS SDK; provided by Lambda runtime, not packaged | ✅ |
 | Hono | 4.13.13 | `apps/api` | Lightweight router inside one Lambda (D-1) | ✅ |
 | @hono/aws-lambda | 1.0.0 | `apps/api` | Lambda adapter (API Gateway HTTP API event → Request); replaces the deprecated `hono/aws-lambda` | ✅ |
-| AWS SDK v3 (`client-dynamodb`, `lib-dynamodb`) | 3.1153.0 | `apps/api` | DynamoDB via the DocumentClient; bundled (not the runtime copy) | ✅ |
-| AWS SDK v3 (`client-cognito-identity-provider`) | 3.1153.0 | `apps/api` | Profile lookup by `sub` (`ListUsers`) for `GET /me`; email lookup for sharing (5.12) | ✅ |
-| AWS SDK v3 (`client-s3`, `s3-presigned-post`) | 3.1154.0 | `apps/api` | Pre-signed upload POST (5.6); download URLs and object deletes (5.8, 5.9) | ✅ |
+| AWS SDK v3 (`client-dynamodb`, `lib-dynamodb`) | 3.1155.0 | `apps/api` | DynamoDB via the DocumentClient; bundled (not the runtime copy) | ✅ |
+| AWS SDK v3 (`client-cognito-identity-provider`) | 3.1155.0 | `apps/api` | Profile lookup by `sub` (`ListUsers`) for `GET /me`; email lookup for sharing (5.12) | ✅ |
+| AWS SDK v3 (`client-s3`, `s3-presigned-post`, `s3-request-presigner`) | 3.1155.0 | `apps/api` | Pre-signed upload POST (5.6), pre-signed download GET (5.8), `DeleteObjects` (5.9). All `@aws-sdk/*` packages are kept on one version: mixed versions pull in two `@smithy/core` copies and the client types stop matching | ✅ |
 | AWS SDK v3 (S3, CloudFront signer) | — | `apps/api`, `services/auth-triggers` | Pre-signed URLs, signed cookies/URLs | 📋 |
 | React + Vite | — | `apps/web` | SPA | 📋 |
 | TanStack Router / Query / Virtual | — | `apps/web` | Routing, server state, virtualized grid | 📋 |
@@ -253,7 +253,7 @@ Photo-app/
 │       ├── src/index.ts         Lambda entry: config, clients, repositories, routes, @hono/aws-lambda `handle`
 │       ├── src/app.ts           Hono app: /api base path, body limit, /health, requireUser, error envelope
 │       ├── src/env.ts           Hono env type (Lambda event binding, `userId` variable)
-│       ├── src/lib/             auth.ts (JWT sub), errors.ts (AppError, orNotFound), validation.ts (Zod), log.ts, config.ts, users.ts (Cognito directory), storage.ts (photo bucket: pre-signed POST)
+│       ├── src/lib/             auth.ts (JWT sub), errors.ts (AppError, orNotFound), validation.ts (Zod), log.ts, config.ts, users.ts (Cognito directory), storage.ts (photo bucket: pre-signed POST, pre-signed download GET, object deletes)
 │       ├── src/repo/            DynamoDB layer: keys, cursor, db helpers, photos, albums, memberships, shares, usage
 │       ├── src/routes/          index.ts (Deps, registerRoutes), me.ts, photos.ts, albums.ts, present.ts (record → API object)
 │       └── test/                Vitest: app/middleware, cursor, config/directory, repositories and routes on DynamoDB Local
@@ -511,11 +511,15 @@ Contracts exist (✅ in `packages/shared`). Implemented routes are marked ✅ be
 
 **Runtime configuration (env vars, set by the `api` module in 5.4):** `TABLE_NAME`, `PHOTO_BUCKET`, `USER_POOL_ID`, `DEFAULT_QUOTA_BYTES` (positive integer; e.g. 2 GB dev, 10 GB prod). A missing or invalid value fails the cold start.
 
+**Permissions the `api` role needs (5.4):** `cognito-idp:ListUsers` on the pool; `s3:PutObject` on `users/*/originals/*` (uploads are signed with the Lambda's credentials) and `s3:GetObject` there (downloads, likewise); `s3:DeleteObject` on `users/*/originals/*`, `users/*/thumbs/*`, `users/*/previews/*` (photo delete; `DeleteObjects` checks it per key); table read/write.
+
 **Response conventions (✅):**
 - Own image URLs are stable CloudFront paths, `/users/{sub}/thumbs/{photoId}.jpg` and `/users/{sub}/previews/{photoId}.jpg`, and only when `status = ready` (else `null`). Album `coverThumbUrl` is the cover's thumb path under the same rule.
 - `GET /me`: email and name come from Cognito (`ListUsers` filtered by `sub`, because access tokens carry neither and Google users' usernames aren't their `sub`); a token whose user is gone from the pool → 401. `quotaBytes` = the Usage item's override, else `DEFAULT_QUOTA_BYTES`.
 - `POST /photos/upload-url` → 201 `{photoId, upload: {url, fields}}`. Order: validate (type, 1 B–50 MB, name) → read Usage for the quota → sign → put the `pending` item **and** reserve its size in one transaction (signing is local and comes first, so a failure leaves no item or reservation). `bytesReserved + sizeBytes` must be ≤ quota, else **413 `QUOTA_EXCEEDED`**; pending uploads count, and the conditional write means parallel requests can't overshoot (5.6b). The POST policy pins bucket, exact key `users/{sub}/originals/{photoId}.{ext}`, `Content-Type`, `x-amz-storage-class: INTELLIGENT_TIERING` and `content-length-range` = exactly the declared size; expires after 15 min. The browser must send the returned `fields` (plus `file` last) as multipart form data to `url`.
 - **Retry (5.6a):** the same request with `photoId` re-signs the upload for that photo → 200, same key, no new item. Its bytes are already reserved, so the check is `bytesReserved ≤ quota` (only fails if the quota was lowered meanwhile → 413 `QUOTA_EXCEEDED`); nothing is reserved again. Unknown or another user's photo → 404; photo no longer `pending` → 409 `CONFLICT` (a processed original can't be replaced through the API); `contentType`/`sizeBytes` different from the item → 409 `CONFLICT`. `fileName` is kept from the first request. The upload queue stores the `photoId` with the file (8.10).
+- `GET /photos/{id}/download-url` → 200 `{url, expiresAt}`: pre-signed GET for the original, 5 min, with `response-content-disposition` = `attachment; filename="<ASCII fallback>"; filename*=UTF-8''<exact name>` (RFC 6266/8187; non-ASCII, `"` and `\` become `_` in the fallback, unpaired surrogates become U+FFFD). The disposition is part of the signature. `pending` → 409 `CONFLICT` (the original may not exist yet); `failed` photos can be downloaded (their original is kept). Owner only until 5.13.
+- `DELETE /photos/{id}` → 204. Order: read the item (unknown/foreign → 404) → `DeleteObjects` for original, thumb and preview → `repos.photos.delete` (memberships with album count/cover fixes, then the item and the Usage release in one transaction). Objects go first so a failure part-way leaves a photo that a retry can still find; the reverse order could leave files nobody references. If the item's status changed in between (the thumbnail Lambda finished and wrote thumb/preview after our object delete), the objects are deleted a second time. Concurrently deleted → still 204; deleting again → 404.
 - `POST /albums` → 201 with the album. `PATCH` → 200 with the album; a cover that isn't in the album → 400 `VALIDATION_ERROR`. Deletes and `POST /albums/{id}/photos` → 204.
 - `POST /albums/{id}/photos` is idempotent (photos already in the album are fine) and checks all photos first: any unknown or foreign photo → 404 `Photo not found` and nothing is added.
 - `GET /albums/{id}/photos` lists in photo upload order (memberships are keyed by the photo ULID; ordering by date taken would need another index, §8.2) and is **owner-only** until sharing (5.12/5.13) adds recipients with signed URLs.
@@ -528,8 +532,8 @@ Contracts exist (✅ in `packages/shared`). Implemented routes are marked ✅ be
 | `POST` | `/photos/upload-url` ✅ | `uploadUrlRequestSchema` | `uploadUrlResponseSchema` (201) |
 | `GET` | `/photos` ✅ | `listPhotosQuerySchema` (query) | `photoPageSchema` (200) |
 | `GET` | `/photos/{photoId}` ✅ | — | `photoSchema` (200) |
-| `GET` | `/photos/{photoId}/download-url` | — | `downloadUrlResponseSchema` |
-| `DELETE` | `/photos/{photoId}` | — | 204 |
+| `GET` | `/photos/{photoId}/download-url` ✅ | — | `downloadUrlResponseSchema` (200) |
+| `DELETE` | `/photos/{photoId}` ✅ | — | 204 |
 | `GET` | `/albums` ✅ | — | `albumListSchema` (200) |
 | `POST` | `/albums` ✅ | `createAlbumRequestSchema` | `albumSchema` (201) |
 | `PATCH` | `/albums/{albumId}` ✅ | `updateAlbumRequestSchema` | `albumSchema` (200) |
@@ -622,13 +626,13 @@ Failure paths: corrupt/unsupported → `status: failed`, no retry; transient →
 2. 📋 Own images load from CloudFront `/users/{sub}/thumbs|previews/{photoId}.jpg`, authorised by the media cookie, cached at the edge and by the service worker (thumbs only).
 3. Images from albums shared with me come back as per-image CloudFront signed URLs (15 min).
 
-### 10.4 Download 📋
+### 10.4 Download 🚧 (API ✅ for own photos, shared 📋)
 
-`GET /photos/{id}/download-url` → ownership or share check → 5-min pre-signed GET with `Content-Disposition: attachment; filename="<original name>"` → browser downloads straight from S3.
+`GET /photos/{id}/download-url` → ownership check (✅; share check 📋, 5.13) → 5-min pre-signed GET with `Content-Disposition: attachment` and the original file name → browser downloads straight from S3.
 
-### 10.5 Delete 📋
+### 10.5 Delete ✅ (API, not deployed)
 
-`DELETE /photos/{id}` → ownership check → delete original/thumb/preview objects → delete Photo item and all album memberships → decrement Usage.
+`DELETE /photos/{id}` → ownership check → delete original/thumb/preview objects → delete album memberships, then the Photo item with the Usage decrement → objects again if the thumbnail Lambda finished meanwhile. Known gap: a `pending` photo deleted while its upload POST is still valid (≤ 15 min) can still receive the original afterwards; the thumbnail Lambda then finds no item and skips it, leaving an unreferenced original (task 6.12).
 
 ### 10.6 Albums & sharing 🚧 (albums ✅ API, sharing 📋)
 
@@ -661,9 +665,10 @@ Bootstrap uses local state per workspace instead of S3.
 | State client-side encryption | 📋 deferred | Task 12.5 (state will contain the Google client secret) |
 | Cost guardrail | ✅ | Organization budget $5/month with email alerts |
 | Upload URL constraints (NFR-SEC-6) | ✅ code | Pre-signed POST bound to one key under the caller's prefix, one allowed content type, exact declared size, 15 min |
+| Download URLs | ✅ code | Pre-signed GET for one original of the caller's own photo, 5 min, attachment disposition signed in (can't be turned into inline rendering) |
 | Strict input validation | ✅ | Zod schemas: allowed types, size cap, ID formats, trimmed names, normalised emails; applied in the API by `validate()`; JSON bodies capped at 64 KB |
 | Key-format hardening | ✅ | Builders reject invalid IDs (no path injection); parser accepts only exact originals |
-| Tenant isolation (NFR-SEC-1/2) | 🚧 | ✅ `requireUser` takes the user ID only from the authorizer's JWT `sub` (must be a lowercase UUID, else 401); ✅ repositories key every user-owned lookup by that ID, so foreign items read as missing and `orNotFound` → 404; ✅ pagination cursors are bound to the caller's partition; ✅ route tests show other users' photos and albums give the same 404 as missing ones on every implemented route (`/photos/{id}`, uploads only ever under the caller's own prefix and quota, all album routes, foreign photos in add-to-album) and foreign cursors are rejected. 📋 full suite over all routes (5.14) |
+| Tenant isolation (NFR-SEC-1/2) | 🚧 | ✅ `requireUser` takes the user ID only from the authorizer's JWT `sub` (must be a lowercase UUID, else 401); ✅ repositories key every user-owned lookup by that ID, so foreign items read as missing and `orNotFound` → 404; ✅ pagination cursors are bound to the caller's partition; ✅ route tests show other users' photos and albums give the same 404 as missing ones on every implemented route (`/photos/{id}`, its download URL and delete, uploads only ever under the caller's own prefix and quota, all album routes, foreign photos in add-to-album) and foreign cursors are rejected. 📋 full suite over all routes (5.14) |
 | Private photo bucket (NFR-SEC-3/4) | ✅ (dev) | Public access block, ACLs off, SSE-S3, TLS-only policy, CORS limited to app origins |
 | Data deletion guard | ✅ code (prod settings) | Table deletion protection + no `force_destroy` by default; only dev opts out |
 | CloudFront OAC / signed URLs (NFR-SEC-3) | 📋 | Phase 7 |
@@ -814,3 +819,4 @@ Not started. Target design: spec §12 (TanStack Router file routes with an authe
 | 2026-10-21 | 5.6a: `photoId` on `POST /photos/upload-url` re-signs an upload for an existing pending photo (§9 conventions). Quota gap with pending uploads described accurately (unbounded, task 5.6b). |
 | 2026-10-21 | Upload retry re-checks the quota (security review: pending photos created while storage was empty could otherwise all be uploaded after the quota filled). |
 | 2026-10-22 | 5.6b: quota reservation for pending uploads. Usage `bytesReserved` (§8.2 contract: API reserves on create, Lambda adjusts to actual size, deletes release), upload-url order and retry rule (§9), upload flow (§10.2). Closes the pending-upload quota gap. |
+| 2026-10-22 | Routes 5.8 `GET /photos/{id}/download-url` and 5.9 `DELETE /photos/{id}`: `PhotoStorage.createDownloadUrl`/`deleteObjects`, `attachmentDisposition`, response conventions and delete order (§9), `api` role permissions (§9), §10.4/§10.5 status, download-URL security row. `@aws-sdk/s3-request-presigner` added; all AWS SDK packages moved to 3.1155.0. |

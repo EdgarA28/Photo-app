@@ -1,10 +1,14 @@
 import {
+  DOWNLOAD_URL_TTL_SECONDS,
   extensionFor,
   idSchema,
   listPhotosQuerySchema,
   newId,
   originalKey,
+  previewKey,
+  thumbKey,
   uploadUrlRequestSchema,
+  type DownloadUrlResponse,
   type Photo,
   type PhotoPage,
   type UploadUrlResponse,
@@ -97,5 +101,46 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, config }: Deps)
     const record = orNotFound(await repos.photos.get(c.get("userId"), photoId), "Photo not found");
     const body: Photo = toPhoto(record);
     return c.json(body);
+  });
+
+  /**
+   * Download of an own original under its file name (FR-DL-1/2): 5-min pre-signed GET with
+   * `Content-Disposition: attachment`, so the browser fetches it straight from S3. Shared-album
+   * recipients get access with 5.13.
+   */
+  app.get("/photos/:photoId/download-url", validate("param", photoParam), async (c) => {
+    const { photoId } = c.req.valid("param");
+    const record = orNotFound(await repos.photos.get(c.get("userId"), photoId), "Photo not found");
+    // Until the upload is processed there may be no original yet. Failed photos keep theirs.
+    if (record.status === "pending") {
+      throw new AppError(409, "CONFLICT", "This photo has not been uploaded yet");
+    }
+    const expiresAt = new Date(Date.now() + DOWNLOAD_URL_TTL_SECONDS * 1000).toISOString();
+    const url = await storage.createDownloadUrl({
+      key: record.originalKey,
+      fileName: record.fileName,
+    });
+    const body: DownloadUrlResponse = { url, expiresAt };
+    return c.json(body);
+  });
+
+  /**
+   * Deletes an own photo (FR-DEL-1): original, thumb and preview, then the item, its album
+   * memberships and its Usage (`repos.photos.delete`). Objects go first: if the item delete then
+   * fails, a retry still finds the photo and finishes, whereas the other order could leave
+   * unreferenced files behind. 204 also when it vanished meanwhile (a concurrent delete).
+   */
+  app.delete("/photos/:photoId", validate("param", photoParam), async (c) => {
+    const userId = c.get("userId");
+    const { photoId } = c.req.valid("param");
+    const record = orNotFound(await repos.photos.get(userId, photoId), "Photo not found");
+    const keys = [record.originalKey, thumbKey(userId, photoId), previewKey(userId, photoId)];
+
+    await storage.deleteObjects(keys);
+    const deleted = await repos.photos.delete(userId, photoId);
+    // The thumbnail Lambda finished in between and wrote thumb and preview after our delete.
+    // (Had it finished after the item was gone, it would have removed them itself.)
+    if (deleted && deleted.status !== record.status) await storage.deleteObjects(keys);
+    return c.body(null, 204);
   });
 }
