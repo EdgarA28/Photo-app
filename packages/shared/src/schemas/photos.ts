@@ -58,6 +58,13 @@ export const uploadUrlResponseSchema = z.object({
 });
 export type UploadUrlResponse = z.infer<typeof uploadUrlResponseSchema>;
 
+/**
+ * GET /photos/{photoId}/download-url query. `albumId` names the shared album the photo is seen in:
+ * recipients must pass it, because a photo is found through the album shared with them (§8.2).
+ */
+export const downloadUrlQuerySchema = z.object({ albumId: idSchema.optional() });
+export type DownloadUrlQuery = z.infer<typeof downloadUrlQuerySchema>;
+
 /** GET /photos/{photoId}/download-url (FR-DL-1, FR-DL-2) */
 export const downloadUrlResponseSchema = z.object({
   url: z.url(),

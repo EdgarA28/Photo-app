@@ -5,6 +5,7 @@ import {
   apiErrorSchema,
   createAlbumRequestSchema,
   createShareRequestSchema,
+  downloadUrlQuerySchema,
   listPhotosQuerySchema,
   photoSchema,
   updateAlbumRequestSchema,
@@ -28,6 +29,15 @@ describe("listPhotosQuerySchema", () => {
       false,
     );
     expect(listPhotosQuerySchema.safeParse({ sort: "name" }).success).toBe(false);
+  });
+});
+
+describe("downloadUrlQuerySchema", () => {
+  test("albumId is optional and must be an ID", () => {
+    expect(downloadUrlQuerySchema.parse({})).toEqual({});
+    const albumId = "01JABCDEFGHJKMNPQRSTVWXYZ0";
+    expect(downloadUrlQuerySchema.parse({ albumId })).toEqual({ albumId });
+    expect(downloadUrlQuerySchema.safeParse({ albumId: "../x" }).success).toBe(false);
   });
 });
 

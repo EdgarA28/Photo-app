@@ -15,15 +15,14 @@
 
 | | |
 |---|---|
-| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.12 (incl. 5.6a/b) done (API skeleton, upload/download URLs, photo delete, read/album/sharing routes), 6.1–6.7 done (thumbnail code) → next: 5.13 or Phase 4 (auth) |
+| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.13 (incl. 5.6a/b) done (all API routes except media cookies), 6.1–6.7 done (thumbnail code) → next: 5.14/6.12 (small) or Phase 4 (auth) |
 | **Last updated** | 2026-10-22 |
 | **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
 
 ## Next up
 
-1. 5.13 shared access: let recipients read `GET /albums/{id}/photos` and `GET /photos/{id}/download-url` for photos in albums shared with them (check: share item exists + `albums.hasPhoto`, or the photo's `albumIds` ∩ albums shared with the caller). Their thumb/preview/cover URLs need CloudFront signing (7.4): until then return `null` image URLs for shared photos, like `toSharedAlbum` does for covers. New tests can use `createTestApi()` from `test/helpers.ts`.
-   Small follow-ups: 6.12 (thumbnail Lambda deletes originals that have no photo item), 5.14 tenant-isolation suite.
+1. Small API follow-ups: 5.14 tenant-isolation suite (every route with another user's IDs → 404; most cases exist per route file, collect them), 6.12 (thumbnail Lambda deletes originals that have no photo item). New tests can use `createTestApi()` from `test/helpers.ts`.
 2. Phase 4 (auth: Cognito + Google + pre-sign-up trigger): creates AWS resources, needs approval.
    Dev app resources (table + photo bucket) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done.
 3. Thumbnails 6.8 (aarch64 packaging) + 6.9 (infra module, can be written and `tofu test`ed offline; deploy needs approval). IAM must include `s3:DeleteObject` on `thumbs/`+`previews/` (race cleanup) and Lambda JSON log format.
@@ -91,10 +90,10 @@
 
 ## Phase 4 — Authentication (§11)
 
-- [ ] **4.1** `auth` module: Cognito user pool (email username, verification), prefix domain, public app client (code + PKCE), callback/sign-out URLs, token lifetimes (FR-AUTH-2, FR-AUTH-4)
+- [ ] **4.1** `auth` module: Cognito user pool (email username, verification), prefix domain, public app client (code + PKCE), callback/sign-out URLs, token lifetimes (FR-AUTH-2, FR-AUTH-4). Set `user_attribute_update_settings { attributes_require_verification_before_update = ["email"] }` so an email change only applies once verified (sharing trusts verified emails, 5.12)
 - [ ] **4.2** Apply to dev; note Cognito domain
 - [ ] **4.3** Google OAuth client (origin + `/oauth2/idpresponse` redirect), consent screen in testing mode (§11.2)
-- [ ] **4.4** Google IdP in Cognito with attribute mapping; client secret as sensitive variable (FR-AUTH-1)
+- [ ] **4.4** Google IdP in Cognito with attribute mapping (incl. `email_verified` → `email_verified`, else Google users can't receive shares); client secret as sensitive variable (FR-AUTH-1)
 - [ ] **4.5** `services/auth-triggers`: pre-sign-up Lambda linking Google → existing verified native user (`AdminLinkProviderForUser`) + tests (FR-AUTH-3)
 - [ ] **4.6** Deploy trigger via `auth` module; manually verify both login methods + linking
 
@@ -119,7 +118,7 @@
 - [x] **5.11** Album photos: `GET/POST /albums/{id}/photos`, `DELETE /albums/{id}/photos/{photoId}` (FR-ALB-2). `GET` is owner-only until 5.13
   - 83 API tests (36 new: routes on DynamoDB Local with a fake Cognito directory, config, directory); bundle 1.1 MB (Cognito client), smoke-tested
 - [x] **5.12** Sharing: `GET/POST /albums/{id}/shares`, `DELETE …/shares/{userId}`, `GET /shared-albums`; lookup user by email in Cognito (FR-SHR-1..4)
-- [ ] **5.13** Access check "can user X see photo P" for shared albums (§8.2)
+- [x] **5.13** Access check "can user X see photo P" for shared albums (§8.2)
 - [ ] **5.14** Tenant-isolation test suite: every route with another user's IDs → 404
 
 ## Phase 6 — Thumbnail service (`services/thumbnails`, §10)
@@ -240,6 +239,7 @@
 | 2026-10-22 | **Quota reservation (5.6b):** Usage `bytesReserved` = bytesUsed + declared sizes of pending photos; the quota is checked against it, atomically with creating the pending item. Supersedes the 2026-10-19 note that pending uploads aren't counted. Abandoned uploads now hold quota until deleted or swept (6.11), which makes 6.11 more important. |
 | 2026-10-22 | **Download/delete (5.8/5.9):** download of a `pending` photo → 409 `CONFLICT`, `failed` ones are downloadable; disposition `attachment` with ASCII `filename` + RFC 8187 `filename*`. Delete removes S3 objects **before** the item (failure leaves a retryable photo, not orphaned files) and repeats the object delete if the Lambda finished in between; 204 if it vanished concurrently. `api` role (5.4) additionally needs `s3:GetObject` on `originals/` and `s3:DeleteObject` on `originals/`, `thumbs/`, `previews/`. All `@aws-sdk/*` packages kept on one version (3.1155.0): mixed versions broke the S3 client types. Orphan-original gap → 6.12. |
 | 2026-10-22 | **Sharing (5.12):** share = owner-only management; ownership checked before the email lookup (no registered-email oracle for non-owners; owners can still tell, inherent to FR-SHR-1). Re-sharing → 200 with the original share (`sharedAt` kept), new → 201. Unknown email → 404 `SHARE_TARGET_NOT_FOUND`, own email → 400. Cognito lookup ignores `UNCONFIRMED` and disabled users. Shared album covers are `null` until 7.4. **Verify in 4.6:** the `ListUsers` `email =` filter is matched against the stored attribute; we search with the lowercased address, so Cognito must store emails lowercase (check native sign-up with mixed case and Google users). |
+| 2026-10-22 | **Shared access (5.13):** recipients reach a photo only via `?albumId=` (share → membership → photo under the share's owner); no global photo-by-ID index. Recipients see `ready` photos only (pending/failed → hidden, 404 on download); image URLs null until 7.4. Recipients download originals with EXIF/GPS (FR-DL-1 says originals; worth a note in the share UI, 8.12). **Security review of 5.12:** a user could set an unverified email equal to someone else's and receive their shares → lookup now requires `email_verified = "true"` and exactly one match; pool must require verification before email updates (4.1) and map Google `email_verified` (4.4). |
 | 2026-10-21 | Abandoned uploads: planned 5.6a (reuse `photoId` on retry) + 6.11 (daily sweeper for stale `pending` items); TTL rejected (blind to files that arrived but failed processing, leaves album memberships dangling). |
 
 ## Session log
@@ -268,3 +268,4 @@
 | 2026-10-22 | 5.6b quota reservation: `bytesReserved` in Usage (API repo create/delete, route, thumbnail Lambda `_finish`). 160 TS + 74 Python tests pass. |
 | 2026-10-22 | API routes 5.8 `GET /photos/{id}/download-url` and 5.9 `DELETE /photos/{id}` (`PhotoStorage.createDownloadUrl`/`deleteObjects`, `@aws-sdk/s3-request-presigner`). 178 TS tests pass; lint/typecheck/format/build clean. Nothing deployed. |
 | 2026-10-22 | API 5.12 sharing: `GET/POST /albums/{id}/shares`, `DELETE …/shares/{userId}`, `GET /shared-albums` (`routes/shares.ts`, `UserDirectory.findByEmail`, `shares.create`, `albums.getMany`). 201 TS tests pass; lint/typecheck/format/build clean. Nothing deployed. |
+| 2026-10-22 | API 5.13 recipient read access (`routes/access.ts`, `?albumId=` on download URL); security-review fix to 5.12 (verified, unique email match). 216 TS tests pass; lint/typecheck/format/build clean. Nothing deployed. |

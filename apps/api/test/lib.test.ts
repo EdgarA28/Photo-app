@@ -79,19 +79,28 @@ describe("cognitoUserDirectory", () => {
     ).toBeNull();
   });
 
-  test("findByEmail: filters by email and returns the confirmed, enabled user's sub", async () => {
-    const OTHER = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
-    const user = (sub: string, extra: object = {}) => ({
-      Attributes: [
-        { Name: "sub", Value: sub },
-        { Name: "email", Value: "ada@example.com" },
-      ],
-      ...extra,
-    });
+  const OTHER = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+  const user = (
+    sub: string,
+    extra: { verified?: string; UserStatus?: string; Enabled?: boolean } = {},
+  ) => ({
+    Attributes: [
+      { Name: "sub", Value: sub },
+      { Name: "email", Value: "ada@example.com" },
+      ...(extra.verified === undefined ? [] : [{ Name: "email_verified", Value: extra.verified }]),
+    ],
+    ...(extra.UserStatus === undefined ? {} : { UserStatus: extra.UserStatus }),
+    ...(extra.Enabled === undefined ? {} : { Enabled: extra.Enabled }),
+  });
+
+  test("findByEmail: returns the one confirmed, enabled user with the email verified", async () => {
     const { send, users } = directory([
-      user(OTHER, { UserStatus: "UNCONFIRMED", Enabled: true }),
-      user(OTHER, { UserStatus: "CONFIRMED", Enabled: false }),
-      user(USER, { UserStatus: "EXTERNAL_PROVIDER", Enabled: true }),
+      user(OTHER, { verified: "true", UserStatus: "UNCONFIRMED", Enabled: true }),
+      user(OTHER, { verified: "true", UserStatus: "CONFIRMED", Enabled: false }),
+      // Someone who set the address on their own account without verifying it.
+      user(OTHER, { verified: "false", UserStatus: "CONFIRMED", Enabled: true }),
+      user(OTHER, { UserStatus: "CONFIRMED", Enabled: true }),
+      user(USER, { verified: "true", UserStatus: "EXTERNAL_PROVIDER", Enabled: true }),
     ]);
     expect(await users.findByEmail("ada@example.com")).toEqual({
       userId: USER,
@@ -100,6 +109,14 @@ describe("cognitoUserDirectory", () => {
     expect(send.mock.calls[0]![0]).toMatchObject({
       input: { UserPoolId: "us-east-1_pool", Filter: 'email = "ada@example.com"' },
     });
+  });
+
+  test("findByEmail: two verified users with the same email → null, never a guess", async () => {
+    const { users } = directory([
+      user(USER, { verified: "true", UserStatus: "CONFIRMED" }),
+      user(OTHER, { verified: "true", UserStatus: "EXTERNAL_PROVIDER" }),
+    ]);
+    expect(await users.findByEmail("ada@example.com")).toBeNull();
   });
 
   test("findByEmail: nobody, only unconfirmed users, or a filter-breaking value → null", async () => {

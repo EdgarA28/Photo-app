@@ -37,6 +37,14 @@ export function toAlbum(record: AlbumRecord, cover: PhotoRecord | null | undefin
 }
 
 /**
+ * A photo from an album shared with the caller. The owner's image paths aren't covered by the
+ * recipient's media cookie, so the URLs stay null until signed URLs (7.4).
+ */
+export function toSharedPhoto(record: PhotoRecord): Photo {
+  return { ...toPhoto(record), thumbUrl: null, previewUrl: null };
+}
+
+/**
  * An album as its share recipient sees it (FR-SHR-3). The cover is the owner's photo, which the
  * recipient's media cookie doesn't cover: `coverThumbUrl` stays null until signed URLs (7.4).
  */

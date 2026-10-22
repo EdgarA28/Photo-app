@@ -16,7 +16,8 @@ import { notFound, orNotFound, validationError } from "../lib/errors";
 import { validate } from "../lib/validation";
 import type { AlbumRecord, PhotoRecord, Repositories } from "../repo";
 import type { Deps } from ".";
-import { toAlbum, toPhoto } from "./present";
+import { albumAccess, isVisibleToRecipient } from "./access";
+import { toAlbum, toPhoto, toSharedPhoto } from "./present";
 
 const albumParam = z.object({ albumId: idSchema });
 const albumPhotoParam = z.object({ albumId: idSchema, photoId: idSchema });
@@ -24,8 +25,8 @@ const albumPhotoParam = z.object({ albumId: idSchema, photoId: idSchema });
 /**
  * The caller's own albums (FR-ALB-1, FR-ALB-2). Every route looks the album up under the caller's
  * partition, so other users' albums are 404 (NFR-SEC-2), including for share recipients, who
- * can't modify them (FR-SHR-4). Recipients reading an album's photos come with 5.13; until then
- * `GET /albums/{id}/photos` is owner-only. Shares themselves are in shares.ts.
+ * can't modify them (FR-SHR-4). The one route recipients may read is `GET /albums/{id}/photos`
+ * (5.13). Shares themselves are in shares.ts.
  */
 export function albumRoutes(app: Hono<AppEnv>, { repos }: Deps): void {
   app.get("/albums", async (c) => {
@@ -75,7 +76,10 @@ export function albumRoutes(app: Hono<AppEnv>, { repos }: Deps): void {
     return c.body(null, 204);
   });
 
-  /** Album photos in upload order (memberships are keyed by the photo ULID, §8.2), paginated. */
+  /**
+   * Album photos in upload order (memberships are keyed by the photo ULID, §8.2), paginated. For
+   * the owner, or for a recipient of the share (FR-SHR-4), who sees only `ready` photos.
+   */
   app.get(
     "/albums/:albumId/photos",
     validate("param", albumParam),
@@ -84,11 +88,15 @@ export function albumRoutes(app: Hono<AppEnv>, { repos }: Deps): void {
       const userId = c.get("userId");
       const { albumId } = c.req.valid("param");
       const { limit, cursor } = c.req.valid("query");
-      orNotFound(await repos.albums.get(userId, albumId), "Album not found");
+      const { album, shared } = orNotFound(
+        await albumAccess(repos, userId, albumId),
+        "Album not found",
+      );
 
       const page = await repos.albums.listMemberships(albumId, { limit, cursor });
+      // Under the album's owner: memberships only ever point at the owner's photos.
       const photos = await repos.photos.getMany(
-        userId,
+        album.ownerId,
         page.items.map((membership) => membership.photoId),
       );
       const byId = new Map(photos.map((photo) => [photo.photoId, photo]));
@@ -96,7 +104,9 @@ export function albumRoutes(app: Hono<AppEnv>, { repos }: Deps): void {
         // A photo being deleted can briefly outlive its membership; skip it.
         items: page.items.flatMap((membership) => {
           const photo = byId.get(membership.photoId);
-          return photo ? [toPhoto(photo)] : [];
+          if (!photo) return [];
+          if (!shared) return [toPhoto(photo)];
+          return isVisibleToRecipient(photo) ? [toSharedPhoto(photo)] : [];
         }),
         nextCursor: page.nextCursor,
       };

@@ -1,5 +1,6 @@
 import {
   DOWNLOAD_URL_TTL_SECONDS,
+  downloadUrlQuerySchema,
   extensionFor,
   idSchema,
   listPhotosQuerySchema,
@@ -19,6 +20,7 @@ import type { AppEnv } from "../env";
 import { AppError, orNotFound } from "../lib/errors";
 import { validate } from "../lib/validation";
 import type { Deps } from ".";
+import { sharedPhoto } from "./access";
 import { toPhoto } from "./present";
 
 const photoParam = z.object({ photoId: idSchema });
@@ -104,25 +106,34 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, config }: Deps)
   });
 
   /**
-   * Download of an own original under its file name (FR-DL-1/2): 5-min pre-signed GET with
-   * `Content-Disposition: attachment`, so the browser fetches it straight from S3. Shared-album
-   * recipients get access with 5.13.
+   * Download of an original under its file name (FR-DL-1/2): 5-min pre-signed GET with
+   * `Content-Disposition: attachment`, so the browser fetches it straight from S3. Own photos, or
+   * with `?albumId=` a photo in that album if it is shared with the caller (5.13).
    */
-  app.get("/photos/:photoId/download-url", validate("param", photoParam), async (c) => {
-    const { photoId } = c.req.valid("param");
-    const record = orNotFound(await repos.photos.get(c.get("userId"), photoId), "Photo not found");
-    // Until the upload is processed there may be no original yet. Failed photos keep theirs.
-    if (record.status === "pending") {
-      throw new AppError(409, "CONFLICT", "This photo has not been uploaded yet");
-    }
-    const expiresAt = new Date(Date.now() + DOWNLOAD_URL_TTL_SECONDS * 1000).toISOString();
-    const url = await storage.createDownloadUrl({
-      key: record.originalKey,
-      fileName: record.fileName,
-    });
-    const body: DownloadUrlResponse = { url, expiresAt };
-    return c.json(body);
-  });
+  app.get(
+    "/photos/:photoId/download-url",
+    validate("param", photoParam),
+    validate("query", downloadUrlQuerySchema),
+    async (c) => {
+      const userId = c.get("userId");
+      const { photoId } = c.req.valid("param");
+      const { albumId } = c.req.valid("query");
+      const own = await repos.photos.get(userId, photoId);
+      const shared = !own && albumId ? await sharedPhoto(repos, userId, albumId, photoId) : null;
+      const record = orNotFound(own ?? shared, "Photo not found");
+      // Until the upload is processed there may be no original yet. Failed photos keep theirs.
+      if (record.status === "pending") {
+        throw new AppError(409, "CONFLICT", "This photo has not been uploaded yet");
+      }
+      const expiresAt = new Date(Date.now() + DOWNLOAD_URL_TTL_SECONDS * 1000).toISOString();
+      const url = await storage.createDownloadUrl({
+        key: record.originalKey,
+        fileName: record.fileName,
+      });
+      const body: DownloadUrlResponse = { url, expiresAt };
+      return c.json(body);
+    },
+  );
 
   /**
    * Deletes an own photo (FR-DEL-1): original, thumb and preview, then the item, its album

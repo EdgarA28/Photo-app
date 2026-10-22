@@ -22,8 +22,9 @@ export interface UserDirectory {
   /** null if the user no longer exists in the pool. */
   getProfile(userId: string): Promise<UserProfile | null>;
   /**
-   * The registered user with this email, for sharing (FR-SHR-1). `email` must already be
-   * normalised (trimmed, lowercase). null if nobody who can sign in has it.
+   * The registered user with this verified email, for sharing (FR-SHR-1). `email` must already
+   * be normalised (trimmed, lowercase). null if nobody who can sign in has it verified, or if
+   * several users do.
    */
   findByEmail(email: string): Promise<DirectoryUser | null>;
 }
@@ -60,18 +61,24 @@ export function cognitoUserDirectory(
           UserPoolId: userPoolId,
           Filter: `email = "${email}"`,
           // Pre-sign-up linking (4.5) keeps one user per email; a few more cover the leftovers
-          // below (unconfirmed sign-ups, disabled users).
+          // skipped below.
           Limit: 10,
         }),
       );
+      const matches = new Set<string>();
       for (const user of output.Users ?? []) {
-        // Unconfirmed sign-ups haven't proved they own the address, and neither they nor
-        // disabled users can sign in to see the album.
+        // Unconfirmed sign-ups and disabled users can't sign in to see the album.
         if (user.Enabled === false || user.UserStatus === "UNCONFIRMED") continue;
-        const sub = user.Attributes?.find((a) => a.Name === "sub")?.Value;
-        if (sub && isUserId(sub)) return { userId: sub, email };
+        const attribute = (name: string) => user.Attributes?.find((a) => a.Name === name)?.Value;
+        // Only a verified address proves the user owns it: an unverified one may have been set
+        // by its holder to someone else's email, to receive the shares meant for them.
+        if (attribute("email_verified") !== "true") continue;
+        const sub = attribute("sub");
+        if (sub && isUserId(sub)) matches.add(sub);
       }
-      return null;
+      // Pre-sign-up linking (4.5) should make this impossible; never guess between two people.
+      if (matches.size !== 1) return null;
+      return { userId: [...matches][0]!, email };
     },
   };
 }
