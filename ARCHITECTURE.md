@@ -473,6 +473,8 @@ On-demand, `PK`/`SK` strings, one GSI `GSI1` (`GSI1PK`/`GSI1SK`, projection ALL)
 | Album membership | `ALBUM#{albumId}` | `PHOTO#{photoId}` | — | — | — |
 | Album share | `ALBUM#{albumId}` | `SHARE#{userId}` | `SHAREDWITH#{userId}` | `ALBUM#{albumId}` | `AlbumShare`, `SharedAlbum` |
 | Usage | `USER#{userId}` | `USAGE` | — | — | `Usage` |
+| Profile 📋 (5.15) | `USER#{userId}` | `PROFILE` | — | — | `username` in `Me`, `AlbumShare`, `SharedAlbum.ownerUsername` |
+| Username claim 📋 (5.15) | `USERNAME#{username}` | `USERNAME` | — | — | — (uniqueness; lookup for sharing) |
 
 Access patterns and the "can user X see photo P" rule: see spec §8.2.
 
@@ -537,6 +539,7 @@ Contracts exist (✅ in `packages/shared`). Implemented routes are marked ✅ be
 | `POST` | `/session/media-cookie` | — | `mediaCookieResponseSchema` |
 | `DELETE` | `/session/media-cookie` | — | none (`204`, expires the cookies; logout, FR-AUTH-5) |
 | `GET` | `/me` ✅ | — | `meResponseSchema` (200) |
+| `PUT` | `/me/username` 📋 (5.15) | `setUsernameRequestSchema` | `{username}` (200) |
 | `POST` | `/photos/upload-url` ✅ | `uploadUrlRequestSchema` | `uploadUrlResponseSchema` (201) |
 | `GET` | `/photos` ✅ | `listPhotosQuerySchema` (query) | `photoPageSchema` (200) |
 | `GET` | `/photos/{photoId}` ✅ | — | `photoSchema` (200) |
@@ -830,3 +833,4 @@ Not started. Target design: spec §12 (TanStack Router file routes with an authe
 | 2026-10-22 | Routes 5.8 `GET /photos/{id}/download-url` and 5.9 `DELETE /photos/{id}`: `PhotoStorage.createDownloadUrl`/`deleteObjects`, `attachmentDisposition`, response conventions and delete order (§9), `api` role permissions (§9), §10.4/§10.5 status, download-URL security row. `@aws-sdk/s3-request-presigner` added; all AWS SDK packages moved to 3.1155.0. |
 | 2026-10-22 | Sharing 5.12: `/albums/{id}/shares` (list, share by email, revoke) and `GET /shared-albums` in `routes/shares.ts`; `UserDirectory.findByEmail` (Cognito `ListUsers` by email), `shares.create` (transaction with album `ConditionCheck`, replaces `put`), `albums.getMany`, `toSharedAlbum`. Conventions (§9), share item (§8.2), §10.6 status, tenant-isolation row. |
 | 2026-10-22 | 5.13 recipient read access: `routes/access.ts` (`albumAccess`, `sharedPhoto`), `GET /albums/{id}/photos` for recipients (ready photos, null image URLs, `toSharedPhoto`), `?albumId=` on the download URL (`downloadUrlQuerySchema`). Security review fix to 5.12: email lookup requires `email_verified` and a unique match. §9 conventions, §10.4/§10.6 status, tenant-isolation row. |
+| 2026-10-22 | Planned 5.15 (spec v0.4): Profile and Username claim items (§8.2) and `PUT /me/username` (§9) added as 📋. |

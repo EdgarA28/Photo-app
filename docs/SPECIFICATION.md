@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Version** | 0.3 |
-| **Date** | 2026-10-20 |
+| **Version** | 0.4 |
+| **Date** | 2026-10-22 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
 
@@ -258,6 +258,7 @@ IDs are stable — reference them in issues, PRs and tests.
 | FR-SHR-2 | Owners can revoke a share at any time. |
 | FR-SHR-3 | Users see albums shared with them in a separate "Shared with me" section. |
 | FR-SHR-4 | Recipients can view and download, but not modify, delete or re-share. |
+| FR-SHR-5 | Owners can also share with a user by their username instead of their email; sharing by username never reveals the recipient's email to the owner. |
 
 ### 6.6 Account & quota
 
@@ -265,6 +266,7 @@ IDs are stable — reference them in issues, PRs and tests.
 |---|---|
 | FR-ACC-1 | Users can see their storage usage and quota. |
 | FR-ACC-2 | Default quota: 10 GB per user (configurable per environment and per user). |
+| FR-ACC-3 | Users can choose a unique username (optional, changeable). 3–30 characters `a-z 0-9 . _`, starting and ending with a letter or digit, compared case-insensitively; reserved names are refused. A released username stays held for its former owner for 30 days (D-8). |
 
 ### 6.7 PWA
 
@@ -346,6 +348,8 @@ Initial design; refine during implementation.
 | Album membership | `ALBUM#{albumId}` | `PHOTO#{photoId}` | — | — | ownerId, addedAt |
 | Album share | `ALBUM#{albumId}` | `SHARE#{userId}` | `SHAREDWITH#{userId}` | `ALBUM#{albumId}` | ownerId, sharedAt |
 | Usage | `USER#{userId}` | `USAGE` | — | — | bytesUsed, photoCount, quotaBytes |
+| Profile | `USER#{userId}` | `PROFILE` | — | — | username, usernameChangedAt |
+| Username claim | `USERNAME#{username}` | `USERNAME` | — | — | userId, claimedAt; when released: releasedAt, heldUntil |
 
 Access patterns:
 
@@ -357,6 +361,8 @@ Access patterns:
 | Photos in album | `PK = ALBUM#{albumId}, SK begins_with PHOTO#` |
 | Who an album is shared with | `PK = ALBUM#{albumId}, SK begins_with SHARE#` |
 | Albums shared with me | GSI1: `GSI1PK = SHAREDWITH#{id}` |
+| User by username | `PK = USERNAME#{username}, SK = USERNAME` (ignored while `heldUntil` is set) |
+| My username | `PK = USER#{id}, SK = PROFILE` |
 | Can user X see photo P? | Owner check, else any share of an album containing P (resolved via album membership + share) |
 
 `takenAt` = EXIF `DateTimeOriginal`, falling back to upload time.
@@ -375,7 +381,8 @@ Access patterns:
 |---|---|---|
 | `POST` | `/session/media-cookie` | Set CloudFront signed cookies for `/users/{userId}/*` |
 | `DELETE` | `/session/media-cookie` | Expire the media cookies (logout); `204`, idempotent |
-| `GET` | `/me` | Profile, usage and quota |
+| `GET` | `/me` | Profile (incl. `username`), usage and quota |
+| `PUT` | `/me/username` | Set or change own username `{username}`; `409 USERNAME_TAKEN` if someone else has it |
 | `POST` | `/photos/upload-url` | Body `{fileName, contentType, sizeBytes}` → `{photoId, upload: {url, fields}}`; creates `pending` item, checks quota |
 | `GET` | `/photos` | List own photos `?cursor&limit&sort` |
 | `GET` | `/photos/{photoId}` | Photo metadata |
@@ -389,7 +396,7 @@ Access patterns:
 | `POST` | `/albums/{albumId}/photos` | Add photos `{photoIds: []}` |
 | `DELETE` | `/albums/{albumId}/photos/{photoId}` | Remove photo from album |
 | `GET` | `/albums/{albumId}/shares` | List shares (owner only) |
-| `POST` | `/albums/{albumId}/shares` | Share with `{email}` |
+| `POST` | `/albums/{albumId}/shares` | Share with `{email}` or `{username}` |
 | `DELETE` | `/albums/{albumId}/shares/{userId}` | Revoke share |
 | `GET` | `/shared-albums` | Albums shared with me |
 
@@ -694,6 +701,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | D-5 | Default prod quota | 5 / 10 / 20 GB | 10 GB |
 | D-6 | Photo bucket versioning in prod | On (safer, costs more) · off | On, noncurrent versions expire after 30 days |
 | D-7 | Thumbnail format | JPEG · WebP · AVIF | JPEG (universal); revisit WebP later |
+| D-8 | Released usernames | Free at once · held 30 days for the former owner | Held 30 days: new shares typed with an old name can't reach a newcomer who grabbed it |
 
 ---
 
@@ -701,6 +709,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 
 | Version | Date | Changes |
 |---|---|---|
+| 0.4 | 2026-10-22 | Usernames: FR-ACC-3 (unique, optional, changeable), FR-SHR-5 (share by username); Profile + Username claim items and access patterns (§8.2); `PUT /me/username`, `username` in `GET /me`, share by `{username}` (§9); D-8 (held names) |
 | 0.3 | 2026-10-20 | `DELETE /session/media-cookie` for logout (FR-AUTH-5: `HttpOnly` cookies can't be cleared by JS); logout flow (§5.2); media cookie attributes and non-revocability (§9) |
 | 0.2 | 2026-10-19 | Bootstrap details: one budget for the organization, CI role permissions and trust (§3, §14.1); region changed to us-east-1; separate dev/prod AWS accounts + management account; one state bucket per account; org-wide budget $5/month; client-side state encryption deferred |
 | 0.1 | 2026-10-18 | Initial specification: architecture, stack (React + TanStack, TypeScript API, Python thumbnails, OpenTofu, GitHub Actions), multi-user model, Google login, PWA |
