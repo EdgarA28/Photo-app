@@ -1,10 +1,40 @@
 import { z } from "zod";
-import { PAGE_LIMIT_DEFAULT, PAGE_LIMIT_MAX } from "../constants";
+import {
+  PAGE_LIMIT_DEFAULT,
+  PAGE_LIMIT_MAX,
+  RESERVED_USERNAMES,
+  USERNAME_MAX_LENGTH,
+  USERNAME_MIN_LENGTH,
+} from "../constants";
 import { ULID_REGEX } from "../ids";
 
 export const idSchema = z.string().regex(ULID_REGEX, "Invalid ID");
 export const userIdSchema = z.uuid();
 export const isoDateTimeSchema = z.iso.datetime();
+
+const USERNAME_REGEX = new RegExp(
+  `^[a-z0-9][a-z0-9._]{${USERNAME_MIN_LENGTH - 2},${USERNAME_MAX_LENGTH - 2}}[a-z0-9]$`,
+);
+
+/**
+ * A username (FR-ACC-3), normalised before validating: trimmed, one leading `@` dropped
+ * (`@Ana_R` → `ana_r`), lowercased. ASCII only, so lookalike letters from other scripts can't
+ * imitate someone else's name.
+ */
+export const usernameSchema = z
+  .string()
+  .trim()
+  .transform((name) => name.replace(/^@/, "").toLowerCase())
+  .pipe(
+    z
+      .string()
+      .regex(
+        USERNAME_REGEX,
+        `${USERNAME_MIN_LENGTH}-${USERNAME_MAX_LENGTH} characters: a-z, 0-9, "." and "_", starting and ending with a letter or digit`,
+      )
+      .refine((name) => !name.includes(".."), "No consecutive dots")
+      .refine((name) => !RESERVED_USERNAMES.includes(name), "This username is reserved"),
+  );
 
 /** Opaque cursor (encoded DynamoDB LastEvaluatedKey). */
 export const cursorSchema = z.string().min(1).max(2048);

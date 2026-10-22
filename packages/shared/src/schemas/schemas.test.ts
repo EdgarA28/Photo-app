@@ -6,6 +6,8 @@ import {
   createAlbumRequestSchema,
   createShareRequestSchema,
   downloadUrlQuerySchema,
+  setUsernameRequestSchema,
+  usernameSchema,
   listPhotosQuerySchema,
   photoSchema,
   updateAlbumRequestSchema,
@@ -115,6 +117,52 @@ describe("album schemas", () => {
       email: "friend@example.com",
     });
     expect(createShareRequestSchema.safeParse({ email: "not-an-email" }).success).toBe(false);
+  });
+
+  test("share by username; exactly one of email or username (FR-SHR-5)", () => {
+    expect(createShareRequestSchema.parse({ username: "@Ana_R" })).toEqual({ username: "ana_r" });
+    expect(createShareRequestSchema.safeParse({}).success).toBe(false);
+    expect(createShareRequestSchema.safeParse({ email: "a@b.co", username: "ana_r" }).success).toBe(
+      false,
+    );
+    expect(createShareRequestSchema.safeParse({ username: "a" }).success).toBe(false);
+  });
+});
+
+describe("usernameSchema (FR-ACC-3)", () => {
+  const ok = (input: string) => usernameSchema.safeParse(input);
+
+  test.each([
+    ["ana", "ana"],
+    ["  @Ana_R ", "ana_r"],
+    ["ana.photos", "ana.photos"],
+    ["a_b", "a_b"],
+    ["007", "007"],
+    ["a".repeat(30), "a".repeat(30)],
+  ])("accepts %j as %j", (input, expected) => {
+    expect(usernameSchema.parse(input)).toBe(expected);
+  });
+
+  test.each([
+    ["ab", "too short"],
+    ["a".repeat(31), "too long"],
+    [".ana", "starts with a dot"],
+    ["ana_", "ends with an underscore"],
+    ["an..a", "consecutive dots"],
+    ["ana r", "space"],
+    ["ana-r", "hyphen"],
+    ["@@ana", "two @"],
+    ["аna", "Cyrillic а"],
+    ["anä", "non-ASCII"],
+    ["admin", "reserved"],
+    ["@Support", "reserved after normalising"],
+  ])("rejects %j (%s)", (input) => {
+    expect(ok(input).success).toBe(false);
+  });
+
+  test("set-username request", () => {
+    expect(setUsernameRequestSchema.parse({ username: "Ana" })).toEqual({ username: "ana" });
+    expect(setUsernameRequestSchema.safeParse({}).success).toBe(false);
   });
 });
 

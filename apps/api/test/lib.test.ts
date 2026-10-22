@@ -4,6 +4,7 @@ import { DeleteObjectsCommand, S3Client } from "@aws-sdk/client-s3";
 import { DOWNLOAD_URL_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS } from "@photo-app/shared";
 import { describe, expect, test, vi } from "vitest";
 import { loadConfig } from "../src/lib/config";
+import { conditionFailedAt, isTransactionConflict } from "../src/repo/db";
 import { attachmentDisposition, s3PhotoStorage } from "../src/lib/storage";
 import { cognitoUserDirectory } from "../src/lib/users";
 
@@ -235,5 +236,27 @@ describe("attachmentDisposition (FR-DL-2)", () => {
     ["x\ud800.jpg", `attachment; filename="x_.jpg"; filename*=UTF-8''x%EF%BF%BD.jpg`],
   ])("%s", (name, expected) => {
     expect(attachmentDisposition(name)).toBe(expected);
+  });
+});
+
+describe("transaction failure helpers", () => {
+  const cancelled = (...codes: string[]) =>
+    Object.assign(new Error("cancelled"), {
+      name: "TransactionCanceledException",
+      CancellationReasons: codes.map((Code) => ({ Code })),
+    });
+
+  test("isTransactionConflict: only conflicts, no failed condition", () => {
+    expect(isTransactionConflict(cancelled("None", "TransactionConflict"))).toBe(true);
+    expect(isTransactionConflict(cancelled("ConditionalCheckFailed", "TransactionConflict"))).toBe(
+      false,
+    );
+    expect(isTransactionConflict(cancelled("ConditionalCheckFailed"))).toBe(false);
+    expect(isTransactionConflict(new Error("TransactionConflict"))).toBe(false);
+  });
+
+  test("conditionFailedAt: the reason at that index", () => {
+    expect(conditionFailedAt(cancelled("None", "ConditionalCheckFailed"), 1)).toBe(true);
+    expect(conditionFailedAt(cancelled("None", "ConditionalCheckFailed"), 0)).toBe(false);
   });
 });

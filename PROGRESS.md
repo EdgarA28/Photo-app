@@ -15,7 +15,7 @@
 
 | | |
 |---|---|
-| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.13 (incl. 5.6a/b) done (all API routes except media cookies), 6.1–6.7 done (thumbnail code) → next: 5.14/6.12 (small) or Phase 4 (auth) |
+| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.13 + 5.15 (incl. 5.6a/b) done (all API routes except media cookies, incl. usernames), 6.1–6.7 done (thumbnail code) → next: 5.14/6.12 (small) or Phase 4 (auth) |
 | **Last updated** | 2026-10-22 |
 | **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
@@ -120,10 +120,10 @@
 - [x] **5.12** Sharing: `GET/POST /albums/{id}/shares`, `DELETE …/shares/{userId}`, `GET /shared-albums`; lookup user by email in Cognito (FR-SHR-1..4)
 - [x] **5.13** Access check "can user X see photo P" for shared albums (§8.2)
 - [ ] **5.14** Tenant-isolation test suite: every route with another user's IDs → 404
-- [ ] **5.15** Usernames + share by username (FR-ACC-3, FR-SHR-5, spec v0.4 §8.2/§9, D-8). No AWS resources (same table, no new index)
-  - [ ] **Shared package:** `usernameSchema` (trim, strip one leading `@`, lowercase, then `^[a-z0-9](?:[a-z0-9._]{1,28}[a-z0-9])$`, no `..`, not in `RESERVED_USERNAMES`: admin, administrator, root, support, help, security, system, api, www, mail, photoapp, photo-app, me, null, undefined, anonymous); constants `USERNAME_MIN/MAX_LENGTH` (3/30), `USERNAME_HOLD_DAYS` (30); error code `USERNAME_TAKEN`; `setUsernameRequestSchema {username}`; `meResponseSchema.username: string|null`; `createShareRequestSchema` = exactly one of `{email}` / `{username}`; `albumShareSchema` → `{userId, email: string|null, username: string|null, sharedAt}`; `sharedAlbumSchema` + `ownerUsername: string|null`. Schema tests (valid, too short/long, bad chars, `..`, edges `.`/`_`, reserved, `@Ana_R` → `ana_r`)
-  - [ ] **Keys:** `usernamePk(name)` = `USERNAME#{name}`, `USERNAME_SK` = `USERNAME`, `PROFILE_SK` = `PROFILE`
-  - [ ] **Repository `usernames`:**
+- [x] **5.15** Usernames + share by username (FR-ACC-3, FR-SHR-5, spec v0.4 §8.2/§9, D-8). No AWS resources (same table, no new index)
+  - [x] **Shared package:** `usernameSchema` (trim, strip one leading `@`, lowercase, then `^[a-z0-9](?:[a-z0-9._]{1,28}[a-z0-9])$`, no `..`, not in `RESERVED_USERNAMES`: admin, administrator, root, support, help, security, system, api, www, mail, photoapp, photo-app, me, null, undefined, anonymous); constants `USERNAME_MIN/MAX_LENGTH` (3/30), `USERNAME_HOLD_DAYS` (30); error code `USERNAME_TAKEN`; `setUsernameRequestSchema {username}`; `meResponseSchema.username: string|null`; `createShareRequestSchema` = exactly one of `{email}` / `{username}`; `albumShareSchema` → `{userId, email: string|null, username: string|null, sharedAt}`; `sharedAlbumSchema` + `ownerUsername: string|null`. Schema tests (valid, too short/long, bad chars, `..`, edges `.`/`_`, reserved, `@Ana_R` → `ana_r`)
+  - [x] **Keys:** `usernamePk(name)` = `USERNAME#{name}`, `USERNAME_SK` = `USERNAME`, `PROFILE_SK` = `PROFILE`
+  - [x] **Repository `usernames`:**
     - `getProfile(userId)` → `{username, usernameChangedAt}` or null.
     - `findUser(username)` → userId, or null when missing or held (`heldUntil` set).
     - `getMany(userIds)` → Map of userId → username (BatchGet profiles; for share lists and shared albums).
@@ -131,19 +131,19 @@
       1. Put the claim `{userId, claimedAt}`, condition: `attribute_not_exists(PK) OR userId = :me OR heldUntil < :now` (free, own held name, or hold expired).
       2. Put the profile `{username, usernameChangedAt}`, condition: the profile's username is still the one read before (concurrent renames).
       3. On a rename, update the old claim: `SET releasedAt = :now, heldUntil = :now + 30 d`, condition: `userId = :me`.
-      Claim condition fails → `"taken"`; profile condition fails → re-read and retry (max 3).
-  - [ ] **Routes:**
+      Claim condition fails → `"taken"`; profile condition fails or `TransactionConflict` → re-read and retry (max 5).
+  - [x] **Routes:**
     - `GET /me` adds `username`.
     - `PUT /me/username` → 200 `{username}`. Invalid or reserved → 400 `VALIDATION_ERROR`; someone else's or held for someone else → **409 `USERNAME_TAKEN`**; same as now → 200, no write.
-    - `POST /albums/{id}/shares` with `{username}`: album ownership first (as today), then `usernames.findUser` → none → 404 `SHARE_TARGET_NOT_FOUND`; self → 400. The share item stores `username` instead of `email` (`email` absent), so the owner never learns the recipient's email (FR-SHR-5).
+    - `POST /albums/{id}/shares` with `{username}`: album ownership first (as today), then `usernames.findUser` → none → 404 `SHARE_TARGET_NOT_FOUND`; self → 400. The share item stores no email (and no username: lists show the current one), so the owner never learns the recipient's email (FR-SHR-5).
     - `GET /albums/{id}/shares` shows each recipient's **current** username (via `usernames.getMany`), and `email` only for shares made by email.
     - `GET /shared-albums` adds `ownerUsername` (current, via `getMany`).
-  - [ ] **Tests (DynamoDB Local):**
+  - [x] **Tests (DynamoDB Local):**
     - Claim, rename, take back your own held name, held name refused for others until `heldUntil`, then free.
     - Two users racing for one name: exactly one wins.
     - Share by username (case-insensitive, with `@`); unknown or held name → `SHARE_TARGET_NOT_FOUND`; non-owner album → 404 before the lookup.
     - Share list hides email for username shares; a rename shows up in share lists and shared albums.
-  - [ ] **Docs:** ARCHITECTURE §7.4 schemas, §8.2 items, §9 conventions + API table, changelog
+  - [x] **Docs:** ARCHITECTURE §7.4 schemas, §8.2 items, §9 conventions + API table, changelog
   - Frontend follow-ups (Phase 8): "choose a username" step after first login (skippable), username field in settings (8.13), share dialog accepts `@username` or an email (8.12), "Shared by @name" in Shared with me
 
 ## Phase 6 — Thumbnail service (`services/thumbnails`, §10)
@@ -266,6 +266,7 @@
 | 2026-10-22 | **Sharing (5.12):** share = owner-only management; ownership checked before the email lookup (no registered-email oracle for non-owners; owners can still tell, inherent to FR-SHR-1). Re-sharing → 200 with the original share (`sharedAt` kept), new → 201. Unknown email → 404 `SHARE_TARGET_NOT_FOUND`, own email → 400. Cognito lookup ignores `UNCONFIRMED` and disabled users. Shared album covers are `null` until 7.4. **Verify in 4.6:** the `ListUsers` `email =` filter is matched against the stored attribute; we search with the lowercased address, so Cognito must store emails lowercase (check native sign-up with mixed case and Google users). |
 | 2026-10-22 | **Shared access (5.13):** recipients reach a photo only via `?albumId=` (share → membership → photo under the share's owner); no global photo-by-ID index. Recipients see `ready` photos only (pending/failed → hidden, 404 on download); image URLs null until 7.4. Recipients download originals with EXIF/GPS (FR-DL-1 says originals; worth a note in the share UI, 8.12). **Security review of 5.12:** a user could set an unverified email equal to someone else's and receive their shares → lookup now requires `email_verified = "true"` and exactly one match; pool must require verification before email updates (4.1) and map Google `email_verified` (4.4). |
 | 2026-10-22 | **Usernames (5.15, spec v0.4):** optional, unique, changeable usernames as an alternative way to share (FR-ACC-3, FR-SHR-5). Kept in DynamoDB (claim item `USERNAME#{name}` for uniqueness + profile item), **not** Cognito `preferred_username` (its uniqueness needs alias sign-in, fixed at pool creation, and would make it a login name). Released names held 30 days for the former owner (D-8). Shares by username store no email, so the owner doesn't learn it. Email sharing stays. |
+| 2026-10-22 | **5.15 as built:** share items made by username store neither email nor username (lists read the current name from the profile, so nothing goes stale). Username transactions retry on `TransactionConflict` (concurrent transactions on the same items; DynamoDB Local doesn't reproduce it reliably). Not done: rename cooldown, so a user can hold several names by renaming repeatedly (each held 30 days); add a limit if squatting becomes a problem. |
 | 2026-10-21 | Abandoned uploads: planned 5.6a (reuse `photoId` on retry) + 6.11 (daily sweeper for stale `pending` items); TTL rejected (blind to files that arrived but failed processing, leaves album memberships dangling). |
 
 ## Session log
@@ -295,3 +296,4 @@
 | 2026-10-22 | API routes 5.8 `GET /photos/{id}/download-url` and 5.9 `DELETE /photos/{id}` (`PhotoStorage.createDownloadUrl`/`deleteObjects`, `@aws-sdk/s3-request-presigner`). 178 TS tests pass; lint/typecheck/format/build clean. Nothing deployed. |
 | 2026-10-22 | API 5.12 sharing: `GET/POST /albums/{id}/shares`, `DELETE …/shares/{userId}`, `GET /shared-albums` (`routes/shares.ts`, `UserDirectory.findByEmail`, `shares.create`, `albums.getMany`). 201 TS tests pass; lint/typecheck/format/build clean. Nothing deployed. |
 | 2026-10-22 | API 5.13 recipient read access (`routes/access.ts`, `?albumId=` on download URL); security-review fix to 5.12 (verified, unique email match). 216 TS tests pass; lint/typecheck/format/build clean. Nothing deployed. |
+| 2026-10-22 | API 5.15 usernames + share by username (`repo/usernames.ts`, `PUT /me/username`, shared schemas). 254 tests pass (188 API, 66 shared); lint/typecheck/format/build clean. Nothing deployed. |

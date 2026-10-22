@@ -34,6 +34,32 @@ export const PAGE_LIMIT_MAX = 200;
 export const MAX_ALBUM_NAME_LENGTH = 100;
 export const MAX_PHOTOS_PER_ALBUM_REQUEST = 100;
 
+/** Usernames (FR-ACC-3). */
+export const USERNAME_MIN_LENGTH = 3;
+export const USERNAME_MAX_LENGTH = 30;
+/** How long a released username stays held for its former owner (D-8). */
+export const USERNAME_HOLD_DAYS = 30;
+/** Names nobody can claim: they could pass for the app or its staff. */
+export const RESERVED_USERNAMES: readonly string[] = [
+  "admin",
+  "administrator",
+  "anonymous",
+  "api",
+  "help",
+  "mail",
+  "me",
+  "null",
+  "photo.app",
+  "photo_app",
+  "photoapp",
+  "root",
+  "security",
+  "support",
+  "system",
+  "undefined",
+  "www",
+];
+
 /** URL / cookie lifetimes in seconds (§9). */
 export const UPLOAD_URL_TTL_SECONDS = 15 * 60;
 export const DOWNLOAD_URL_TTL_SECONDS = 5 * 60;

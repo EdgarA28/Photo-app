@@ -46,6 +46,7 @@ describe("GET /me (FR-ACC-1, FR-ACC-2)", () => {
       userId: user,
       email: "ada@example.com",
       name: "Ada",
+      username: null,
       usage: { bytesUsed: 0, photoCount: 0, quotaBytes: TEST_DEFAULT_QUOTA },
     });
   });

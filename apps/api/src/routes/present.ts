@@ -48,6 +48,15 @@ export function toSharedPhoto(record: PhotoRecord): Photo {
  * An album as its share recipient sees it (FR-SHR-3). The cover is the owner's photo, which the
  * recipient's media cookie doesn't cover: `coverThumbUrl` stays null until signed URLs (7.4).
  */
-export function toSharedAlbum(album: AlbumRecord, share: ShareRecord): SharedAlbum {
-  return { ...toAlbum(album, null), ownerId: album.ownerId, sharedAt: share.sharedAt };
+export function toSharedAlbum(
+  album: AlbumRecord,
+  share: ShareRecord,
+  ownerUsername: string | null,
+): SharedAlbum {
+  return {
+    ...toAlbum(album, null),
+    ownerId: album.ownerId,
+    ownerUsername,
+    sharedAt: share.sharedAt,
+  };
 }

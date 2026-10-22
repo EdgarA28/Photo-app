@@ -9,6 +9,7 @@ export const errorCodes = [
   "PAYLOAD_TOO_LARGE",
   "CONFLICT",
   "SHARE_TARGET_NOT_FOUND",
+  "USERNAME_TAKEN",
   "RATE_LIMITED",
   "INTERNAL_ERROR",
 ] as const;

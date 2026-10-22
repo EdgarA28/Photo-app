@@ -26,8 +26,11 @@ export interface ShareRecord {
   ownerId: string;
   /** Recipient's Cognito `sub`. */
   userId: string;
-  /** Recipient's email at share time, for the owner's share list. */
-  email: string;
+  /**
+   * Recipient's email at share time, for the owner's share list. Absent for shares made by
+   * username, so the owner never learns it (FR-SHR-5).
+   */
+  email?: string;
   sharedAt: string;
 }
 

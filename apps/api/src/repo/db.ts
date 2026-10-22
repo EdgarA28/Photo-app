@@ -134,6 +134,19 @@ export function conditionFailedAt(err: unknown, index: number): boolean {
   return reasons?.[index]?.Code === "ConditionalCheckFailed";
 }
 
+/**
+ * True if a TransactWriteItems failure was only a clash with another transaction on the same
+ * items (no condition failed): safe to retry.
+ */
+export function isTransactionConflict(err: unknown): boolean {
+  if (!(err instanceof Error) || err.name !== "TransactionCanceledException") return false;
+  const reasons = (err as { CancellationReasons?: { Code?: string }[] }).CancellationReasons ?? [];
+  return (
+    reasons.some((r) => r.Code === "TransactionConflict") &&
+    !reasons.some((r) => r.Code === "ConditionalCheckFailed")
+  );
+}
+
 export function isConditionalCheckFailed(err: unknown): boolean {
   return err instanceof Error && err.name === "ConditionalCheckFailedException";
 }

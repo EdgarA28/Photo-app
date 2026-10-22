@@ -5,11 +5,14 @@
 
 export const userPk = (userId: string) => `USER#${userId}`;
 export const albumPk = (albumId: string) => `ALBUM#${albumId}`;
+export const usernamePk = (username: string) => `USERNAME#${username}`;
 
 export const photoSk = (photoId: string) => `PHOTO#${photoId}`;
 export const albumSk = (albumId: string) => `ALBUM#${albumId}`;
 export const shareSk = (userId: string) => `SHARE#${userId}`;
 export const USAGE_SK = "USAGE";
+export const PROFILE_SK = "PROFILE";
+export const USERNAME_SK = "USERNAME";
 
 export const PHOTO_SK_PREFIX = "PHOTO#";
 export const ALBUM_SK_PREFIX = "ALBUM#";
@@ -36,6 +39,9 @@ export const shareKey = (albumId: string, userId: string) => ({
   SK: shareSk(userId),
 });
 export const usageKey = (userId: string) => ({ PK: userPk(userId), SK: USAGE_SK });
+export const profileKey = (userId: string) => ({ PK: userPk(userId), SK: PROFILE_SK });
+/** One item per username: the key itself makes names unique (FR-ACC-3). */
+export const usernameKey = (username: string) => ({ PK: usernamePk(username), SK: USERNAME_SK });
 
 /** Key attributes of the table and its index, used to build pagination cursors. */
 export const TABLE_KEY_ATTRIBUTES = ["PK", "SK"] as const;

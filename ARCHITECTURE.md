@@ -47,7 +47,7 @@
 | Environment roots | `infra/envs/{dev,prod}` | 🚧 | Database + storage **deployed in dev**; prod validated only |
 | Infra modules: database, storage | `infra/modules/{database,storage}` | ✅ (dev) | Offline `tofu test` suites (7 runs) |
 | Infra modules: auth, api, thumbnails, frontend | `infra/modules/*` | 📋 | |
-| API Lambda | `apps/api` | 🚧 | Skeleton (5.1–5.3) + routes `GET /me`, `POST /photos/upload-url` (incl. retry), `GET /photos`, `GET /photos/{id}`, `GET /photos/{id}/download-url`, `DELETE /photos/{id}`, album CRUD, album photos, sharing and recipient read access (5.5, 5.6, 5.6a/b, 5.7–5.13); 171 tests (incl. DynamoDB Local). Media cookies and signed URLs (Phase 7) not yet; not deployed |
+| API Lambda | `apps/api` | 🚧 | Skeleton (5.1–5.3) + routes `GET /me`, `POST /photos/upload-url` (incl. retry), `GET /photos`, `GET /photos/{id}`, `GET /photos/{id}/download-url`, `DELETE /photos/{id}`, album CRUD, album photos, sharing, recipient read access and usernames (5.5, 5.6, 5.6a/b, 5.7–5.13, 5.15); 188 tests (incl. DynamoDB Local). Media cookies and signed URLs (Phase 7) not yet; not deployed |
 | Thumbnail Lambda | `services/thumbnails` | 🚧 | Handler, image pipeline, S3-key mirror + 73 pytest tests (6.1–6.7); not packaged or deployed yet (6.8–6.10) |
 | Auth trigger Lambda | `services/auth-triggers` | 📋 | Folder skeleton only |
 | Web app / PWA | `apps/web` | 📋 | Folder skeleton only |
@@ -254,7 +254,7 @@ Photo-app/
 │       ├── src/app.ts           Hono app: /api base path, body limit, /health, requireUser, error envelope
 │       ├── src/env.ts           Hono env type (Lambda event binding, `userId` variable)
 │       ├── src/lib/             auth.ts (JWT sub), errors.ts (AppError, orNotFound), validation.ts (Zod), log.ts, config.ts, users.ts (Cognito directory: profile by sub, user by email), storage.ts (photo bucket: pre-signed POST, pre-signed download GET, object deletes)
-│       ├── src/repo/            DynamoDB layer: keys, cursor, db helpers, photos, albums, memberships, shares, usage
+│       ├── src/repo/            DynamoDB layer: keys, cursor, db helpers, photos, albums, memberships, shares, usage, usernames
 │       ├── src/routes/          index.ts (Deps, registerRoutes), me.ts, photos.ts, albums.ts, shares.ts, access.ts (shared-album access checks), present.ts (record → API object)
 │       └── test/                Vitest: app/middleware, cursor, config/directory, repositories and routes on DynamoDB Local
 │
@@ -343,6 +343,9 @@ Root commands: `pnpm lint`, `pnpm format[:check]`, `pnpm typecheck`, `pnpm test`
 | `PAGE_LIMIT_DEFAULT` / `PAGE_LIMIT_MAX` | 60 / 200 | §9 |
 | `MAX_ALBUM_NAME_LENGTH` | 100 | — |
 | `MAX_PHOTOS_PER_ALBUM_REQUEST` | 100 | — |
+| `USERNAME_MIN_LENGTH` / `USERNAME_MAX_LENGTH` | 3 / 30 | FR-ACC-3 |
+| `USERNAME_HOLD_DAYS` | 30 | D-8 |
+| `RESERVED_USERNAMES` | admin, administrator, anonymous, api, help, mail, me, null, photo.app, photo_app, photoapp, root, security, support, system, undefined, www | FR-ACC-3 |
 | `UPLOAD_URL_TTL_SECONDS` | 900 (15 min) | §9 |
 | `DOWNLOAD_URL_TTL_SECONDS` | 300 (5 min) | §9 |
 | `SHARED_IMAGE_URL_TTL_SECONDS` | 900 (15 min) | §9 |
@@ -397,7 +400,8 @@ All request/response bodies of §9 as Zod schemas with inferred TS types.
 | `UNSUPPORTED_MEDIA_TYPE` | Content type not allowed |
 | `PAYLOAD_TOO_LARGE` | Over 50 MB |
 | `CONFLICT` | State conflict |
-| `SHARE_TARGET_NOT_FOUND` | No registered user with that email |
+| `SHARE_TARGET_NOT_FOUND` | No registered user with that email or username |
+| `USERNAME_TAKEN` | `PUT /me/username`: someone else has the name, or it is held for its former owner (409) |
 | `RATE_LIMITED` | Throttled |
 | `INTERNAL_ERROR` | Unexpected failure |
 
@@ -424,10 +428,10 @@ All request/response bodies of §9 as Zod schemas with inferred TS types.
 | `createAlbumRequestSchema` | `{ name }`, trimmed, 1–100 |
 | `updateAlbumRequestSchema` | `{ name?, coverPhotoId?: id \| null }`, at least one field; `null` clears cover |
 | `addAlbumPhotosRequestSchema` | `{ photoIds: id[1..100] }` |
-| `albumShareSchema` | `{ userId, email, sharedAt }` |
+| `albumShareSchema` | `{ userId, email\|null, username\|null, sharedAt }`: `email` only for shares made by email (FR-SHR-5), `username` = recipient's current one |
 | `albumShareListSchema` | `{ items: AlbumShare[] }` |
-| `createShareRequestSchema` | `{ email }`, trimmed + lowercased **before** validation |
-| `sharedAlbumSchema` | `Album` + `ownerId, sharedAt` |
+| `createShareRequestSchema` | exactly one of `{ email }` (trimmed + lowercased **before** validation) or `{ username }` (strict objects) |
+| `sharedAlbumSchema` | `Album` + `ownerId, ownerUsername\|null, sharedAt` |
 | `sharedAlbumPageSchema` | `Page<SharedAlbum>` |
 
 **Account (`account.ts`)**
@@ -435,8 +439,11 @@ All request/response bodies of §9 as Zod schemas with inferred TS types.
 | Schema | Shape |
 |---|---|
 | `usageSchema` | `{ bytesUsed, photoCount, quotaBytes }` |
-| `meResponseSchema` | `{ userId, email, name\|null, usage }` |
+| `meResponseSchema` | `{ userId, email, name\|null, username\|null, usage }` |
+| `setUsernameRequestSchema` / `setUsernameResponseSchema` | `{ username }` |
 | `mediaCookieResponseSchema` | `{ expiresAt }` (cookies themselves via `Set-Cookie`) |
+
+`usernameSchema` (`common.ts`, FR-ACC-3): trimmed, one leading `@` dropped, lowercased, then `^[a-z0-9][a-z0-9._]{1,28}[a-z0-9]$`, no `..`, not reserved. ASCII only (no lookalike letters from other scripts).
 
 ### 7.5 Tests
 
@@ -473,8 +480,8 @@ On-demand, `PK`/`SK` strings, one GSI `GSI1` (`GSI1PK`/`GSI1SK`, projection ALL)
 | Album membership | `ALBUM#{albumId}` | `PHOTO#{photoId}` | — | — | — |
 | Album share | `ALBUM#{albumId}` | `SHARE#{userId}` | `SHAREDWITH#{userId}` | `ALBUM#{albumId}` | `AlbumShare`, `SharedAlbum` |
 | Usage | `USER#{userId}` | `USAGE` | — | — | `Usage` |
-| Profile 📋 (5.15) | `USER#{userId}` | `PROFILE` | — | — | `username` in `Me`, `AlbumShare`, `SharedAlbum.ownerUsername` |
-| Username claim 📋 (5.15) | `USERNAME#{username}` | `USERNAME` | — | — | — (uniqueness; lookup for sharing) |
+| Profile | `USER#{userId}` | `PROFILE` | — | — | `username` in `Me`, `AlbumShare`, `SharedAlbum.ownerUsername` |
+| Username claim | `USERNAME#{username}` | `USERNAME` | — | — | — (uniqueness; lookup for sharing) |
 
 Access patterns and the "can user X see photo P" rule: see spec §8.2.
 
@@ -495,7 +502,9 @@ Access patterns and the "can user X see photo P" rule: see spec §8.2.
 | Photo | `entity: "photo"`, `userId`, `photoId`, `originalKey`, `albumIds` (string set: reverse index of album memberships, maintained with each membership change) |
 | Album | `entity: "album"`, `ownerId`, `albumId`, `photoCount` (kept by membership transactions), optional `coverPhotoId` (must be a member; album ownership is checked before membership, so the cover check can't reveal another user's album contents) |
 | Album membership | `entity: "membership"`, `albumId`, `photoId`, `ownerId`, `addedAt` |
-| Album share | `entity: "share"`, `albumId`, `ownerId`, `userId` (recipient), `email`, `sharedAt`. Created in one transaction with a `ConditionCheck` that the owner's album exists, and only if the share doesn't exist yet (sharing again keeps the first `sharedAt`) |
+| Album share | `entity: "share"`, `albumId`, `ownerId`, `userId` (recipient), `email` (only when shared by email), `sharedAt`. Created in one transaction with a `ConditionCheck` that the owner's album exists, and only if the share doesn't exist yet (sharing again keeps the first `sharedAt`) |
+| Profile | `entity: "profile"`, `userId`, `username`, `usernameChangedAt` |
+| Username claim | `entity: "username"`, `username`, `userId`, `claimedAt`; after a rename `releasedAt`, `heldUntil` (= releasedAt + 30 d). Claim and profile change in **one transaction**: put the new claim if `attribute_not_exists(PK) OR userId = :me OR heldUntil < :now`; put the profile if it still has the name read before; on a rename mark the old claim held (`userId = :me`). New-claim condition fails → taken; profile condition fails or `TransactionConflict` → re-read and retry (max 5). A held claim resolves to nobody; its former owner can take it back |
 | Usage | API writes only `bytesReserved` (reserve on create, release on delete) and the decrements on delete; `quotaBytes` optional per-user override |
 
 - **Membership changes** are one transaction each over membership + photo `albumIds` + album `photoCount`, with conditions (album exists, photo exists = same owner, not already a member; on removal the membership's `ownerId` must be the caller, since membership keys carry no user), so duplicates and retries never double-count and nobody can add to or remove from another user's album. `listMemberships`/`hasPhoto` are not user-scoped: routes must check album ownership or a share first.
@@ -529,6 +538,8 @@ Contracts exist (✅ in `packages/shared`). Implemented routes are marked ✅ be
   - `GET` → `{items}` oldest share first. `DELETE …/shares/{userId}` → 204, not shared → 404.
   - `GET /shared-albums` → GSI1 `SHAREDWITH#{sub}` page (album-ID order), albums read with one BatchGet; a share whose album is gone (album delete removes shares after listing them) is skipped. `coverThumbUrl` is **null** for shared albums until signed URLs (7.4): the owner's thumb path isn't covered by the recipient's media cookie. Shared albums never appear in the recipient's `GET /albums`, and every album mutation stays 404 for them.
 - `GET /albums/{id}/photos` lists in photo upload order (memberships are keyed by the photo ULID; ordering by date taken would need another index, §8.2), for the owner or a share recipient.
+- **Usernames (5.15, FR-ACC-3, D-8):** `PUT /me/username` → 200 `{username}` (normalised); same name again → 200 without a write; someone else's or held for someone else → **409 `USERNAME_TAKEN`**; invalid/reserved → 400. `GET /me` includes `username` (null until set). A rename holds the old name 30 days for its former owner; shares are by user ID, so they survive renames.
+- **Share by username (FR-SHR-5):** `POST /albums/{id}/shares {username}` (with or without `@`, any case) → album ownership first, then the claim lookup; unknown or held name → 404 `SHARE_TARGET_NOT_FOUND`; own name → 400. The share item then has **no email**, and `GET /albums/{id}/shares` returns `email: null` for it, so the owner never learns the recipient's email. Share lists and `GET /shared-albums` (`ownerUsername`) always show **current** usernames (BatchGet of profiles).
 - **Recipient access (5.13, `routes/access.ts`)**, the §8.2 rule "can user X see photo P": another user's album or photo is reachable only through a share item `ALBUM#{albumId} / SHARE#{caller}` (consistent read, so a revoke takes effect at once).
   - Album: own album, else share → album under `share.ownerId`. Recipients see only `ready` photos, with `thumbUrl`/`previewUrl` **null** until signed URLs (7.4).
   - Photo: the caller passes the album it is viewing, `GET /photos/{id}/download-url?albumId=…` (photos have no global by-ID lookup). Own photo first; else share for (album, caller) → membership (album, photo) → photo under `share.ownerId`, `ready` only. Any miss → 404. Without `albumId`, recipients get 404.
@@ -539,7 +550,7 @@ Contracts exist (✅ in `packages/shared`). Implemented routes are marked ✅ be
 | `POST` | `/session/media-cookie` | — | `mediaCookieResponseSchema` |
 | `DELETE` | `/session/media-cookie` | — | none (`204`, expires the cookies; logout, FR-AUTH-5) |
 | `GET` | `/me` ✅ | — | `meResponseSchema` (200) |
-| `PUT` | `/me/username` 📋 (5.15) | `setUsernameRequestSchema` | `{username}` (200) |
+| `PUT` | `/me/username` ✅ | `setUsernameRequestSchema` | `setUsernameResponseSchema` (200) |
 | `POST` | `/photos/upload-url` ✅ | `uploadUrlRequestSchema` | `uploadUrlResponseSchema` (201) |
 | `GET` | `/photos` ✅ | `listPhotosQuerySchema` (query) | `photoPageSchema` (200) |
 | `GET` | `/photos/{photoId}` ✅ | — | `photoSchema` (200) |
@@ -553,7 +564,7 @@ Contracts exist (✅ in `packages/shared`). Implemented routes are marked ✅ be
 | `POST` | `/albums/{albumId}/photos` ✅ | `addAlbumPhotosRequestSchema` | 204 |
 | `DELETE` | `/albums/{albumId}/photos/{photoId}` ✅ | — | 204 |
 | `GET` | `/albums/{albumId}/shares` ✅ | — | `albumShareListSchema` (200) |
-| `POST` | `/albums/{albumId}/shares` ✅ | `createShareRequestSchema` | `albumShareSchema` (201 new, 200 existing) |
+| `POST` | `/albums/{albumId}/shares` ✅ | `createShareRequestSchema` (`{email}` or `{username}`) | `albumShareSchema` (201 new, 200 existing) |
 | `DELETE` | `/albums/{albumId}/shares/{userId}` ✅ | — | 204 |
 | `GET` | `/shared-albums` ✅ | `pageQuerySchema` (query) | `sharedAlbumPageSchema` (200) |
 | `GET` | `/health` ✅ | — | `{status: "ok"}`, no auth |
@@ -834,3 +845,4 @@ Not started. Target design: spec §12 (TanStack Router file routes with an authe
 | 2026-10-22 | Sharing 5.12: `/albums/{id}/shares` (list, share by email, revoke) and `GET /shared-albums` in `routes/shares.ts`; `UserDirectory.findByEmail` (Cognito `ListUsers` by email), `shares.create` (transaction with album `ConditionCheck`, replaces `put`), `albums.getMany`, `toSharedAlbum`. Conventions (§9), share item (§8.2), §10.6 status, tenant-isolation row. |
 | 2026-10-22 | 5.13 recipient read access: `routes/access.ts` (`albumAccess`, `sharedPhoto`), `GET /albums/{id}/photos` for recipients (ready photos, null image URLs, `toSharedPhoto`), `?albumId=` on the download URL (`downloadUrlQuerySchema`). Security review fix to 5.12: email lookup requires `email_verified` and a unique match. §9 conventions, §10.4/§10.6 status, tenant-isolation row. |
 | 2026-10-22 | Planned 5.15 (spec v0.4): Profile and Username claim items (§8.2) and `PUT /me/username` (§9) added as 📋. |
+| 2026-10-22 | 5.15 implemented: `usernames` repository (claim + profile transaction, holds, conflict retry), `PUT /me/username`, `username` in `GET /me`, share by `{username}` without storing the email, current usernames in share lists and `ownerUsername` in shared albums; shared schemas/constants/error code (§7), items (§8.2), conventions and API table (§9). |
