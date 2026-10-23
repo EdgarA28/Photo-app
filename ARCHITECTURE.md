@@ -44,9 +44,9 @@
 | AWS bootstrap — dev | `infra/bootstrap` (ws `dev`) | ✅ | State bucket, GitHub OIDC, CI roles |
 | AWS bootstrap — management | `infra/bootstrap` (ws `general`) | ✅ | Organization-wide $5/month budget |
 | AWS bootstrap — prod | `infra/bootstrap` (ws `prod`) | 📋 | Code ready, plan clean, not applied |
-| Environment roots | `infra/envs/{dev,prod}` | 🚧 | Database + storage **deployed in dev**; auth wired, not applied; prod validated only |
+| Environment roots | `infra/envs/{dev,prod}` | 🚧 | Database + storage + auth **deployed in dev**; prod validated only |
 | Infra modules: database, storage | `infra/modules/{database,storage}` | ✅ (dev) | Offline `tofu test` suites (7 runs) |
-| Infra module: auth | `infra/modules/auth` | 🚧 | User pool, prefix domain (managed login), PKCE web client + 6 offline test runs (4.1); Google IdP (4.4) and pre-sign-up trigger (4.6) to come; not applied |
+| Infra module: auth | `infra/modules/auth` | 🚧 | User pool, prefix domain (managed login), PKCE web client + 6 offline test runs (4.1); Google IdP (4.4) and pre-sign-up trigger (4.6) to come; **deployed in dev** |
 | Infra modules: api, thumbnails, frontend | `infra/modules/*` | 📋 | |
 | API Lambda | `apps/api` | 🚧 | Skeleton (5.1–5.3) + routes `GET /me`, `POST /photos/upload-url` (incl. retry), `GET /photos`, `GET /photos/{id}`, `GET /photos/{id}/download-url`, `DELETE /photos/{id}`, album CRUD, album photos, sharing, recipient read access and usernames (5.5, 5.6, 5.6a/b, 5.7–5.13, 5.15); 223 tests (incl. DynamoDB Local). Media cookies and signed URLs (Phase 7) not yet; not deployed |
 | Thumbnail Lambda | `services/thumbnails` | 🚧 | Handler, image pipeline, S3-key mirror, orphan cleanup + 76 pytest tests (6.1–6.7, 6.12); not packaged or deployed yet (6.8–6.10) |
@@ -279,7 +279,7 @@ Photo-app/
 │   │   ├── {dev,prod,general}.tfvars
 │   │   └── README.md
 │   ├── envs/
-│   │   ├── dev/                 🚧 backend, provider, main.tf (database + storage + auth), env.tfvars; database + storage deployed
+│   │   ├── dev/                 🚧 backend, provider, main.tf (database + storage + auth), env.tfvars; all three deployed
 │   │   └── prod/                🚧 same wiring with prod settings; validated only
 │   └── modules/
 │       ├── database/            ✅ DynamoDB single table (+ tests/)
@@ -755,7 +755,7 @@ Tags on everything: `Project=photo-app`, `Environment=<ws>`, `ManagedBy=opentofu
 | User pool | `photo-app-dev`, deletion protection off | `photo-app-prod`, deletion protection on |
 | Cognito domain | `photo-app-dev-063359189013` | `photo-app-prod-968632140314` |
 
-dev: **deployed 2026-10-19** (9 resources; test resources, destroyed when testing is done). prod: validated with `-backend=false` only.
+dev: **deployed 2026-10-19** (9 resources) + auth **2026-10-23** (4 resources: pool `us-east-1_vYJcHEj4G`, client `jkfonk4j32kup18bl98jqkr67`, domain `https://photo-app-dev-063359189013.auth.us-east-1.amazoncognito.com`); test resources, destroyed when testing is done. prod: validated with `-backend=false` only.
 
 ### 12.3 Modules — `infra/modules`
 
@@ -799,6 +799,7 @@ Not here by design: the S3 → Lambda event notification (one per bucket; `thumb
 Inputs: `environment`, `app_origins` (validated: scheme + host, no path), `deletion_protection` (true). Outputs: `user_pool_id`, `user_pool_arn`, `issuer_url`, `web_client_id`, `domain_url`, `google_redirect_uri`.
 Tests: email sign-in + verification + verified email changes, deletion protection default/off, domain prefix + Google redirect URI, public code-only client with spec scopes and token lifetimes, callback/sign-out URLs, origin validation.
 Not yet: refresh-token rotation (single-use refresh tokens; revisit with the web client, 8.3).
+Verified in dev: `/oauth2/authorize` with PKCE shows the sign-in page; an unlisted redirect URI → `redirect_mismatch`. `email` is stored as entered, but `ListUsers` `email = "…"` matches case-insensitively (`case_sensitive = false`), so the API's lowercased share lookup finds mixed-case addresses.
 
 **Planned 📋**
 
@@ -866,3 +867,4 @@ Not started. Target design: spec §12 (TanStack Router file routes with an authe
 | 2026-10-22 | 5.14 tenant-isolation suite (`test/tenant-isolation.test.ts`); tenant-isolation security row → ✅ code. `createTestApi()` also returns `app`. |
 | 2026-10-22 | 6.12: thumbnail Lambda deletes originals without a Photo item (§10.2 row, §10.5 gap closed); IAM needs `s3:DeleteObject` on `originals/` (6.9). |
 | 2026-10-23 | 4.1: `auth` module (user pool, prefix domain with managed login, public PKCE web client, default branding) + offline tests; wired into `envs/{dev,prod}` with new outputs. Not applied. |
+| 2026-10-23 | 4.2: `auth` applied to dev (IDs in §12.2); email-case behaviour of the Cognito lookup documented. |
