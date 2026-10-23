@@ -50,7 +50,7 @@
 | Infra modules: api, thumbnails, frontend | `infra/modules/*` | 📋 | |
 | API Lambda | `apps/api` | 🚧 | Skeleton (5.1–5.3) + routes `GET /me`, `POST /photos/upload-url` (incl. retry), `GET /photos`, `GET /photos/{id}`, `GET /photos/{id}/download-url`, `DELETE /photos/{id}`, album CRUD, album photos, sharing, recipient read access and usernames (5.5, 5.6, 5.6a/b, 5.7–5.13, 5.15); 223 tests (incl. DynamoDB Local). Media cookies and signed URLs (Phase 7) not yet; not deployed |
 | Thumbnail Lambda | `services/thumbnails` | 🚧 | Handler, image pipeline, S3-key mirror, orphan cleanup + 76 pytest tests (6.1–6.7, 6.12); not packaged or deployed yet (6.8–6.10) |
-| Auth trigger Lambda | `services/auth-triggers` | 📋 | Folder skeleton only |
+| Auth trigger Lambda | `services/auth-triggers` | 🚧 | Pre sign-up handler (Google → native account linking, refuses duplicate email sign-ups) + 23 tests (4.5); not deployed (4.6) |
 | Web app / PWA | `apps/web` | 📋 | Folder skeleton only |
 | CI/CD workflows | `.github/workflows` | 📋 | AWS-side roles exist (dev); no workflows yet |
 
@@ -147,9 +147,9 @@ Versions are what is **installed/locked today**; 📋 rows are chosen but not ye
 | Hono | 4.13.13 | `apps/api` | Lightweight router inside one Lambda (D-1) | ✅ |
 | @hono/aws-lambda | 1.0.0 | `apps/api` | Lambda adapter (API Gateway HTTP API event → Request); replaces the deprecated `hono/aws-lambda` | ✅ |
 | AWS SDK v3 (`client-dynamodb`, `lib-dynamodb`) | 3.1155.0 | `apps/api` | DynamoDB via the DocumentClient; bundled (not the runtime copy) | ✅ |
-| AWS SDK v3 (`client-cognito-identity-provider`) | 3.1155.0 | `apps/api` | Profile lookup by `sub` (`ListUsers`) for `GET /me`; email lookup for sharing (5.12) | ✅ |
+| AWS SDK v3 (`client-cognito-identity-provider`) | 3.1155.0 | `apps/api`, `services/auth-triggers` | API: profile lookup by `sub` (`ListUsers`) for `GET /me`, email lookup for sharing (5.12). Trigger: `ListUsers` by email + `AdminLinkProviderForUser` (4.5) | ✅ |
 | AWS SDK v3 (`client-s3`, `s3-presigned-post`, `s3-request-presigner`) | 3.1155.0 | `apps/api` | Pre-signed upload POST (5.6), pre-signed download GET (5.8), `DeleteObjects` (5.9). All `@aws-sdk/*` packages are kept on one version: mixed versions pull in two `@smithy/core` copies and the client types stop matching | ✅ |
-| AWS SDK v3 (S3, CloudFront signer) | — | `apps/api`, `services/auth-triggers` | Pre-signed URLs, signed cookies/URLs | 📋 |
+| AWS SDK v3 (S3, CloudFront signer) | — | `apps/api` | Pre-signed URLs, signed cookies/URLs | 📋 |
 | React + Vite | — | `apps/web` | SPA | 📋 |
 | TanStack Router / Query / Virtual | — | `apps/web` | Routing, server state, virtualized grid | 📋 |
 | oidc-client-ts | — | `apps/web` | Cognito login with PKCE (D-2, leaning) | 📋 |
@@ -269,7 +269,7 @@ Photo-app/
 │   │   │   ├── imaging.py       pure pipeline: decode, orient, EXIF date, resize, strip, JPEG
 │   │   │   └── s3_keys.py       mirror of packages/shared s3Keys.ts
 │   │   └── tests/               ✅ pytest: key vectors, imaging, handler on moto; fixtures generated in conftest.py
-│   └── auth-triggers/           📋 Cognito pre-sign-up Lambda (TS)
+│   └── auth-triggers/           🚧 Cognito pre sign-up Lambda (TS): src/index.ts (handler), preSignUp.ts (decisions), directory.ts (Cognito: ListUsers, AdminLinkProviderForUser), log.ts; test/; build.mjs (esbuild → dist/index.mjs, ~0.5 MB)
 │
 ├── infra/
 │   ├── bootstrap/               ✅ one-time per-account setup (local state, workspaces)
@@ -599,6 +599,16 @@ sequenceDiagram
   A-->>U: Set-Cookie: CloudFront signed cookies for /users/{sub}/*
 ```
 
+**Pre sign-up trigger (`services/auth-triggers`, 🚧 code + tests, deployed in 4.6).** Cognito calls it before creating any user; the pool ID comes from the event (no configuration). Keeps one account per verified email (FR-AUTH-3, spec §11.3):
+
+| `triggerSource` | Behaviour |
+|---|---|
+| `PreSignUp_ExternalProvider` (first Google sign-in) | Only if Google says `email_verified = "true"`: `ListUsers` by the normalised email, keep users that are `CONFIRMED`, enabled and email-verified (native: federated users have status `EXTERNAL_PROVIDER`). Exactly one → `AdminLinkProviderForUser` (destination `Cognito`/native username = `sub`; source `Google`/`Cognito_Subject`/Google's ID from the `Google_<id>` username, prefix matched case-insensitively). None → normal sign-up (new Google user). Several → no link, `WARN` log (never guess). Link failure → error, the sign-in fails rather than creating a second account. Returns the event unchanged |
+| `PreSignUp_SignUp` (email/password) | Refused (`EMAIL_TAKEN_MESSAGE`, "…Sign in with Google instead.") when an enabled federated user already has this email verified. Cognito itself rejects duplicate native emails |
+| `PreSignUp_AdminCreateUser`, others | Pass through |
+
+Linking makes the Google identity sign in as the native user from then on, so `sub` (and every photo) stays the same. **To verify in 4.6:** whether the very first Google sign-in after linking completes as the native user, or fails once (some Cognito setups report "Already found an entry for username" on that first attempt) and succeeds on retry; the UI may need a hint. IAM for 4.6: `cognito-idp:ListUsers` + `cognito-idp:AdminLinkProviderForUser`; the pool's `lambda_config` references the Lambda while the role references the pool, so scope the policy by an ARN pattern (account + region) to avoid a dependency cycle.
+
 ### 10.2 Upload & processing 🚧 (contracts ✅, thumbnail code ✅, API ✅, not deployed)
 
 ```mermaid
@@ -842,6 +852,7 @@ Not started. Target design: spec §12 (TanStack Router file routes with an authe
 | Budget | $5 and $20 alerts | One org-wide $5/month budget | Owner's decision |
 | TypeScript | latest | Pinned `~6.0` | typescript-eslint 8.x doesn't support TS 7 yet |
 | `ci-deploy` permissions | "deploy permissions" | `AdministratorAccess` for now | Resource set not known yet; task 12.6 |
+| Account linking (§11.3) | Link Google to an existing native user | Also refuses an email/password sign-up whose email a Google user already has | The reverse link is impossible (the native user doesn't exist yet in pre sign-up); a second account would split photos and break sharing by that email (5.12 never guesses) |
 
 ---
 
@@ -872,3 +883,4 @@ Not started. Target design: spec §12 (TanStack Router file routes with an authe
 | 2026-10-23 | 4.2: `auth` applied to dev (IDs in §12.2); email-case behaviour of the Cognito lookup documented. |
 | 2026-10-23 | `login_url` output (module + envs): `tofu output login_url` prints the hosted sign-in page. |
 | 2026-10-23 | 4.4: optional Google IdP in the `auth` module (mapping incl. `email_verified`, secret as sensitive variable); env variables + dev client ID; applied to dev. |
+| 2026-10-23 | 4.5: `services/auth-triggers` pre sign-up Lambda (linking, duplicate-email refusal) + tests; §10.1 trigger table, libraries, repo tree, deviation (§15). |
