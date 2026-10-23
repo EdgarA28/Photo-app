@@ -64,6 +64,11 @@ run "domain_is_unique_prefix" {
     condition     = output.google_redirect_uri == "https://photo-app-test-123456789012.auth.us-east-1.amazoncognito.com/oauth2/idpresponse"
     error_message = "Google redirect URI must be <domain>/oauth2/idpresponse (spec §11.2)."
   }
+
+  assert {
+    condition     = startswith(output.login_url, "https://photo-app-test-123456789012.auth.us-east-1.amazoncognito.com/login?client_id=") && endswith(output.login_url, "&redirect_uri=http%3A%2F%2Flocalhost%3A5173%2Fauth%2Fcallback")
+    error_message = "login_url must open the hosted sign-in page with the first origin's callback."
+  }
 }
 
 run "web_client_is_public_with_code_pkce" {

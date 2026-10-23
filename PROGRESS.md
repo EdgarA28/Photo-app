@@ -307,3 +307,4 @@
 | 2026-10-23 | 4.1 `auth` module (user pool, prefix domain + managed login, public PKCE web client) with 6 offline test runs; wired into dev/prod envs. `pnpm test:infra` (13 runs) and format check pass. Nothing deployed. |
 | 2026-10-23 | Added task 12.8: migrate bootstrap's local state to S3 later (user deferred). |
 | 2026-10-23 | 4.2 applied `auth` to dev (pool, domain, web client, branding). Verified login page, redirect allow-list, issuer; email lookup is case-insensitive (temporary admin-created user, deleted). |
+| 2026-10-23 | `login_url` output added (`AWS_PROFILE=dev tofu output -raw login_url` in `infra/envs/dev`); applied to dev (outputs only, 0 resources). |

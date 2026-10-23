@@ -21,3 +21,7 @@ output "cognito_domain_url" {
 output "google_redirect_uri" {
   value = module.auth.google_redirect_uri
 }
+
+output "login_url" {
+  value = module.auth.login_url
+}

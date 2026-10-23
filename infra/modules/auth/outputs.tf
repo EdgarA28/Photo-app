@@ -27,3 +27,8 @@ output "google_redirect_uri" {
   description = "Authorized redirect URI for the Google OAuth client (4.3, spec §11.2)."
   value       = "${local.domain_url}/oauth2/idpresponse"
 }
+
+output "login_url" {
+  description = "Hosted sign-in page for the first app origin, for manual testing (the web app builds its own with PKCE, 8.3)."
+  value       = "${local.domain_url}/login?client_id=${aws_cognito_user_pool_client.web.id}&response_type=code&scope=openid+email+profile&redirect_uri=${urlencode("${var.app_origins[0]}/auth/callback")}"
+}
