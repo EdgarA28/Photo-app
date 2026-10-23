@@ -15,14 +15,14 @@
 
 | | |
 |---|---|
-| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.15 (incl. 5.6a/b) done (all API routes except media cookies, incl. usernames), 6.1–6.7 + 6.12 done (thumbnail code) → next: Phase 4 (auth) |
-| **Last updated** | 2026-10-22 |
+| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.15 (incl. 5.6a/b) done (all API routes except media cookies, incl. usernames), 6.1–6.7 + 6.12 done (thumbnail code), 4.1 done (auth module, not applied) → next: 4.2 apply auth to dev |
+| **Last updated** | 2026-10-23 |
 | **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
 
 ## Next up
 
-1. Phase 4 (auth: Cognito + Google + pre-sign-up trigger): creates AWS resources, needs approval.
+1. Phase 4 (auth): 4.2 apply the `auth` module to dev (`AWS_PROFILE=dev tofu plan -var-file=env.tfvars -out=dev.tfplan`, needs approval; 4 new resources: pool, domain, client, branding). On apply, check that managed login signs in with only `ALLOW_REFRESH_TOKEN_AUTH` enabled, and note `cognito_domain_url`/`google_redirect_uri` for 4.3. Then 4.3–4.6 (Google client, IdP, pre-sign-up trigger). 4.5 (trigger code + tests) can be done offline first.
    Dev app resources (table + photo bucket) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done.
 2. Thumbnails 6.8 (aarch64 packaging) + 6.9 (infra module, can be written and `tofu test`ed offline; deploy needs approval). IAM must include `s3:DeleteObject` on `thumbs/`+`previews/` (race cleanup) and on `originals/` (orphan cleanup, 6.12), and Lambda JSON log format.
 3. Prod bootstrap (1.3/1.4/1.5 for prod) whenever the user approves it; it isn't needed until Phase 11.
@@ -89,7 +89,8 @@
 
 ## Phase 4 — Authentication (§11)
 
-- [ ] **4.1** `auth` module: Cognito user pool (email username, verification), prefix domain, public app client (code + PKCE), callback/sign-out URLs, token lifetimes (FR-AUTH-2, FR-AUTH-4). Set `user_attribute_update_settings { attributes_require_verification_before_update = ["email"] }` so an email change only applies once verified (sharing trusts verified emails, 5.12)
+- [x] **4.1** `auth` module: Cognito user pool (email username, verification), prefix domain, public app client (code + PKCE), callback/sign-out URLs, token lifetimes (FR-AUTH-2, FR-AUTH-4). Set `user_attribute_update_settings { attributes_require_verification_before_update = ["email"] }` so an email change only applies once verified (sharing trusts verified emails, 5.12)
+  - `infra/modules/auth`: Essentials tier + managed login v2 (default branding), domain `photo-app-<env>-<account-id>`, client with `ALLOW_REFRESH_TOKEN_AUTH` only; wired into `envs/{dev,prod}`; 6 offline test runs
 - [ ] **4.2** Apply to dev; note Cognito domain
 - [ ] **4.3** Google OAuth client (origin + `/oauth2/idpresponse` redirect), consent screen in testing mode (§11.2)
 - [ ] **4.4** Google IdP in Cognito with attribute mapping (incl. `email_verified` → `email_verified`, else Google users can't receive shares); client secret as sensitive variable (FR-AUTH-1)
@@ -267,6 +268,7 @@
 | 2026-10-22 | **Usernames (5.15, spec v0.4):** optional, unique, changeable usernames as an alternative way to share (FR-ACC-3, FR-SHR-5). Kept in DynamoDB (claim item `USERNAME#{name}` for uniqueness + profile item), **not** Cognito `preferred_username` (its uniqueness needs alias sign-in, fixed at pool creation, and would make it a login name). Released names held 30 days for the former owner (D-8). Shares by username store no email, so the owner doesn't learn it. Email sharing stays. |
 | 2026-10-22 | **5.15 as built:** share items made by username store neither email nor username (lists read the current name from the profile, so nothing goes stale). Username transactions retry on `TransactionConflict` (concurrent transactions on the same items; DynamoDB Local doesn't reproduce it reliably). Not done: rename cooldown, so a user can hold several names by renaming repeatedly (each held 30 days); add a limit if squatting becomes a problem. |
 | 2026-10-22 | **Tenant-isolation suite (5.14):** the bar is "foreign ID ≡ missing ID" (same status *and* body), not just 404, so a different message can't leak existence. New routes must add a case to `test/tenant-isolation.test.ts` or an exemption with a reason (routes without resource IDs only), else the coverage test fails. |
+| 2026-10-23 | **Auth module (4.1):** Cognito **Essentials** tier (free ≤ 10,000 MAU like Lite, adds managed login) with managed login v2 instead of the classic hosted UI. Password ≥ 12 characters, no character-class rules (NIST 800-63B); MFA off. Email via Cognito's sender (50/day): fine for dev, consider SES before public launch. No `schema` block for `email` (changing schema forces pool replacement; `username_attributes = email` already requires it). Refresh-token rotation not enabled yet (revisit in 8.3). |
 | 2026-10-21 | Abandoned uploads: planned 5.6a (reuse `photoId` on retry) + 6.11 (daily sweeper for stale `pending` items); TTL rejected (blind to files that arrived but failed processing, leaves album memberships dangling). |
 
 ## Session log
@@ -299,3 +301,4 @@
 | 2026-10-22 | API 5.15 usernames + share by username (`repo/usernames.ts`, `PUT /me/username`, shared schemas). 254 tests pass (188 API, 66 shared); lint/typecheck/format/build clean. Nothing deployed. |
 | 2026-10-22 | 5.14 tenant-isolation suite: 35 tests (28 foreign-vs-missing cases, coverage check, list/cursor checks, final snapshot); verified by reintroducing two isolation bugs. 289 tests pass repo-wide; lint/typecheck/format clean. |
 | 2026-10-22 | 6.12 orphaned originals: thumbnail Lambda deletes an original that has no Photo item. 76 Python tests pass; ruff clean. Nothing deployed. |
+| 2026-10-23 | 4.1 `auth` module (user pool, prefix domain + managed login, public PKCE web client) with 6 offline test runs; wired into dev/prod envs. `pnpm test:infra` (13 runs) and format check pass. Nothing deployed. |

@@ -44,9 +44,10 @@
 | AWS bootstrap — dev | `infra/bootstrap` (ws `dev`) | ✅ | State bucket, GitHub OIDC, CI roles |
 | AWS bootstrap — management | `infra/bootstrap` (ws `general`) | ✅ | Organization-wide $5/month budget |
 | AWS bootstrap — prod | `infra/bootstrap` (ws `prod`) | 📋 | Code ready, plan clean, not applied |
-| Environment roots | `infra/envs/{dev,prod}` | 🚧 | Database + storage **deployed in dev**; prod validated only |
+| Environment roots | `infra/envs/{dev,prod}` | 🚧 | Database + storage **deployed in dev**; auth wired, not applied; prod validated only |
 | Infra modules: database, storage | `infra/modules/{database,storage}` | ✅ (dev) | Offline `tofu test` suites (7 runs) |
-| Infra modules: auth, api, thumbnails, frontend | `infra/modules/*` | 📋 | |
+| Infra module: auth | `infra/modules/auth` | 🚧 | User pool, prefix domain (managed login), PKCE web client + 6 offline test runs (4.1); Google IdP (4.4) and pre-sign-up trigger (4.6) to come; not applied |
+| Infra modules: api, thumbnails, frontend | `infra/modules/*` | 📋 | |
 | API Lambda | `apps/api` | 🚧 | Skeleton (5.1–5.3) + routes `GET /me`, `POST /photos/upload-url` (incl. retry), `GET /photos`, `GET /photos/{id}`, `GET /photos/{id}/download-url`, `DELETE /photos/{id}`, album CRUD, album photos, sharing, recipient read access and usernames (5.5, 5.6, 5.6a/b, 5.7–5.13, 5.15); 223 tests (incl. DynamoDB Local). Media cookies and signed URLs (Phase 7) not yet; not deployed |
 | Thumbnail Lambda | `services/thumbnails` | 🚧 | Handler, image pipeline, S3-key mirror, orphan cleanup + 76 pytest tests (6.1–6.7, 6.12); not packaged or deployed yet (6.8–6.10) |
 | Auth trigger Lambda | `services/auth-triggers` | 📋 | Folder skeleton only |
@@ -278,12 +279,13 @@ Photo-app/
 │   │   ├── {dev,prod,general}.tfvars
 │   │   └── README.md
 │   ├── envs/
-│   │   ├── dev/                 🚧 backend, provider, main.tf (database + storage), env.tfvars; database + storage deployed
+│   │   ├── dev/                 🚧 backend, provider, main.tf (database + storage + auth), env.tfvars; database + storage deployed
 │   │   └── prod/                🚧 same wiring with prod settings; validated only
 │   └── modules/
 │       ├── database/            ✅ DynamoDB single table (+ tests/)
 │       ├── storage/             ✅ photo bucket (+ tests/)
-│       └── auth/ api/ thumbnails/ frontend/   📋
+│       ├── auth/                🚧 Cognito user pool, domain, web client (+ tests/)
+│       └── api/ thumbnails/ frontend/   📋
 │
 └── .github/workflows/           📋 ci.yml, deploy.yml
 ```
@@ -736,9 +738,9 @@ Tags on everything: `Project=photo-app`, `Environment=<ws>`, `ManagedBy=opentofu
 |---|---|
 | `versions.tf` | OpenTofu ≥ 1.10, AWS `~> 6.0`, S3 backend: bucket `photo-app-tfstate-<acct>`, key `<env>/terraform.tfstate`, `use_lockfile = true`, `encrypt = true` |
 | `providers.tf` | region var (default `us-east-1`), `allowed_account_ids`, default tags (`Project`, `Environment`, `ManagedBy`); credentials from `AWS_PROFILE` locally / OIDC in CI |
-| `variables.tf` | `region`; `app_origins` (web app origins → S3 CORS; later Cognito callbacks) |
-| `main.tf` | `module "database"`, `module "storage"` with per-env settings (below) |
-| `outputs.tf` | `table_name`, `photo_bucket_name` |
+| `variables.tf` | `region`; `app_origins` (web app origins → S3 CORS, Cognito callback + sign-out URLs) |
+| `main.tf` | `module "database"`, `module "storage"`, `module "auth"` with per-env settings (below) |
+| `outputs.tf` | `table_name`, `photo_bucket_name`, `user_pool_id`, `web_client_id`, `cognito_domain_url`, `google_redirect_uri` |
 | `env.tfvars` | Non-secret settings, committed. Run with `-var-file=env.tfvars` |
 
 | Setting | dev | prod |
@@ -750,6 +752,8 @@ Tags on everything: `Project=photo-app`, `Environment=<ws>`, `ManagedBy=opentofu
 | Bucket versioning | off (`Suspended`) | on, previous versions expire after 30 d |
 | `force_destroy` | on (disposable) | off |
 | `app_origins` | `http://localhost:5173` | placeholder until the domain is chosen (D-4) |
+| User pool | `photo-app-dev`, deletion protection off | `photo-app-prod`, deletion protection on |
+| Cognito domain | `photo-app-dev-063359189013` | `photo-app-prod-968632140314` |
 
 dev: **deployed 2026-10-19** (9 resources; test resources, destroyed when testing is done). prod: validated with `-backend=false` only.
 
@@ -783,11 +787,23 @@ Inputs: `environment`, `cors_allowed_origins`, `versioning` (false), `noncurrent
 Tests: name format, private + encrypted, `force_destroy` default, CORS origins/methods, versioning off/on with matching lifecycle rules.
 Not here by design: the S3 → Lambda event notification (one per bucket; `thumbnails` module) and CloudFront read access (Phase 7).
 
+**`auth` 🚧** (4.1 done; Google IdP 4.4 and pre-sign-up trigger 4.6 still 📋)
+
+| Resource | Detail |
+|---|---|
+| `aws_cognito_user_pool.main` | `photo-app-{env}`; tier `ESSENTIALS` (free ≤ 10,000 MAU, needed for managed login); `username_attributes = ["email"]` (Cognito username = `sub` for native users), case-insensitive; email auto-verified with a code; self sign-up on (FR-AUTH-2); `attributes_require_verification_before_update = ["email"]` (sharing trusts verified emails, 5.12); recovery by verified email; password ≥ 12 chars, no character-class rules; MFA off; email via `COGNITO_DEFAULT` (50/day); `deletion_protection` from input (default on) |
+| `aws_cognito_user_pool_domain.main` | prefix `photo-app-{env}-{account-id}`, `managed_login_version = 2` (managed login) |
+| `aws_cognito_user_pool_client.web` | `photo-app-{env}-web`; public (no secret); OAuth `code` only (PKCE enforced by the client, 8.3); scopes `openid email profile`; IdPs `COGNITO` (Google added in 4.4); callbacks `<origin>/auth/callback`, sign-out `<origin>/login` per `app_origins`; `explicit_auth_flows = ["ALLOW_REFRESH_TOKEN_AUTH"]` (sign-in only on the hosted pages); access/ID 1 h, refresh 30 d (FR-AUTH-4); token revocation on; `prevent_user_existence_errors` |
+| `aws_cognito_managed_login_branding.web` | Cognito's default style (required for managed login per client) |
+
+Inputs: `environment`, `app_origins` (validated: scheme + host, no path), `deletion_protection` (true). Outputs: `user_pool_id`, `user_pool_arn`, `issuer_url`, `web_client_id`, `domain_url`, `google_redirect_uri`.
+Tests: email sign-in + verification + verified email changes, deletion protection default/off, domain prefix + Google redirect URI, public code-only client with spec scopes and token lifetimes, callback/sign-out URLs, origin validation.
+Not yet: refresh-token rotation (single-use refresh tokens; revisit with the web client, 8.3).
+
 **Planned 📋**
 
 | Module | Will contain |
 |---|---|
-| `auth` | Cognito user pool, domain, Google IdP, app client, pre-sign-up trigger |
 | `api` | HTTP API, JWT authorizer, API Lambda, IAM, throttling, logs |
 | `thumbnails` | Python Lambda, IAM, S3 notification, DLQ, logs |
 | `frontend` | Site bucket, CloudFront (OAC, behaviors, SPA fallback), key group, ACM, optional WAF |
@@ -849,3 +865,4 @@ Not started. Target design: spec §12 (TanStack Router file routes with an authe
 | 2026-10-22 | 5.15 implemented: `usernames` repository (claim + profile transaction, holds, conflict retry), `PUT /me/username`, `username` in `GET /me`, share by `{username}` without storing the email, current usernames in share lists and `ownerUsername` in shared albums; shared schemas/constants/error code (§7), items (§8.2), conventions and API table (§9). |
 | 2026-10-22 | 5.14 tenant-isolation suite (`test/tenant-isolation.test.ts`); tenant-isolation security row → ✅ code. `createTestApi()` also returns `app`. |
 | 2026-10-22 | 6.12: thumbnail Lambda deletes originals without a Photo item (§10.2 row, §10.5 gap closed); IAM needs `s3:DeleteObject` on `originals/` (6.9). |
+| 2026-10-23 | 4.1: `auth` module (user pool, prefix domain with managed login, public PKCE web client, default branding) + offline tests; wired into `envs/{dev,prod}` with new outputs. Not applied. |

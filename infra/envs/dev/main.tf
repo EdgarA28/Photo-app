@@ -19,3 +19,11 @@ module "storage" {
   versioning           = false
   force_destroy        = true
 }
+
+module "auth" {
+  source = "../../modules/auth"
+
+  environment         = local.environment
+  app_origins         = var.app_origins
+  deletion_protection = false
+}

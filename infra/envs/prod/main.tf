@@ -19,3 +19,11 @@ module "storage" {
   noncurrent_version_expiration_days = 30
   force_destroy                      = false
 }
+
+module "auth" {
+  source = "../../modules/auth"
+
+  environment         = local.environment
+  app_origins         = var.app_origins
+  deletion_protection = true
+}
