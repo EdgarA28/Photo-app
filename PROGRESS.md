@@ -15,14 +15,14 @@
 
 | | |
 |---|---|
-| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.15 (incl. 5.6a/b) done (all API routes except media cookies, incl. usernames), 6.1–6.7 + 6.12 done (thumbnail code), 4.1–4.2 done (Cognito in dev) → next: 4.3 Google OAuth client |
+| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.15 (incl. 5.6a/b) done (all API routes except media cookies, incl. usernames), 6.1–6.7 + 6.12 done (thumbnail code), 4.1–4.4 done (Cognito + Google IdP in dev) → next: 4.5 pre-sign-up trigger |
 | **Last updated** | 2026-10-23 |
 | **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` + Cognito pool `us-east-1_vYJcHEj4G` (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
 
 ## Next up
 
-1. Phase 4 (auth): 4.3 Google OAuth client (user does it in Google Cloud Console: JS origin `https://photo-app-dev-063359189013.auth.us-east-1.amazoncognito.com`, redirect URI `…/oauth2/idpresponse`), then 4.4 IdP (needs approval), 4.5 trigger code (offline), 4.6 deploy + manual check. Still to verify in 4.6: a full password sign-up/sign-in through managed login with only `ALLOW_REFRESH_TOKEN_AUTH` on the client.
+1. Phase 4 (auth): 4.5 trigger code (offline), then 4.6 deploy (needs approval) + manual check. Until the trigger exists, a Google login with the email of an existing password account creates a second, unlinked user. Dev plans need the Google secret: `source ~/.config/photo-app/dev.env` (user's file, `chmod 600`, outside the repo) before `tofu plan`. Still to verify in 4.6: a full password sign-up/sign-in through managed login with only `ALLOW_REFRESH_TOKEN_AUTH` on the client.
    Dev app resources (table + photo bucket + Cognito) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done.
 2. Thumbnails 6.8 (aarch64 packaging) + 6.9 (infra module, can be written and `tofu test`ed offline; deploy needs approval). IAM must include `s3:DeleteObject` on `thumbs/`+`previews/` (race cleanup) and on `originals/` (orphan cleanup, 6.12), and Lambda JSON log format.
 3. Prod bootstrap (1.3/1.4/1.5 for prod) whenever the user approves it; it isn't needed until Phase 11.
@@ -66,7 +66,7 @@
 - [~] **1.5** `infra/bootstrap/github-oidc.tf`: OIDC provider + `photo-app-ci-plan` (ReadOnlyAccess + state read + `.tflock` write; denies reading S3 objects other than state and DynamoDB items; any ref/PR of `EdgarA28/Photo-app`) and `photo-app-ci-deploy` (AdministratorAccess for now → 12.6; 1 h sessions; dev: `ref:refs/heads/main`, prod: `environment:prod`)
   - [x] dev **applied 2026-10-19**: `arn:aws:iam::063359189013:role/photo-app-ci-plan`, `arn:aws:iam::063359189013:role/photo-app-ci-deploy`
   - [ ] prod: with prod bootstrap, **needs user approval**
-- [ ] **1.6** Google Cloud project + OAuth consent screen (done after Cognito domain exists → see 4.3)
+- [x] **1.6** Google Cloud project + OAuth consent screen (done after Cognito domain exists → see 4.3)
 - [ ] **1.7** Decide domain name (D-4) — only needed for prod
 
 ## Phase 2 — Shared package (`packages/shared`)
@@ -93,8 +93,10 @@
   - `infra/modules/auth`: Essentials tier + managed login v2 (default branding), domain `photo-app-<env>-<account-id>`, client with `ALLOW_REFRESH_TOKEN_AUTH` only; wired into `envs/{dev,prod}`; 6 offline test runs
 - [x] **4.2** Apply to dev; note Cognito domain
   - Applied 2026-10-23 (4 resources). Pool `us-east-1_vYJcHEj4G`, client `jkfonk4j32kup18bl98jqkr67`, domain `https://photo-app-dev-063359189013.auth.us-east-1.amazoncognito.com`. Checked: re-plan clean, `/oauth2/authorize` with PKCE → sign-in page (200), unknown redirect URI → `redirect_mismatch`, OIDC issuer resolves
-- [ ] **4.3** Google OAuth client (origin + `/oauth2/idpresponse` redirect), consent screen in testing mode (§11.2)
-- [ ] **4.4** Google IdP in Cognito with attribute mapping (incl. `email_verified` → `email_verified`, else Google users can't receive shares); client secret as sensitive variable (FR-AUTH-1)
+- [x] **4.3** Google OAuth client (origin + `/oauth2/idpresponse` redirect), consent screen in testing mode (§11.2)
+  - Done by the user 2026-10-23: project `photo-app`, External, testing mode, scopes openid/email/profile, authorized domain `amazoncognito.com`; client `photo-app-dev (Cognito)` = `1093239771558-h98qa1lulf9o4jqs767g231ohphbsia5.apps.googleusercontent.com`. Secret in the user's password manager + `~/.config/photo-app/dev.env`
+- [x] **4.4** Google IdP in Cognito with attribute mapping (incl. `email_verified` → `email_verified`, else Google users can't receive shares); client secret as sensitive variable (FR-AUTH-1)
+  - Optional in the module (`google_client_id` null → off; prod stays off until 11.3); client ID in `envs/dev/env.tfvars`, secret via `TF_VAR_google_client_secret` (precondition fails without it). Google's endpoint `provider_details` listed explicitly (no plan drift). Applied 2026-10-23 (1 added, 1 changed); re-plan clean; sign-in page shows Google; `identity_provider=Google` reaches Google's sign-in page (client + redirect URI accepted). 9 module test runs
 - [ ] **4.5** `services/auth-triggers`: pre-sign-up Lambda linking Google → existing verified native user (`AdminLinkProviderForUser`) + tests (FR-AUTH-3)
 - [ ] **4.6** Deploy trigger via `auth` module; manually verify both login methods + linking
 
@@ -272,6 +274,7 @@
 | 2026-10-22 | **Tenant-isolation suite (5.14):** the bar is "foreign ID ≡ missing ID" (same status *and* body), not just 404, so a different message can't leak existence. New routes must add a case to `test/tenant-isolation.test.ts` or an exemption with a reason (routes without resource IDs only), else the coverage test fails. |
 | 2026-10-23 | **Auth module (4.1):** Cognito **Essentials** tier (free ≤ 10,000 MAU like Lite, adds managed login) with managed login v2 instead of the classic hosted UI. Password ≥ 12 characters, no character-class rules (NIST 800-63B); MFA off. Email via Cognito's sender (50/day): fine for dev, consider SES before public launch. No `schema` block for `email` (changing schema forces pool replacement; `username_attributes = email` already requires it). Refresh-token rotation not enabled yet (revisit in 8.3). |
 | 2026-10-23 | **Email case (from 5.12 note):** Cognito stores `email` exactly as entered (`Case.Test@Example.com`), but with `case_sensitive = false` the `ListUsers` filter `email = "…"` matches case-insensitively (lowercase and mixed-case both found the user). The API's lowercased lookup therefore works; no change needed. Recheck for Google users in 4.6. |
+| 2026-10-23 | **Google secret handling (4.4):** the user keeps it in a password manager and in `~/.config/photo-app/dev.env` (`export TF_VAR_google_client_secret=…`, mode 600, outside the repo), sourced before dev plans; never in chat, tfvars or git (NFR-SEC-8). It is also stored in Cognito and in the dev state (S3, SSE; client-side state encryption is 12.5). CI (Phase 10) will need it as a GitHub secret. |
 | 2026-10-21 | Abandoned uploads: planned 5.6a (reuse `photoId` on retry) + 6.11 (daily sweeper for stale `pending` items); TTL rejected (blind to files that arrived but failed processing, leaves album memberships dangling). |
 
 ## Session log
@@ -308,3 +311,4 @@
 | 2026-10-23 | Added task 12.8: migrate bootstrap's local state to S3 later (user deferred). |
 | 2026-10-23 | 4.2 applied `auth` to dev (pool, domain, web client, branding). Verified login page, redirect allow-list, issuer; email lookup is case-insensitive (temporary admin-created user, deleted). |
 | 2026-10-23 | `login_url` output added (`AWS_PROFILE=dev tofu output -raw login_url` in `infra/envs/dev`); applied to dev (outputs only, 0 resources). |
+| 2026-10-23 | 4.3 (user: Google OAuth client, testing mode) + 4.4 Google IdP: optional in the `auth` module, applied to dev (1 added, 1 changed), re-plan clean, Google button + redirect to Google verified. 9 auth test runs. |

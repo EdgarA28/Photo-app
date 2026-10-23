@@ -1,7 +1,6 @@
-# Cognito user pool, domain and app client (spec §11.1, §13.1).
+# Cognito user pool, domain, app client and Google IdP (spec §11, §13.1).
 #
 # Added later in this module:
-#   - Google IdP + attribute mapping (4.4); then "Google" joins supported_identity_providers
 #   - pre-sign-up trigger from services/auth-triggers (4.5/4.6) → lambda_config
 
 data "aws_caller_identity" "current" {}
@@ -14,6 +13,8 @@ locals {
   # Prefix domains are global per region; the account ID keeps this one unique.
   domain_prefix = "photo-app-${var.environment}-${data.aws_caller_identity.current.account_id}"
   domain_url    = "https://${local.domain_prefix}.auth.${data.aws_region.current.region}.amazoncognito.com"
+
+  google_enabled = var.google_client_id != null
 }
 
 resource "aws_cognito_user_pool" "main" {
@@ -87,7 +88,8 @@ resource "aws_cognito_user_pool_client" "web" {
   allowed_oauth_flows_user_pool_client = true
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_scopes                 = ["openid", "email", "profile"]
-  supported_identity_providers         = ["COGNITO"]
+  # Referencing the IdP (not the literal "Google") makes the client wait until it exists.
+  supported_identity_providers = concat(["COGNITO"], aws_cognito_identity_provider.google[*].provider_name)
 
   callback_urls = [for o in var.app_origins : "${o}/auth/callback"]
   logout_urls   = [for o in var.app_origins : "${o}/login"]
@@ -108,6 +110,44 @@ resource "aws_cognito_user_pool_client" "web" {
   # Logout can revoke the refresh token (FR-AUTH-5).
   enable_token_revocation       = true
   prevent_user_existence_errors = "ENABLED"
+}
+
+# FR-AUTH-1: "Continue with Google" (spec §11.2). Only when a Google client ID is configured.
+resource "aws_cognito_identity_provider" "google" {
+  count = local.google_enabled ? 1 : 0
+
+  user_pool_id  = aws_cognito_user_pool.main.id
+  provider_name = "Google"
+  provider_type = "Google"
+
+  # Besides the client and scopes, Cognito fills in Google's endpoints; listing them avoids a diff on every plan.
+  provider_details = {
+    client_id                     = var.google_client_id
+    client_secret                 = var.google_client_secret
+    authorize_scopes              = "openid email profile"
+    attributes_url                = "https://people.googleapis.com/v1/people/me?personFields="
+    attributes_url_add_attributes = "true"
+    authorize_url                 = "https://accounts.google.com/o/oauth2/v2/auth"
+    oidc_issuer                   = "https://accounts.google.com"
+    token_request_method          = "POST"
+    token_url                     = "https://www.googleapis.com/oauth2/v4/token"
+  }
+
+  # email_verified is needed to receive shares (5.12 trusts only verified emails).
+  attribute_mapping = {
+    username       = "sub"
+    email          = "email"
+    email_verified = "email_verified"
+    name           = "name"
+    picture        = "picture"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.google_client_secret != null && var.google_client_secret != ""
+      error_message = "google_client_secret is required with google_client_id (set TF_VAR_google_client_secret)."
+    }
+  }
 }
 
 # Managed login needs a style per client; Cognito's default look for now.

@@ -146,3 +146,57 @@ run "dev_can_be_destroyed" {
     error_message = "Deletion protection must be off when disabled."
   }
 }
+
+run "google_off_without_client_id" {
+  command = plan
+
+  assert {
+    condition     = length(aws_cognito_identity_provider.google) == 0
+    error_message = "No Google IdP without a client ID."
+  }
+
+  assert {
+    condition     = aws_cognito_user_pool_client.web.supported_identity_providers == toset(["COGNITO"])
+    error_message = "Only email/password sign-in without Google."
+  }
+}
+
+run "google_sign_in" {
+  command = plan
+
+  variables {
+    google_client_id     = "123-abc.apps.googleusercontent.com"
+    google_client_secret = "test-secret"
+  }
+
+  assert {
+    condition     = aws_cognito_identity_provider.google[0].provider_type == "Google" && aws_cognito_identity_provider.google[0].provider_details.authorize_scopes == "openid email profile"
+    error_message = "Google IdP must request openid email profile (spec §11.2)."
+  }
+
+  assert {
+    condition = aws_cognito_identity_provider.google[0].attribute_mapping == tomap({
+      username       = "sub"
+      email          = "email"
+      email_verified = "email_verified"
+      name           = "name"
+      picture        = "picture"
+    })
+    error_message = "Attribute mapping must follow spec §11.2, incl. email_verified (needed for shares, 5.12)."
+  }
+
+  assert {
+    condition     = aws_cognito_user_pool_client.web.supported_identity_providers == toset(["COGNITO", "Google"])
+    error_message = "The web client must offer Google and email/password (FR-AUTH-1, FR-AUTH-2)."
+  }
+}
+
+run "google_needs_secret" {
+  command = plan
+
+  variables {
+    google_client_id = "123-abc.apps.googleusercontent.com"
+  }
+
+  expect_failures = [aws_cognito_identity_provider.google]
+}

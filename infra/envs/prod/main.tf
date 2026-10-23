@@ -26,4 +26,7 @@ module "auth" {
   environment         = local.environment
   app_origins         = var.app_origins
   deletion_protection = true
+
+  google_client_id     = var.google_client_id
+  google_client_secret = var.google_client_secret
 }

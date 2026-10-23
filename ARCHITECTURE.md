@@ -46,7 +46,7 @@
 | AWS bootstrap — prod | `infra/bootstrap` (ws `prod`) | 📋 | Code ready, plan clean, not applied |
 | Environment roots | `infra/envs/{dev,prod}` | 🚧 | Database + storage + auth **deployed in dev**; prod validated only |
 | Infra modules: database, storage | `infra/modules/{database,storage}` | ✅ (dev) | Offline `tofu test` suites (7 runs) |
-| Infra module: auth | `infra/modules/auth` | 🚧 | User pool, prefix domain (managed login), PKCE web client + 6 offline test runs (4.1); Google IdP (4.4) and pre-sign-up trigger (4.6) to come; **deployed in dev** |
+| Infra module: auth | `infra/modules/auth` | 🚧 | User pool, prefix domain (managed login), PKCE web client (4.1), optional Google IdP (4.4) + 9 offline test runs; pre-sign-up trigger (4.6) to come; **deployed in dev** (with Google) |
 | Infra modules: api, thumbnails, frontend | `infra/modules/*` | 📋 | |
 | API Lambda | `apps/api` | 🚧 | Skeleton (5.1–5.3) + routes `GET /me`, `POST /photos/upload-url` (incl. retry), `GET /photos`, `GET /photos/{id}`, `GET /photos/{id}/download-url`, `DELETE /photos/{id}`, album CRUD, album photos, sharing, recipient read access and usernames (5.5, 5.6, 5.6a/b, 5.7–5.13, 5.15); 223 tests (incl. DynamoDB Local). Media cookies and signed URLs (Phase 7) not yet; not deployed |
 | Thumbnail Lambda | `services/thumbnails` | 🚧 | Handler, image pipeline, S3-key mirror, orphan cleanup + 76 pytest tests (6.1–6.7, 6.12); not packaged or deployed yet (6.8–6.10) |
@@ -738,7 +738,7 @@ Tags on everything: `Project=photo-app`, `Environment=<ws>`, `ManagedBy=opentofu
 |---|---|
 | `versions.tf` | OpenTofu ≥ 1.10, AWS `~> 6.0`, S3 backend: bucket `photo-app-tfstate-<acct>`, key `<env>/terraform.tfstate`, `use_lockfile = true`, `encrypt = true` |
 | `providers.tf` | region var (default `us-east-1`), `allowed_account_ids`, default tags (`Project`, `Environment`, `ManagedBy`); credentials from `AWS_PROFILE` locally / OIDC in CI |
-| `variables.tf` | `region`; `app_origins` (web app origins → S3 CORS, Cognito callback + sign-out URLs) |
+| `variables.tf` | `region`; `app_origins` (web app origins → S3 CORS, Cognito callback + sign-out URLs); `google_client_id` (in `env.tfvars`); `google_client_secret` (sensitive, `TF_VAR_google_client_secret`; locally `source ~/.config/photo-app/dev.env`) |
 | `main.tf` | `module "database"`, `module "storage"`, `module "auth"` with per-env settings (below) |
 | `outputs.tf` | `table_name`, `photo_bucket_name`, `user_pool_id`, `web_client_id`, `cognito_domain_url`, `google_redirect_uri`, `login_url` |
 | `env.tfvars` | Non-secret settings, committed. Run with `-var-file=env.tfvars` |
@@ -754,6 +754,7 @@ Tags on everything: `Project=photo-app`, `Environment=<ws>`, `ManagedBy=opentofu
 | `app_origins` | `http://localhost:5173` | placeholder until the domain is chosen (D-4) |
 | User pool | `photo-app-dev`, deletion protection off | `photo-app-prod`, deletion protection on |
 | Cognito domain | `photo-app-dev-063359189013` | `photo-app-prod-968632140314` |
+| Google sign-in | on: client `1093239771558-h98qa…apps.googleusercontent.com` (testing mode) | off until 11.3 |
 
 dev: **deployed 2026-10-19** (9 resources) + auth **2026-10-23** (4 resources: pool `us-east-1_vYJcHEj4G`, client `jkfonk4j32kup18bl98jqkr67`, domain `https://photo-app-dev-063359189013.auth.us-east-1.amazoncognito.com`); test resources, destroyed when testing is done. prod: validated with `-backend=false` only.
 
@@ -787,17 +788,18 @@ Inputs: `environment`, `cors_allowed_origins`, `versioning` (false), `noncurrent
 Tests: name format, private + encrypted, `force_destroy` default, CORS origins/methods, versioning off/on with matching lifecycle rules.
 Not here by design: the S3 → Lambda event notification (one per bucket; `thumbnails` module) and CloudFront read access (Phase 7).
 
-**`auth` 🚧** (4.1 done; Google IdP 4.4 and pre-sign-up trigger 4.6 still 📋)
+**`auth` 🚧** (4.1 + 4.4 done; pre-sign-up trigger 4.6 still 📋)
 
 | Resource | Detail |
 |---|---|
 | `aws_cognito_user_pool.main` | `photo-app-{env}`; tier `ESSENTIALS` (free ≤ 10,000 MAU, needed for managed login); `username_attributes = ["email"]` (Cognito username = `sub` for native users), case-insensitive; email auto-verified with a code; self sign-up on (FR-AUTH-2); `attributes_require_verification_before_update = ["email"]` (sharing trusts verified emails, 5.12); recovery by verified email; password ≥ 12 chars, no character-class rules; MFA off; email via `COGNITO_DEFAULT` (50/day); `deletion_protection` from input (default on) |
 | `aws_cognito_user_pool_domain.main` | prefix `photo-app-{env}-{account-id}`, `managed_login_version = 2` (managed login) |
-| `aws_cognito_user_pool_client.web` | `photo-app-{env}-web`; public (no secret); OAuth `code` only (PKCE enforced by the client, 8.3); scopes `openid email profile`; IdPs `COGNITO` (Google added in 4.4); callbacks `<origin>/auth/callback`, sign-out `<origin>/login` per `app_origins`; `explicit_auth_flows = ["ALLOW_REFRESH_TOKEN_AUTH"]` (sign-in only on the hosted pages); access/ID 1 h, refresh 30 d (FR-AUTH-4); token revocation on; `prevent_user_existence_errors` |
+| `aws_cognito_user_pool_client.web` | `photo-app-{env}-web`; public (no secret); OAuth `code` only (PKCE enforced by the client, 8.3); scopes `openid email profile`; IdPs `COGNITO` + the Google IdP when enabled (referenced from the IdP resource so the client waits for it); callbacks `<origin>/auth/callback`, sign-out `<origin>/login` per `app_origins`; `explicit_auth_flows = ["ALLOW_REFRESH_TOKEN_AUTH"]` (sign-in only on the hosted pages); access/ID 1 h, refresh 30 d (FR-AUTH-4); token revocation on; `prevent_user_existence_errors` |
+| `aws_cognito_identity_provider.google` | only when `google_client_id` is set (`count`); type/name `Google`; `authorize_scopes = "openid email profile"`; Google's endpoints listed explicitly in `provider_details` (Cognito fills them in otherwise → diff on every plan); mapping `sub`→username, `email`, `email_verified` (needed to receive shares, 5.12), `name`, `picture` (§11.2); precondition: secret must be set (FR-AUTH-1) |
 | `aws_cognito_managed_login_branding.web` | Cognito's default style (required for managed login per client) |
 
-Inputs: `environment`, `app_origins` (validated: scheme + host, no path), `deletion_protection` (true). Outputs: `user_pool_id`, `user_pool_arn`, `issuer_url`, `web_client_id`, `domain_url`, `google_redirect_uri`, `login_url` (hosted sign-in page for the first app origin, manual testing; no PKCE).
-Tests: email sign-in + verification + verified email changes, deletion protection default/off, domain prefix + Google redirect URI + login URL, public code-only client with spec scopes and token lifetimes, callback/sign-out URLs, origin validation.
+Inputs: `environment`, `app_origins` (validated: scheme + host, no path), `deletion_protection` (true), `google_client_id` (null = Google off), `google_client_secret` (sensitive; from `TF_VAR_google_client_secret`, never in git). Outputs: `user_pool_id`, `user_pool_arn`, `issuer_url`, `web_client_id`, `domain_url`, `google_redirect_uri`, `login_url` (hosted sign-in page for the first app origin, manual testing; no PKCE).
+Tests: email sign-in + verification + verified email changes, deletion protection default/off, domain prefix + Google redirect URI + login URL, public code-only client with spec scopes and token lifetimes, callback/sign-out URLs, origin validation, Google off without a client ID, Google IdP scopes + mapping + client providers, secret required.
 Not yet: refresh-token rotation (single-use refresh tokens; revisit with the web client, 8.3).
 Verified in dev: `/oauth2/authorize` with PKCE shows the sign-in page; an unlisted redirect URI → `redirect_mismatch`. `email` is stored as entered, but `ListUsers` `email = "…"` matches case-insensitively (`case_sensitive = false`), so the API's lowercased share lookup finds mixed-case addresses.
 
@@ -869,3 +871,4 @@ Not started. Target design: spec §12 (TanStack Router file routes with an authe
 | 2026-10-23 | 4.1: `auth` module (user pool, prefix domain with managed login, public PKCE web client, default branding) + offline tests; wired into `envs/{dev,prod}` with new outputs. Not applied. |
 | 2026-10-23 | 4.2: `auth` applied to dev (IDs in §12.2); email-case behaviour of the Cognito lookup documented. |
 | 2026-10-23 | `login_url` output (module + envs): `tofu output login_url` prints the hosted sign-in page. |
+| 2026-10-23 | 4.4: optional Google IdP in the `auth` module (mapping incl. `email_verified`, secret as sensitive variable); env variables + dev client ID; applied to dev. |

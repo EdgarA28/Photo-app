@@ -18,3 +18,16 @@ variable "deletion_protection" {
   type        = bool
   default     = true
 }
+
+variable "google_client_id" {
+  description = "Google OAuth client ID (4.3, spec §11.2). Null leaves Google sign-in off."
+  type        = string
+  default     = null
+}
+
+variable "google_client_secret" {
+  description = "Google OAuth client secret. Never in git: pass it as TF_VAR_google_client_secret (NFR-SEC-8)."
+  type        = string
+  default     = null
+  sensitive   = true
+}
