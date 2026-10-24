@@ -1,5 +1,5 @@
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "../src/api/errors";
 import { fakeApi, testId, testPhoto, testPhotoPage } from "./fakes";
 import { defaultResponses, renderAt } from "./render";
@@ -160,5 +160,173 @@ describe("viewer states (FR-GAL-5)", () => {
     await renderAt(`/photos/${testId(0)}`, { api: setup().api });
     fireEvent.error(await screen.findByRole("img"));
     expect(screen.getByRole("status").textContent).toContain("The preview can't be shown.");
+  });
+});
+
+describe("download (FR-DL-1/2)", () => {
+  const url = "https://photos.s3.amazonaws.com/users/u/originals/x.jpg?X-Amz-Signature=abc";
+  const downloadUrl = { url, expiresAt: "2026-10-24T12:05:00.000Z" };
+
+  /** Records the links the app clicks to start downloads. */
+  function spyOnDownloads() {
+    const clicked: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicked.push(this.href);
+    });
+    return clicked;
+  }
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("saves the original through a pre-signed URL", async () => {
+    const clicked = spyOnDownloads();
+    const { api, request } = setup({
+      [`GET /photos/${testId(0)}/download-url`]: downloadUrl,
+    });
+    await renderAt(`/photos/${testId(0)}`, { api });
+    fireEvent.click(await screen.findByRole("button", { name: "Download original" }));
+    await waitFor(() => expect(clicked).toEqual([url]));
+    const call = request.mock.calls.find(([, path]) => path.endsWith("/download-url"));
+    expect(call?.[2]?.query).toEqual({ albumId: undefined });
+  });
+
+  it("names the shared album, and offers no delete for someone else's photo", async () => {
+    const clicked = spyOnDownloads();
+    const { api, request } = setup({
+      [`GET /albums/${album}/photos`]: testPhotoPage(50, 1),
+      [`GET /photos/${testId(50)}/download-url`]: downloadUrl,
+    });
+    await renderAt(`/photos/${testId(50)}?album=${album}`, { api });
+    fireEvent.click(await screen.findByRole("button", { name: "Download original" }));
+    await waitFor(() => expect(clicked).toEqual([url]));
+    const call = request.mock.calls.find(([, path]) => path.endsWith("/download-url"));
+    expect(call?.[2]?.query).toEqual({ albumId: album });
+    expect(screen.queryByRole("button", { name: "Delete photo" })).toBeNull();
+  });
+
+  it("is unavailable until the upload has finished", async () => {
+    const { api } = setup({
+      "GET /photos": { items: [testPhoto(0, { status: "pending" })], nextCursor: null },
+    });
+    await renderAt(`/photos/${testId(0)}`, { api });
+    const button = await screen.findByRole("button", { name: "Download original" });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("explains a failed download", async () => {
+    const { api } = setup({
+      [`GET /photos/${testId(0)}/download-url`]: new ApiRequestError("NETWORK_ERROR", "x", 0),
+    });
+    await renderAt(`/photos/${testId(0)}`, { api });
+    fireEvent.click(await screen.findByRole("button", { name: "Download original" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Can't reach the server. Check your connection.",
+    );
+  });
+});
+
+describe("delete (FR-DEL-1/2)", () => {
+  const deletes = (request: ReturnType<typeof fakeApi>["request"]) =>
+    request.mock.calls.filter(([method]) => method === "DELETE").map(([, path]) => path);
+
+  async function openDialog() {
+    fireEvent.click(await screen.findByRole("button", { name: "Delete photo" }));
+    return screen.findByRole("alertdialog", { name: "Delete this photo?" });
+  }
+
+  it("asks for confirmation and does nothing when cancelled", async () => {
+    const { api, request } = setup();
+    await renderAt(`/photos/${testId(1)}`, { api });
+    const dialog = await openDialog();
+    expect(dialog.textContent).toContain("IMG_1.jpg will be removed from your library");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(deletes(request)).toEqual([]);
+    expect(heading()).toBe("IMG_1.jpg");
+  });
+
+  it("deletes, shows the next photo and drops it from the gallery", async () => {
+    let deleted = false;
+    const { api, request } = setup({
+      "GET /photos": () =>
+        deleted ? { items: [testPhoto(0), testPhoto(2)], nextCursor: null } : testPhotoPage(0, 3),
+      [`DELETE /photos/${testId(1)}`]: () => {
+        deleted = true;
+      },
+    });
+    const { router } = await renderAt("/gallery", { api });
+    fireEvent.click(await screen.findByRole("link", { name: "IMG_1.jpg" }));
+    await screen.findByRole("heading", { name: "IMG_1.jpg" });
+
+    fireEvent.click(within(await openDialog()).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(heading()).toBe("IMG_2.jpg"));
+    expect(deletes(request)).toEqual([`/photos/${testId(1)}`]);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+
+    // The deleted photo is gone from the list prev/next walk, and from the gallery.
+    const previous = screen.getByRole("link", { name: "Previous photo" });
+    await waitFor(() => expect(previous.getAttribute("href")).toContain(testId(0)));
+    fireEvent.click(previous);
+    await waitFor(() => expect(heading()).toBe("IMG_0.jpg"));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/gallery"));
+    await screen.findByRole("link", { name: "IMG_0.jpg" });
+    expect(screen.queryByRole("link", { name: "IMG_1.jpg" })).toBeNull();
+  });
+
+  it("goes back to the gallery after deleting the only photo", async () => {
+    const { api } = setup({
+      "GET /photos": testPhotoPage(0, 1),
+      [`DELETE /photos/${testId(0)}`]: undefined,
+    });
+    const { router } = await renderAt(`/photos/${testId(0)}`, { api });
+    fireEvent.click(within(await openDialog()).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/gallery"));
+  });
+
+  it("keeps the dialog open with the reason when the delete fails", async () => {
+    const { api } = setup({
+      [`DELETE /photos/${testId(1)}`]: new ApiRequestError("INTERNAL_ERROR", "x", 500),
+    });
+    await renderAt(`/photos/${testId(1)}`, { api });
+    const dialog = await openDialog();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    expect((await within(dialog).findByRole("alert")).textContent).toBe(
+      "Something went wrong on our side. Try again later.",
+    );
+    // Behind the modal dialog, hidden from assistive tech.
+    expect(screen.getByRole("heading", { level: 1, hidden: true }).textContent).toBe("IMG_1.jpg");
+  });
+
+  it("closes only the dialog with Escape, and arrows don't change the photo behind it", async () => {
+    const { router } = await renderAt(`/photos/${testId(1)}`, { api: setup().api });
+    await openDialog();
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(router.state.location.pathname).toBe(`/photos/${testId(1)}`);
+    expect(heading()).toBe("IMG_1.jpg");
+  });
+
+  it("is offered in one of my own albums", async () => {
+    const { api } = setup({
+      "GET /albums": {
+        items: [
+          {
+            albumId: album,
+            name: "Mine",
+            createdAt: "2026-10-01T10:00:00.000Z",
+            coverPhotoId: null,
+            coverThumbUrl: null,
+            photoCount: 1,
+          },
+        ],
+      },
+      [`GET /albums/${album}/photos`]: testPhotoPage(50, 1),
+    });
+    await renderAt(`/photos/${testId(50)}?album=${album}`, { api });
+    expect(await screen.findByRole("button", { name: "Delete photo" })).toBeTruthy();
   });
 });

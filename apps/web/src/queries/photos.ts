@@ -1,5 +1,10 @@
 import type { Photo, PhotoPage, PhotoSort } from "@photo-app/shared";
-import { infiniteQueryOptions, queryOptions, type InfiniteData } from "@tanstack/react-query";
+import {
+  infiniteQueryOptions,
+  queryOptions,
+  type InfiniteData,
+  type QueryClient,
+} from "@tanstack/react-query";
 import type { Api } from "@/api/api";
 
 export interface GalleryFilter {
@@ -45,9 +50,27 @@ export const galleryQuery = (api: Api, { album, sort }: GalleryFilter) =>
     refetchInterval: (query) => processingPollInterval(query.state.data),
   });
 
+const photoKey = (photoId: string) => ["photos", "one", photoId] as const;
+
 /** One own photo (`GET /photos/{id}`), for a viewer opened on a photo outside the loaded pages. */
 export const photoQuery = (api: Api, photoId: string) =>
   queryOptions({
-    queryKey: ["photos", "one", photoId],
+    queryKey: photoKey(photoId),
     queryFn: ({ signal }) => api.photos.get(photoId, { signal }),
   });
+
+/** Drops a deleted photo from every cached list and its own entry, before the refetch confirms. */
+export function removePhotoFromCache(queryClient: QueryClient, photoId: string) {
+  queryClient.removeQueries({ queryKey: photoKey(photoId) });
+  queryClient.setQueriesData<InfiniteData<PhotoPage>>({ queryKey: ["photos"] }, (data) =>
+    data?.pages
+      ? {
+          ...data,
+          pages: data.pages.map((page) => ({
+            ...page,
+            items: page.items.filter((p) => p.photoId !== photoId),
+          })),
+        }
+      : data,
+  );
+}

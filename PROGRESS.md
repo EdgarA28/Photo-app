@@ -15,14 +15,14 @@
 
 | | |
 |---|---|
-| **Phase** | 3 done (dev), 5.1–5.15 done (all API routes except media cookies; API deployed in dev), 6.1–6.7 + 6.12 done (thumbnail code), Phase 4 done (Cognito + Google IdP + pre sign-up trigger in dev, linking verified) 6.8–6.10 done (thumbnail Lambda deployed in dev, end-to-end upload ≤ 5 s), 8.1–8.8 done (web scaffold, Tailwind + shadcn/ui, login, API client, app shell, gallery, processing/failed tiles, viewer) → next: 8.9 download + delete. 6.11 moved to Phase 13 (after everything else) |
+| **Phase** | 3 done (dev), 5.1–5.15 done (all API routes except media cookies; API deployed in dev), 6.1–6.7 + 6.12 done (thumbnail code), Phase 4 done (Cognito + Google IdP + pre sign-up trigger in dev, linking verified) 6.8–6.10 done (thumbnail Lambda deployed in dev, end-to-end upload ≤ 5 s), 8.1–8.8 done (web scaffold, Tailwind + shadcn/ui, login, API client, app shell, gallery, processing/failed tiles, viewer, download + delete) → next: 8.10 upload queue. 6.11 moved to Phase 13 (after everything else) |
 | **Last updated** | 2026-10-24 |
 | **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` + Cognito pool `us-east-1_vYJcHEj4G` + trigger `photo-app-dev-pre-sign-up` + thumbnail Lambda `photo-app-dev-thumbnails` with DLQ + API `https://tnl6uhgwkg.execute-api.us-east-1.amazonaws.com` (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
 
 ## Next up
 
-1. Phase 8 (user's choice, 2026-10-24, continuing the frontend before Phase 7): 8.9 download + delete, then 8.10 and on. Thumbnails/previews show placeholders until Phase 7. The gallery shows placeholders until Phase 7 serves thumbnails. Run locally: `pnpm --filter @photo-app/web env:dev` once (needs the dev SSO session), then `pnpm --filter @photo-app/web dev`. Images (thumbs/previews) need Phase 7 (CloudFront + media cookie) before the gallery can show them; 6.11 is in Phase 13.
+1. Phase 8 (user's choice, 2026-10-24, continuing the frontend before Phase 7): 8.10 upload queue, then 8.11 and on. Thumbnails/previews show placeholders until Phase 7. The gallery shows placeholders until Phase 7 serves thumbnails. Run locally: `pnpm --filter @photo-app/web env:dev` once (needs the dev SSO session), then `pnpm --filter @photo-app/web dev`. Images (thumbs/previews) need Phase 7 (CloudFront + media cookie) before the gallery can show them; 6.11 is in Phase 13.
    Dev app resources (table + photo bucket + Cognito + trigger + thumbnail Lambda + DLQ + API) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done. Dev plans need `pnpm build` (trigger + API bundles), `pnpm build:py` (thumbnails) and `source ~/.config/photo-app/dev.env` (Google secret).
 2. Prod bootstrap (1.3/1.4/1.5 for prod) whenever the user approves it; it isn't needed until Phase 11.
 3. Add GitHub repo secrets/environments for the CI roles when Phase 10 starts.
@@ -189,7 +189,8 @@
   - Pending: spinner placeholder; failed: error tile ("Failed"), both still open the viewer; gallery refetches every 3 s while a photo uploaded < 10 min ago is pending (§5 step 5), so abandoned uploads don't poll forever
 - [x] **8.8** Viewer `/photos/$photoId`: preview image, prev/next, keyboard + swipe (FR-GAL-4)
   - `?album=&sort=` from the gallery tile, so prev/next walk that list (next page loads near the end); `replace` navigation + Close/Escape = history back; deep link outside the loaded pages → `GET /photos/{id}` without prev/next; pending/failed/broken-preview messages; neighbours preloaded
-- [ ] **8.9** Download + delete with confirmation (FR-DL-1/2, FR-DEL-1/2)
+- [x] **8.9** Download + delete with confirmation (FR-DL-1/2, FR-DEL-1/2)
+  - In the viewer: download via the pre-signed `attachment` URL (album passed for shared photos; off while pending); delete only for own photos, AlertDialog confirmation, then next/previous photo or back to the gallery, cache + usage/albums refreshed. Not yet checked against the real S3 URL in a browser
 - [ ] **8.10** Upload queue in IndexedDB: picker, drag & drop, camera; 3 concurrent; progress; retry on `online`/start (FR-UP-1/5/6)
 - [ ] **8.11** Albums: list, create, rename, delete, add/remove photos, album view (FR-ALB-1/2)
 - [ ] **8.12** Sharing UI: share by email, revoke, "Shared with me" section (FR-SHR-1..4)
@@ -348,3 +349,4 @@ Deferred by the user (2026-10-24): done once Phases 7–12 are finished. Until t
 | 2026-10-24 | 8.6 gallery: infinite query (`GET /photos` or album photos), justified rows virtualized with `useWindowVirtualizer`, album/sort Selects in the URL, empty and error states. TanStack Virtual 3.14.20 (week-old release), shadcn Select. Loaders moved to `queryClient.query`/`infiniteQuery` + `staleTime: "static"` (the `ensure*` methods are deprecated). Checked in headless Chrome with fake photos: rows fill the width, 600 photos load page by page while scrolling with ~55 tiles in the DOM. 126 web tests pass. Nothing deployed. |
 | 2026-10-24 | 8.7 processing/failed tiles (FR-GAL-5) + `processingPollInterval` polling (3 s, recent pending uploads only). Polling test checked to fail without the poll. 130 web tests pass; lint/typecheck/format clean. Nothing deployed. |
 | 2026-10-24 | 8.8 viewer: `photos/$photoId.tsx` (preview, prev/next, ←/→/Escape, swipe, preload, deep link, 404), shared `gallerySearchSchema`, `photoQuery`. 13 viewer tests (album-context test checked to fail when broken). 141 web tests pass; lint/typecheck/format/build clean. Not checked in a browser. Nothing deployed. |
+| 2026-10-24 | 8.9 download + delete in the viewer (`src/lib/download.ts`, shadcn AlertDialog, `removePhotoFromCache`); error screen when a loaded photo vanishes. 10 new tests (dialog key-guard test checked to fail without the guard). 151 web tests pass; lint/typecheck/format/build clean. Nothing deployed. |

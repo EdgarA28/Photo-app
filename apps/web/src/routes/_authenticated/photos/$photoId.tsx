@@ -1,7 +1,20 @@
 import type { Photo } from "@photo-app/shared";
-import { useQuery, useSuspenseInfiniteQuery } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  useSuspenseInfiniteQuery,
+} from "@tanstack/react-query";
 import { createFileRoute, Link, useRouter, type ErrorComponentProps } from "@tanstack/react-router";
-import { ChevronLeft, ChevronRight, ImageOff, LoaderCircle, X } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  ImageOff,
+  LoaderCircle,
+  Trash2,
+  X,
+} from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -12,9 +25,21 @@ import {
   type ReactNode,
 } from "react";
 import { errorMessage } from "@/api/errors";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { gallerySearchSchema } from "@/gallery/search";
-import { galleryQuery, photoQuery } from "@/queries/photos";
+import { startDownload } from "@/lib/download";
+import { albumsQuery } from "@/queries/albums";
+import { galleryQuery, photoQuery, removePhotoFromCache } from "@/queries/photos";
 
 /** Horizontal travel that counts as a swipe; it must also be mostly sideways. */
 const SWIPE_MIN_PX = 50;
@@ -68,9 +93,9 @@ function Viewer() {
 
   // Replace, so Back/close returns to the gallery rather than through every photo seen.
   const show = useCallback(
-    (target: Photo | undefined) => {
+    async (target: Photo | undefined) => {
       if (!target) return;
-      void navigate({
+      await navigate({
         params: { photoId: target.photoId },
         search: (s) => s,
         replace: true,
@@ -79,27 +104,38 @@ function Viewer() {
     [navigate],
   );
 
+  // The delete dialog handles its own keys (Escape closes only the dialog).
+  const [confirming, setConfirming] = useState(false);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
-      if (event.key === "ArrowLeft") show(prev);
-      else if (event.key === "ArrowRight") show(next);
+      if (confirming || event.defaultPrevented) return;
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      if (event.key === "ArrowLeft") void show(prev);
+      else if (event.key === "ArrowRight") void show(next);
       else if (event.key === "Escape") close();
       else return;
       event.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [show, close, prev, next]);
+  }, [confirming, show, close, prev, next]);
 
   usePreload(prev?.previewUrl, next?.previewUrl);
-  const swipe = useSwipe({ onLeft: () => show(next), onRight: () => show(prev) });
+  const swipe = useSwipe({ onLeft: () => void show(next), onRight: () => void show(prev) });
 
-  if (!photo) return null; // only while a deep-linked photo's query hydrates; the loader fetched it
+  // After a delete: the neighbour takes its place, or the gallery if it was the only photo.
+  const afterDelete = useCallback(async () => {
+    if (next ?? prev) await show(next ?? prev);
+    else close();
+  }, [next, prev, show, close]);
+
+  // The loader fetched it; missing only if it went away since (e.g. deleted on another device).
+  if (!photo) return single.isError ? <ErrorScreen error={single.error} /> : null;
 
   return (
     <main className="fixed inset-0 flex flex-col bg-black text-white">
-      <header className="flex items-center gap-3 p-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
+      <header className="relative z-10 flex items-center gap-3 p-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
         <Button
           variant="ghost"
           size="icon-lg"
@@ -109,12 +145,20 @@ function Viewer() {
         >
           <X className="size-5" />
         </Button>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <h1 className="truncate text-sm font-medium">{photo.fileName}</h1>
           {photo.status === "ready" && (
             <p className="text-xs text-white/60">{dateFormat.format(new Date(photo.takenAt))}</p>
           )}
         </div>
+        <PhotoActions
+          key={photo.photoId}
+          photo={photo}
+          album={album}
+          confirming={confirming}
+          setConfirming={setConfirming}
+          onDeleted={afterDelete}
+        />
       </header>
 
       <div
@@ -126,6 +170,126 @@ function Viewer() {
         <NavButton label="Next photo" target={next} side="right" />
       </div>
     </main>
+  );
+}
+
+const iconButton = "text-white hover:bg-white/10 hover:text-white";
+
+/**
+ * Download (FR-DL-1/2) and delete (FR-DEL-1/2). Delete is offered for own photos only: in an album
+ * that isn't in my album list (shared with me) the photo belongs to someone else.
+ */
+function PhotoActions({
+  photo,
+  album,
+  confirming,
+  setConfirming,
+  onDeleted,
+}: {
+  photo: Photo;
+  album: string | undefined;
+  confirming: boolean;
+  setConfirming: (open: boolean) => void;
+  onDeleted: () => Promise<void>;
+}) {
+  const { api } = Route.useRouteContext();
+  const queryClient = useQueryClient();
+  const { data: albums } = useQuery({ ...albumsQuery(api), enabled: album !== undefined });
+  const own = album === undefined || !!albums?.items.some((a) => a.albumId === album);
+
+  // A 5-minute pre-signed URL with `attachment` disposition: the browser saves the original
+  // under its file name straight from S3. A shared photo needs its album (5.13).
+  const download = useMutation({
+    mutationFn: () => api.photos.downloadUrl(photo.photoId, album),
+    onSuccess: ({ url }) => startDownload(url),
+  });
+
+  const remove = useMutation({
+    mutationFn: () => api.photos.delete(photo.photoId),
+    onSuccess: async () => {
+      setConfirming(false);
+      await onDeleted();
+      // Only once the viewer has moved on, so it never looks the deleted photo up again.
+      removePhotoFromCache(queryClient, photo.photoId);
+      for (const key of [["photos"], ["albums"], ["me"]]) {
+        void queryClient.invalidateQueries({ queryKey: key });
+      }
+    },
+  });
+
+  return (
+    <>
+      {download.isError && (
+        <p
+          role="alert"
+          className="absolute top-full right-2 max-w-[calc(100%-1rem)] rounded-md bg-black/80 px-3 py-2 text-sm text-red-300"
+        >
+          {errorMessage(download.error)}
+        </p>
+      )}
+      <Button
+        variant="ghost"
+        size="icon-lg"
+        aria-label="Download original"
+        title={photo.status === "pending" ? "Available once the upload is finished" : undefined}
+        disabled={photo.status === "pending" || download.isPending}
+        onClick={() => download.mutate()}
+        className={iconButton}
+      >
+        {download.isPending ? (
+          <LoaderCircle className="size-5 motion-safe:animate-spin" />
+        ) : (
+          <Download className="size-5" />
+        )}
+      </Button>
+      {own && (
+        <AlertDialog
+          open={confirming}
+          onOpenChange={(open) => {
+            if (remove.isPending) return;
+            setConfirming(open);
+            if (!open) remove.reset();
+          }}
+        >
+          <Button
+            variant="ghost"
+            size="icon-lg"
+            aria-label="Delete photo"
+            onClick={() => setConfirming(true)}
+            className={iconButton}
+          >
+            <Trash2 className="size-5" />
+          </Button>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete this photo?</AlertDialogTitle>
+              <AlertDialogDescription>
+                {photo.fileName} will be removed from your library and from all albums. This can't
+                be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            {remove.isError && (
+              <p role="alert" className="text-sm text-destructive">
+                {errorMessage(remove.error)}
+              </p>
+            )}
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={remove.isPending}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                variant="destructive"
+                disabled={remove.isPending}
+                onClick={(event) => {
+                  event.preventDefault(); // stay open until the API answers
+                  remove.mutate();
+                }}
+              >
+                {remove.isPending ? "Deleting…" : "Delete"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
+    </>
   );
 }
 
@@ -243,6 +407,10 @@ function useSwipe({ onLeft, onRight }: { onLeft: () => void; onRight: () => void
 
 // e.g. a deleted photo or another user's (404), or no network.
 function ViewerError({ error }: ErrorComponentProps) {
+  return <ErrorScreen error={error} />;
+}
+
+function ErrorScreen({ error }: { error: unknown }) {
   const close = useClose();
   return (
     <main className="fixed inset-0 flex flex-col items-center justify-center gap-4 bg-black px-6 text-center text-white">
