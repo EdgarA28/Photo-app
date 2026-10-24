@@ -39,5 +39,6 @@ Run `source ~/.nvm/nvm.sh && nvm use` first (system Node is 24; the project uses
 - Infra modules: `pnpm test:infra` (offline `tofu test`, mocked provider). Env plans: `AWS_PROFILE=<env> tofu plan -var-file=env.tfvars -out=<env>.tfplan` in `infra/envs/<env>`
 - Python (thumbnails): `pnpm lint:py` · `pnpm test:py`, or `uv run …` inside `services/thumbnails` (uv is in `~/.local/bin`)
 - Web dev server: `API_PROXY_TARGET=$(tofu -chdir=infra/envs/dev output -raw api_endpoint) pnpm --filter @photo-app/web dev` (port 5173, `/api` proxied; the API has no CORS)
+- shadcn/ui components: `CI=true pnpm dlx shadcn@4.22.1 add <name> < /dev/null` in `apps/web` (prompts hang otherwise); they land in `src/components/ui/`
 - Lambda bundles (needed before env plans): `pnpm build` (includes the auth trigger → `services/auth-triggers/dist`) · `pnpm build:py` (thumbnails, aarch64 wheels → `services/thumbnails/dist`, used by the env plans once 6.9 wires it in)
 - New TS packages: extend `../../tsconfig.base.json`, add a `vitest.config.ts` (auto-discovered by the root config) and a `typecheck` script (`tsc`).

@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Version** | 0.4 |
-| **Date** | 2026-10-22 |
+| **Version** | 0.5 |
+| **Date** | 2026-10-24 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
 
@@ -116,6 +116,7 @@ Accounts, tools and decisions needed before implementation.
 | Routing | **TanStack Router** | File-based routes, type-safe search params, `beforeLoad` auth guards |
 | Server state | **TanStack Query** | Caching, `useInfiniteQuery` for the gallery, persisted to IndexedDB |
 | Large lists | **TanStack Virtual** | Virtualized photo grid |
+| UI / styling | **Tailwind CSS** + **shadcn/ui** | Utility CSS; accessible components (Radix) copied into the repo (D-3) |
 | Validation | **Zod** | Shared schemas between frontend and API |
 | PWA | **vite-plugin-pwa** (Workbox) | Manifest + service worker |
 | API | **TypeScript on AWS Lambda** (Node.js 22, arm64) | One API function, bundled with esbuild; lightweight router (e.g. Hono) |
@@ -696,7 +697,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|---|
 | D-1 | API routing inside the Lambda | One Lambda + router (Hono) · one Lambda per route | One Lambda + Hono |
 | D-2 | OIDC client library | `oidc-client-ts` · Amplify Auth | `oidc-client-ts` (lighter) |
-| D-3 | UI component / styling library | Tailwind · shadcn/ui · Mantine · … | Open |
+| D-3 | UI component / styling library | Tailwind · shadcn/ui · Mantine · … | **Decided 2026-10-24:** Tailwind CSS + shadcn/ui |
 | D-4 | Domain name | — | Open |
 | D-5 | Default prod quota | 5 / 10 / 20 GB | 10 GB |
 | D-6 | Photo bucket versioning in prod | On (safer, costs more) · off | On, noncurrent versions expire after 30 days |
@@ -709,6 +710,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 
 | Version | Date | Changes |
 |---|---|---|
+| 0.5 | 2026-10-24 | D-3 decided: Tailwind CSS + shadcn/ui (§4, §18) |
 | 0.4 | 2026-10-22 | Usernames: FR-ACC-3 (unique, optional, changeable), FR-SHR-5 (share by username); Profile + Username claim items and access patterns (§8.2); `PUT /me/username`, `username` in `GET /me`, share by `{username}` (§9); D-8 (held names) |
 | 0.3 | 2026-10-20 | `DELETE /session/media-cookie` for logout (FR-AUTH-5: `HttpOnly` cookies can't be cleared by JS); logout flow (§5.2); media cookie attributes and non-revocability (§9) |
 | 0.2 | 2026-10-19 | Bootstrap details: one budget for the organization, CI role permissions and trust (§3, §14.1); region changed to us-east-1; separate dev/prod AWS accounts + management account; one state bucket per account; org-wide budget $5/month; client-side state encryption deferred |

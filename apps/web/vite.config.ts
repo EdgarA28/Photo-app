@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
@@ -12,7 +14,11 @@ export default defineConfig({
     // Generates src/routeTree.gen.ts from src/routes (§12.1); must run before the React plugin.
     tanstackRouter({ target: "react", autoCodeSplitting: true }),
     react(),
+    tailwindcss(),
   ],
+  resolve: {
+    alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
+  },
   server: {
     // Fixed: http://localhost:5173/auth/callback is a registered Cognito callback URL (4.2).
     port: 5173,

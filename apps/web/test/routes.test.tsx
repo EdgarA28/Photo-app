@@ -53,6 +53,13 @@ describe("routes (§12.1)", () => {
     expect(await screen.findByText("Photo 01JB2Z3M4N5P6Q7R8S9T0V1W2X")).toBeTruthy();
   });
 
+  it("marks the current page in the navigation", async () => {
+    await renderAt("/albums");
+    const current = await screen.findByRole("link", { current: "page" });
+    expect(current.textContent).toBe("Albums");
+    expect(current.dataset.slot).toBe("button");
+  });
+
   it("shows a not-found page for unknown paths", async () => {
     await renderAt("/nowhere");
     expect(await screen.findByRole("heading", { name: "Page not found" })).toBeTruthy();
