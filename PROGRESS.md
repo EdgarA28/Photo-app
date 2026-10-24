@@ -15,14 +15,14 @@
 
 | | |
 |---|---|
-| **Phase** | 3 done (dev), 5.1–5.15 done (all API routes except media cookies; API deployed in dev), 6.1–6.7 + 6.12 done (thumbnail code), Phase 4 done (Cognito + Google IdP + pre sign-up trigger in dev, linking verified) 6.8–6.10 done (thumbnail Lambda deployed in dev, end-to-end upload ≤ 5 s) → next: 6.11 stale-pending sweeper or Phase 7 |
+| **Phase** | 3 done (dev), 5.1–5.15 done (all API routes except media cookies; API deployed in dev), 6.1–6.7 + 6.12 done (thumbnail code), Phase 4 done (Cognito + Google IdP + pre sign-up trigger in dev, linking verified) 6.8–6.10 done (thumbnail Lambda deployed in dev, end-to-end upload ≤ 5 s), 8.1 done (web scaffold) → next: 8.2 UI library (D-3), then 8.3 auth. 6.11 moved to Phase 13 (after everything else) |
 | **Last updated** | 2026-10-24 |
 | **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` + Cognito pool `us-east-1_vYJcHEj4G` + trigger `photo-app-dev-pre-sign-up` + thumbnail Lambda `photo-app-dev-thumbnails` with DLQ + API `https://tnl6uhgwkg.execute-api.us-east-1.amazonaws.com` (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
 
 ## Next up
 
-1. 6.11 stale-pending sweeper (needs approval), or Phase 7 (CloudFront, signed cookies, media-cookie routes) so photos can be viewed. Phase 8 (web app) needs the Vite dev proxy for `/api` (the API has no CORS).
+1. Phase 8 (user's choice, 2026-10-24): 8.2 decide the UI library (D-3, user decision), then 8.3 auth (oidc-client-ts + PKCE against the dev pool). Run locally with `API_PROXY_TARGET=<api_endpoint> pnpm --filter @photo-app/web dev`. Images (thumbs/previews) need Phase 7 (CloudFront + media cookie) before the gallery can show them; 6.11 is in Phase 13.
    Dev app resources (table + photo bucket + Cognito + trigger + thumbnail Lambda + DLQ + API) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done. Dev plans need `pnpm build` (trigger + API bundles), `pnpm build:py` (thumbnails) and `source ~/.config/photo-app/dev.env` (Google secret).
 2. Prod bootstrap (1.3/1.4/1.5 for prod) whenever the user approves it; it isn't needed until Phase 11.
 3. Add GitHub repo secrets/environments for the CI roles when Phase 10 starts.
@@ -161,7 +161,6 @@
   - 73 tests (key vectors, imaging, handler/processor on moto S3 + DynamoDB); fixtures generated in `conftest.py`, no binaries in git
 - [x] **6.8** Packaging: aarch64 wheels → `dist/` (manylinux_2_28; zipped by the 6.9 module like the auth trigger)
 - [x] **6.9** `thumbnails` infra module: Lambda (1536 MB, 60 s), IAM (read + delete `originals/`, write + delete `thumbs/`+`previews/`), S3 notification, retries 2×, SQS DLQ 14 days, logs (NFR-SEC-7)
-- [ ] **6.11** Stale-pending sweeper (abandoned uploads): scheduled Lambda (EventBridge, daily) finds `pending` photos older than 24 h; `HeadObject` on `originalKey` → missing: delete the item via the same logic as `repos.photos.delete` (memberships, conditional on `status = pending`); present: leave it and log a warning (processing problem, see DLQ). Needs a way to find old pending items without scanning every user (e.g. sparse GSI on pending items, or a Scan with filter while small); IAM: `s3:HeadObject`/`GetObject` on `users/*/originals/*`, table read/write. New AWS resources, **needs approval**. Complements upload-photo reuse in 5.6a
 - [x] **6.12** Orphaned originals: a `pending` photo deleted (5.9) while its upload POST is still valid (≤ 15 min) can still receive the original; the Lambda then logs "no photo item" and skips, leaving an unreferenced, uncounted original. Fix: on "no photo item", delete the original (safe: the item is always written before the POST is handed out, and the read is consistent). IAM: `s3:DeleteObject` on `originals/` too
 - [x] **6.10** End-to-end check: upload via pre-signed POST → thumb ≤ 5 s (NFR-PERF-1)
 
@@ -175,7 +174,8 @@
 
 ## Phase 8 — Frontend (`apps/web`, §12)
 
-- [ ] **8.1** Vite + React + TS scaffold, TanStack Router (file-based) + Query, Zod
+- [x] **8.1** Vite + React + TS scaffold, TanStack Router (file-based) + Query, Zod
+  - All §12.1 routes as placeholders, gallery `album`/`sort` search validated with shared Zod schemas, Vite `/api` proxy (`API_PROXY_TARGET`), port 5173 strict; 10 route tests (jsdom)
 - [ ] **8.2** Decide UI library (D-3) and set up styling
 - [ ] **8.3** Auth: `oidc-client-ts` (D-2), PKCE, `/login`, `/auth/callback`, token refresh, `_authenticated` guard (FR-AUTH-1/4/6)
 - [ ] **8.4** API client with bearer token + Zod response parsing; media cookie call after login/refresh
@@ -225,6 +225,12 @@
 - [ ] **12.7** Revisit the budget (currently $5/month org-wide) before public launch
 - [ ] **12.8** Move bootstrap state off the local machine (deferred by user 2026-10-23). Today it lives only in `infra/bootstrap/terraform.tfstate.d/<workspace>/`; losing it means `tofu import` for every bootstrap resource. Option: S3 backend in each account's own state bucket + `tofu init -migrate-state`. Needs restructuring first: one config serves 3 accounts, `general` has no state bucket, prod bucket not applied yet. No new AWS resources
 - [ ] **12.9** *(consider)* Alarm on the thumbnail DLQ: CloudWatch alarm on `ApproximateNumberOfMessagesVisible > 0` for `photo-app-<env>-thumbnails-dlq` → SNS email topic, so failed uploads aren't silent (today someone must look at the queue). ~$0.10/month per alarm, SNS email free at this volume. New AWS resources, **needs approval**. Could cover the Lambda's `Errors` metric too
+
+## Phase 13 — After everything else
+
+Deferred by the user (2026-10-24): done once Phases 7–12 are finished. Until then abandoned uploads keep their reserved quota (5.6b) until the photo is deleted.
+
+- [ ] **6.11** *(moved from Phase 6)* Stale-pending sweeper (abandoned uploads): scheduled Lambda (EventBridge, daily) finds `pending` photos older than 24 h; `HeadObject` on `originalKey` → missing: delete the item via the same logic as `repos.photos.delete` (memberships, conditional on `status = pending`); present: leave it and log a warning (processing problem, see DLQ). Needs a way to find old pending items without scanning every user (e.g. sparse GSI on pending items, or a Scan with filter while small); IAM: `s3:HeadObject`/`GetObject` on `users/*/originals/*`, table read/write. New AWS resources, **needs approval**. Complements upload-photo reuse in 5.6a
 
 ---
 
@@ -325,3 +331,4 @@
 | 2026-10-24 | 6.9 `thumbnails` module + 4 offline test runs; wired into dev/prod. Applied to dev (8 added), re-plan clean. arm64 smoke invoke: package loads (init 415 ms, 110 MB), `skipped` for a thumbs key, JSON logs keep `extra` fields. Added 12.9 (DLQ alarm, to consider). |
 | 2026-10-24 | 6.10 end-to-end in dev: 12 MP JPEG (EXIF orientation 6 + offset date → 3024×4032, takenAt in UTC) ready 3.3 s after upload incl. cold start; 12 MP HEIC ready 3.8 s (no EXIF → takenAt = uploadedAt). Derived objects + Usage correct; test data deleted (0 objects, 0 items left). |
 | 2026-10-24 | 5.4 `api` module + 5 offline test runs, wired into dev/prod; applied to dev (12 added), re-plan clean. Checked with a real access token: health 200, missing/garbage/forged token 401, ID token 403, `/me` 200, upload-url → S3 POST → ready in 3.2 s, download identical bytes, pending download 409, delete 204 with Usage back to 0 and no objects left. 313 TS tests pass. |
+| 2026-10-24 | 6.11 moved to a new Phase 13 (after everything else) at the user's request; Phase 8 started. 8.1 web scaffold: Vite 8 + React 19 + TanStack Router/Query, §12.1 routes, Zod gallery search, `/api` proxy checked against the dev API (health 200, `/me` 401 without token). 323 TS tests pass. Nothing deployed. |
