@@ -15,14 +15,14 @@
 
 | | |
 |---|---|
-| **Phase** | 3 done (dev), 5.1–5.15 done (all API routes except media cookies; API deployed in dev), 6.1–6.7 + 6.12 done (thumbnail code), Phase 4 done (Cognito + Google IdP + pre sign-up trigger in dev, linking verified) 6.8–6.10 done (thumbnail Lambda deployed in dev, end-to-end upload ≤ 5 s), 8.1–8.2 done (web scaffold, Tailwind + shadcn/ui) → next: 8.3 auth. 6.11 moved to Phase 13 (after everything else) |
+| **Phase** | 3 done (dev), 5.1–5.15 done (all API routes except media cookies; API deployed in dev), 6.1–6.7 + 6.12 done (thumbnail code), Phase 4 done (Cognito + Google IdP + pre sign-up trigger in dev, linking verified) 6.8–6.10 done (thumbnail Lambda deployed in dev, end-to-end upload ≤ 5 s), 8.1–8.3 done (web scaffold, Tailwind + shadcn/ui, login) → next: 8.4 API client. 6.11 moved to Phase 13 (after everything else) |
 | **Last updated** | 2026-10-24 |
 | **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` + Cognito pool `us-east-1_vYJcHEj4G` + trigger `photo-app-dev-pre-sign-up` + thumbnail Lambda `photo-app-dev-thumbnails` with DLQ + API `https://tnl6uhgwkg.execute-api.us-east-1.amazonaws.com` (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
 
 ## Next up
 
-1. Phase 8 (user's choice, 2026-10-24): 8.3 auth (oidc-client-ts + PKCE against the dev pool; D-2 lean, confirm). Run locally with `API_PROXY_TARGET=<api_endpoint> pnpm --filter @photo-app/web dev`. Images (thumbs/previews) need Phase 7 (CloudFront + media cookie) before the gallery can show them; 6.11 is in Phase 13.
+1. Phase 8 (user's choice, 2026-10-24): 8.4 API client (bearer token from `auth.getAccessToken()`, Zod parsing, 401 handling). Run locally: `pnpm --filter @photo-app/web env:dev` once (needs the dev SSO session), then `pnpm --filter @photo-app/web dev`. Images (thumbs/previews) need Phase 7 (CloudFront + media cookie) before the gallery can show them; 6.11 is in Phase 13.
    Dev app resources (table + photo bucket + Cognito + trigger + thumbnail Lambda + DLQ + API) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done. Dev plans need `pnpm build` (trigger + API bundles), `pnpm build:py` (thumbnails) and `source ~/.config/photo-app/dev.env` (Google secret).
 2. Prod bootstrap (1.3/1.4/1.5 for prod) whenever the user approves it; it isn't needed until Phase 11.
 3. Add GitHub repo secrets/environments for the CI roles when Phase 10 starts.
@@ -178,7 +178,8 @@
   - All §12.1 routes as placeholders, gallery `album`/`sort` search validated with shared Zod schemas, Vite `/api` proxy (`API_PROXY_TARGET`), port 5173 strict; 10 route tests (jsdom)
 - [x] **8.2** Decide UI library (D-3) and set up styling
   - User chose Tailwind CSS + shadcn/ui (2026-10-24). Tailwind 4 (Vite plugin), shadcn style `radix-nova`, Button added and used in the nav; `@/` alias; Prettier sorts classes
-- [ ] **8.3** Auth: `oidc-client-ts` (D-2), PKCE, `/login`, `/auth/callback`, token refresh, `_authenticated` guard (FR-AUTH-1/4/6)
+- [x] **8.3** Auth: `oidc-client-ts` (D-2), PKCE, `/login`, `/auth/callback`, token refresh, `_authenticated` guard (FR-AUTH-1/4/6)
+  - Token storage option A (user, 2026-10-24): access/ID in memory, refresh token in localStorage; basic logout (revoke + Cognito `/logout`); `pnpm env:dev` writes the local config from dev; 57 web tests (auth against mocked Cognito endpoints). Verified by the user in the browser against dev
 - [ ] **8.4** API client with bearer token + Zod response parsing; media cookie call after login/refresh
 - [ ] **8.5** App layout + navigation (gallery, albums, upload, settings)
 - [ ] **8.6** Gallery: `useInfiniteQuery`, TanStack Virtual grid, reserved tile sizes, URL search params `album`/`sort` (FR-GAL-1/2/3, NFR-PERF-3)
@@ -242,6 +243,7 @@ Deferred by the user (2026-10-24): done once Phases 7–12 are finished. Until t
 | 2026-10-18 | Spec moved from repo root to `docs/SPECIFICATION.md` (matches §15). |
 | 2026-10-18 | Open decisions D-1…D-7 still as in spec §18; resolve D-2/D-3 at the start of Phase 8, D-4 before Phase 11. |
 | 2026-10-24 | **D-3 decided:** Tailwind CSS + shadcn/ui (user). Spec v0.5. |
+| 2026-10-24 | **D-2 decided:** `oidc-client-ts`. **Token storage (§11.4) option A** (user): access/ID tokens in memory, refresh token in localStorage; sessionStorage-only breaks FR-AUTH-4, an HttpOnly-cookie backend is overkill. Spec v0.6. |
 | 2026-10-18 | Local machine has Node 24 / Python 3.14; Lambda runtimes are Node 22 / Python 3.13, so use `.nvmrc` / `.python-version` to match. |
 | 2026-10-18 | TypeScript pinned to `~6.0`: TS 7 is out but typescript-eslint 8.x supports only `<6.1`. Revisit when typescript-eslint supports 7. |
 | 2026-10-18 | Root `package.json` is `"type": "module"`. React-specific ESLint plugins get added with the web scaffold (8.1). |
@@ -335,3 +337,4 @@ Deferred by the user (2026-10-24): done once Phases 7–12 are finished. Until t
 | 2026-10-24 | 5.4 `api` module + 5 offline test runs, wired into dev/prod; applied to dev (12 added), re-plan clean. Checked with a real access token: health 200, missing/garbage/forged token 401, ID token 403, `/me` 200, upload-url → S3 POST → ready in 3.2 s, download identical bytes, pending download 409, delete 204 with Usage back to 0 and no objects left. 313 TS tests pass. |
 | 2026-10-24 | 6.11 moved to a new Phase 13 (after everything else) at the user's request; Phase 8 started. 8.1 web scaffold: Vite 8 + React 19 + TanStack Router/Query, §12.1 routes, Zod gallery search, `/api` proxy checked against the dev API (health 200, `/me` 401 without token). 323 TS tests pass. Nothing deployed. |
 | 2026-10-24 | 8.2: Tailwind CSS 4 + shadcn/ui (`radix-nova`, neutral); Button in the nav; `cn` package checked (shadcn-ui/cn, no install scripts); build-only packages kept in devDependencies; lockfile keeps existing versions. 11 web tests. |
+| 2026-10-24 | 8.3 web login: `src/auth` (oidc-client-ts, PKCE, `SessionStore` option A, refresh, logout with revocation), guard, `/login`, `/auth/callback`, settings logout, `pnpm env:dev`. Cognito token/revoke CORS for localhost confirmed. User verified in the browser against dev: guard → /login, Google login → gallery, settings shows the email, reload + reopened tab stay signed in, logout → /login, email login asks for the password again. 370 TS tests pass. Nothing deployed. |

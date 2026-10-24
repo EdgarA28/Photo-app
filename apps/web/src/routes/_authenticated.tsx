@@ -1,9 +1,14 @@
-import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
+import { createFileRoute, Link, Outlet, redirect } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 
-// Pathless layout for every signed-in page (§12.1). 8.3 adds the `beforeLoad` session check
-// (redirect to /login, FR-AUTH-6); 8.5 the real layout and navigation.
+// Pathless layout for every signed-in page (§12.1, FR-AUTH-6): without a valid session (after a
+// refresh attempt) go to /login, remembering the page. 8.5 builds the real layout.
 export const Route = createFileRoute("/_authenticated")({
+  beforeLoad: async ({ context, location }) => {
+    const user = await context.auth.getUser();
+    if (!user) throw redirect({ to: "/login", search: { redirect: location.href } });
+    return { user };
+  },
   component: AuthenticatedLayout,
 });
 

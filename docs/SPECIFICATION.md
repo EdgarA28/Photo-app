@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.5 |
+| **Version** | 0.6 |
 | **Date** | 2026-10-24 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -467,7 +467,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 ### 11.4 Rules
 
 - Backend identity = Cognito `sub` only (never Google's ID, never an email from the request).
-- Frontend keeps tokens in memory + refresh token handling via the OIDC client library (e.g. `oidc-client-ts` or Amplify Auth).
+- Frontend keeps the access and ID tokens in memory; only the refresh token is stored in `localStorage`, so sessions survive restarts (FR-AUTH-4). Refresh token handling via `oidc-client-ts` (D-2). The refresh token is revoked on logout.
 
 ---
 
@@ -696,7 +696,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | # | Question | Options | Current lean |
 |---|---|---|---|
 | D-1 | API routing inside the Lambda | One Lambda + router (Hono) · one Lambda per route | One Lambda + Hono |
-| D-2 | OIDC client library | `oidc-client-ts` · Amplify Auth | `oidc-client-ts` (lighter) |
+| D-2 | OIDC client library | `oidc-client-ts` · Amplify Auth | **Decided 2026-10-24:** `oidc-client-ts` |
 | D-3 | UI component / styling library | Tailwind · shadcn/ui · Mantine · … | **Decided 2026-10-24:** Tailwind CSS + shadcn/ui |
 | D-4 | Domain name | — | Open |
 | D-5 | Default prod quota | 5 / 10 / 20 GB | 10 GB |
@@ -710,6 +710,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 
 | Version | Date | Changes |
 |---|---|---|
+| 0.6 | 2026-10-24 | Token storage clarified (§11.4): access/ID tokens in memory, refresh token in `localStorage` (FR-AUTH-4); D-2 decided: `oidc-client-ts` |
 | 0.5 | 2026-10-24 | D-3 decided: Tailwind CSS + shadcn/ui (§4, §18) |
 | 0.4 | 2026-10-22 | Usernames: FR-ACC-3 (unique, optional, changeable), FR-SHR-5 (share by username); Profile + Username claim items and access patterns (§8.2); `PUT /me/username`, `username` in `GET /me`, share by `{username}` (§9); D-8 (held names) |
 | 0.3 | 2026-10-20 | `DELETE /session/media-cookie` for logout (FR-AUTH-5: `HttpOnly` cookies can't be cleared by JS); logout flow (§5.2); media cookie attributes and non-revocability (§9) |
