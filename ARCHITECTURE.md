@@ -48,8 +48,9 @@
 | Infra modules: database, storage | `infra/modules/{database,storage}` | ✅ (dev) | Offline `tofu test` suites (7 runs) |
 | Infra module: auth | `infra/modules/auth` | ✅ (dev) | User pool, prefix domain (managed login), PKCE web client (4.1), optional Google IdP (4.4), optional pre sign-up trigger Lambda (4.6) + 11 offline test runs; **deployed in dev** (with Google + trigger) |
 | Infra module: thumbnails | `infra/modules/thumbnails` | ✅ (dev) | Lambda, IAM, S3 notification, retries + SQS DLQ, logs (6.9) + 4 offline test runs; **deployed in dev** |
-| Infra modules: api, frontend | `infra/modules/*` | 📋 | |
-| API Lambda | `apps/api` | 🚧 | Skeleton (5.1–5.3) + routes `GET /me`, `POST /photos/upload-url` (incl. retry), `GET /photos`, `GET /photos/{id}`, `GET /photos/{id}/download-url`, `DELETE /photos/{id}`, album CRUD, album photos, sharing, recipient read access and usernames (5.5, 5.6, 5.6a/b, 5.7–5.13, 5.15); 223 tests (incl. DynamoDB Local). Media cookies and signed URLs (Phase 7) not yet; not deployed |
+| Infra module: api | `infra/modules/api` | ✅ (dev) | HTTP API, Cognito JWT authorizer, API Lambda, IAM, throttling, access + Lambda logs (5.4) + 5 offline test runs; **deployed in dev** |
+| Infra module: frontend | `infra/modules/frontend` | 📋 | |
+| API Lambda | `apps/api` | 🚧 | Skeleton (5.1–5.3) + routes `GET /me`, `POST /photos/upload-url` (incl. retry), `GET /photos`, `GET /photos/{id}`, `GET /photos/{id}/download-url`, `DELETE /photos/{id}`, album CRUD, album photos, sharing, recipient read access and usernames (5.5, 5.6, 5.6a/b, 5.7–5.13, 5.15); 223 tests (incl. DynamoDB Local). Media cookies and signed URLs (Phase 7) not yet; **deployed in dev** behind API Gateway (5.4), checked with a real access token |
 | Thumbnail Lambda | `services/thumbnails` | 🚧 | Handler, image pipeline, S3-key mirror, orphan cleanup + 76 pytest tests (6.1–6.7, 6.12); arm64 package `build.sh` → `dist/` (6.8); not deployed yet (6.9–6.10) |
 | Auth trigger Lambda | `services/auth-triggers` | ✅ (dev) | Pre sign-up handler (Google → native account linking, refuses duplicate email sign-ups) + 24 tests (4.5); **deployed in dev** (4.6), linking verified manually |
 | Web app / PWA | `apps/web` | 📋 | Folder skeleton only |
@@ -76,8 +77,8 @@ flowchart LR
   subgraph AWS["AWS us-east-1 (per environment account)"]
     COG["✅ Cognito user pool<br/>+ Google IdP (dev)"]
     TRIG["✅ Pre-sign-up Lambda (dev)<br/>services/auth-triggers"]
-    APIGW["📋 API Gateway HTTP API<br/>JWT authorizer"]
-    API["🚧 API Lambda (Hono)<br/>apps/api"]
+    APIGW["✅ API Gateway HTTP API (dev)<br/>JWT authorizer"]
+    API["✅ API Lambda (Hono, dev)<br/>apps/api"]
     DDB[("✅ DynamoDB<br/>single table (dev)")]
     WEB[("📋 S3 site bucket")]
     S3[("✅ S3 photo bucket (dev)")]
@@ -288,7 +289,8 @@ Photo-app/
 │       ├── storage/             ✅ photo bucket (+ tests/)
 │       ├── auth/                ✅ Cognito user pool, domain, web client, Google IdP, pre sign-up trigger (+ tests/)
 │       ├── thumbnails/          ✅ thumbnail Lambda, IAM, S3 notification, DLQ (+ tests/)
-│       └── api/ frontend/       📋
+│       ├── api/                 ✅ HTTP API, JWT authorizer, API Lambda, IAM, throttling (+ tests/)
+│       └── frontend/            📋
 │
 └── .github/workflows/           📋 ci.yml, deploy.yml
 ```
@@ -525,9 +527,9 @@ Contracts exist (✅ in `packages/shared`). Implemented routes are marked ✅ be
 
 **Request pipeline (✅, `apps/api/src/app.ts`):** body limit 64 KB → `GET /health` (public) → `requireUser` (JWT `sub` from `event.requestContext.authorizer.jwt.claims`, set by the API Gateway JWT authorizer) → route (`validate(target, schema)` with the shared Zod schemas, repositories, `orNotFound`) → `onError`. Every error leaves as `{error: {code, message}}`: `AppError` as thrown; Hono `HTTPException` by status (400 `VALIDATION_ERROR`, 413 `PAYLOAD_TOO_LARGE`, …); anything else is logged as JSON and returned as a generic 500 `INTERNAL_ERROR`. Unknown routes: 401 for anonymous callers, 404 `NOT_FOUND` for users. Routes are registered through `createApp({ routes: registerRoutes(deps) })`; `Deps` = repositories, a `UserDirectory` (Cognito), a `PhotoStorage` (S3) and `{ defaultQuotaBytes }`, built once per Lambda environment in `index.ts` and faked in tests.
 
-**Runtime configuration (env vars, set by the `api` module in 5.4):** `TABLE_NAME`, `PHOTO_BUCKET`, `USER_POOL_ID`, `DEFAULT_QUOTA_BYTES` (positive integer; e.g. 2 GB dev, 10 GB prod). A missing or invalid value fails the cold start.
+**Runtime configuration (env vars, set by the `api` module, 5.4 ✅):** `TABLE_NAME`, `PHOTO_BUCKET`, `USER_POOL_ID`, `DEFAULT_QUOTA_BYTES` (positive integer; e.g. 2 GB dev, 10 GB prod). A missing or invalid value fails the cold start.
 
-**Permissions the `api` role needs (5.4):** `cognito-idp:ListUsers` on the pool; `s3:PutObject` on `users/*/originals/*` (uploads are signed with the Lambda's credentials) and `s3:GetObject` there (downloads, likewise); `s3:DeleteObject` on `users/*/originals/*`, `users/*/thumbs/*`, `users/*/previews/*` (photo delete; `DeleteObjects` checks it per key); table read/write.
+**Permissions of the `api` role (granted by the module, 5.4 ✅):** `cognito-idp:ListUsers` on the pool; `s3:PutObject` on `users/*/originals/*` (uploads are signed with the Lambda's credentials) and `s3:GetObject` there (downloads, likewise); `s3:DeleteObject` on `users/*/originals/*`, `users/*/thumbs/*`, `users/*/previews/*` (photo delete; `DeleteObjects` checks it per key); table read/write.
 
 **Response conventions (✅):**
 - Own image URLs are stable CloudFront paths, `/users/{sub}/thumbs/{photoId}.jpg` and `/users/{sub}/previews/{photoId}.jpg`, and only when `status = ready` (else `null`). Album `coverThumbUrl` is the cover's thumb path under the same rule.
@@ -714,8 +716,9 @@ Bootstrap uses local state per workspace instead of S3.
 | CloudFront OAC / signed URLs (NFR-SEC-3) | 📋 | Phase 7 |
 | Metadata stripping on derived images (NFR-SEC-5) | ✅ code | Output JPEGs carry pixels only (no EXIF/GPS/XMP/ICC); tested for JPEG, PNG, WebP and HEIF sources |
 | Decompression-bomb / size limits | ✅ code | Thumbnail Lambda rejects sources > 50 MB or > 100 MP as permanent failures |
-| Least-privilege Lambda roles (NFR-SEC-7) | 📋 | |
-| Throttling / WAF (NFR-SEC-9) | 📋 | |
+| Least-privilege Lambda roles (NFR-SEC-7) | ✅ (dev) | One role per function with inline policies scoped to exact resources and key prefixes: API (table + indexes without `Scan`; sign uploads/downloads for originals only; delete photo objects; `ListUsers`), thumbnails (no write to originals), pre sign-up trigger (`ListUsers` + `AdminLinkProviderForUser` on its pool). Each Lambda may only be invoked by its source (this API / this bucket / this pool). Offline tests assert the statements |
+| Throttling / WAF (NFR-SEC-9) | 🚧 | ✅ API Gateway stage throttling, whole API: 25 req/s steady, burst 50 → 429 (dev). 📋 WAF per-IP rate limiting on CloudFront before public launch (11.2) |
+| API authentication at the edge (NFR-SEC-1) | ✅ (dev) | JWT authorizer: signature (pool JWKS), issuer = the pool, client = web client, not expired; route requires scope `openid` → only access tokens. Verified: no/garbage/forged token → 401, ID token → 403 (`insufficient_scope`), access token → 200. Only `GET /api/health` is public. The Lambda can only be invoked by this API, so `requireUser` trusts the claims |
 | `ci-deploy` least privilege | 📋 | Currently `AdministratorAccess`, restricted by *who* (main / prod env); task 12.6 |
 
 ---
@@ -755,7 +758,7 @@ Tags on everything: `Project=photo-app`, `Environment=<ws>`, `ManagedBy=opentofu
 | `providers.tf` | region var (default `us-east-1`), `allowed_account_ids`, default tags (`Project`, `Environment`, `ManagedBy`); credentials from `AWS_PROFILE` locally / OIDC in CI |
 | `variables.tf` | `region`; `app_origins` (web app origins → S3 CORS, Cognito callback + sign-out URLs); `google_client_id` (in `env.tfvars`); `google_client_secret` (sensitive, `TF_VAR_google_client_secret`; locally `source ~/.config/photo-app/dev.env`) |
 | `main.tf` | `module "database"`, `module "storage"`, `module "auth"` with per-env settings (below); `auth` gets `pre_sign_up_source_dir = services/auth-triggers/dist`, so run `pnpm build` before planning |
-| `outputs.tf` | `table_name`, `photo_bucket_name`, `user_pool_id`, `web_client_id`, `cognito_domain_url`, `google_redirect_uri`, `login_url`, `pre_sign_up_function_name` |
+| `outputs.tf` | `table_name`, `photo_bucket_name`, `user_pool_id`, `web_client_id`, `cognito_domain_url`, `google_redirect_uri`, `login_url`, `pre_sign_up_function_name`, `thumbnails_function_name`, `thumbnails_dlq_url`, `api_endpoint`, `api_function_name` |
 | `env.tfvars` | Non-secret settings, committed. Run with `-var-file=env.tfvars` |
 
 | Setting | dev | prod |
@@ -772,8 +775,9 @@ Tags on everything: `Project=photo-app`, `Environment=<ws>`, `ManagedBy=opentofu
 | Google sign-in | on: client `1093239771558-h98qa…apps.googleusercontent.com` (testing mode) | off until 11.3 |
 | Pre sign-up trigger | `photo-app-dev-pre-sign-up` | `photo-app-prod-pre-sign-up` (not applied) |
 | Thumbnail Lambda + DLQ | `photo-app-dev-thumbnails`, `photo-app-dev-thumbnails-dlq` | `photo-app-prod-thumbnails` (not applied) |
+| API | `photo-app-dev-api`, endpoint `https://tnl6uhgwkg.execute-api.us-east-1.amazonaws.com`, quota 2 GB | `photo-app-prod-api`, quota 10 GB (not applied) |
 
-dev: **deployed 2026-10-19** (9 resources) + auth **2026-10-23** (4 resources: pool `us-east-1_vYJcHEj4G`, client `jkfonk4j32kup18bl98jqkr67`, domain `https://photo-app-dev-063359189013.auth.us-east-1.amazoncognito.com`) + pre sign-up trigger **2026-10-24** (5 resources, pool updated in place) + thumbnails **2026-10-24** (8 resources); test resources, destroyed when testing is done. prod: validated with `-backend=false` only.
+dev: **deployed 2026-10-19** (9 resources) + auth **2026-10-23** (4 resources: pool `us-east-1_vYJcHEj4G`, client `jkfonk4j32kup18bl98jqkr67`, domain `https://photo-app-dev-063359189013.auth.us-east-1.amazoncognito.com`) + pre sign-up trigger **2026-10-24** (5 resources, pool updated in place) + thumbnails **2026-10-24** (8 resources) + api **2026-10-24** (12 resources); test resources, destroyed when testing is done. prod: validated with `-backend=false` only.
 
 ### 12.3 Modules — `infra/modules`
 
@@ -844,11 +848,31 @@ Tests: runtime/arch/handler/memory/timeout/`TABLE_NAME`, JSON logs + retention, 
 Not yet: alarm on DLQ messages (12.9).
 Verified in dev: re-plan clean; direct invoke with a `thumbs/` key on arm64 → `skipped` ("not an original key"), init 415 ms, 110 MB used. End-to-end upload (6.10): see §10.2 "Measured on Lambda".
 
+**`api` ✅** (5.4; deployed in dev)
+
+| Resource | Detail |
+|---|---|
+| `data.archive_file.bundle` | zips `source_dir` (`apps/api/dist`, `pnpm build` first; 1.3 MB bundle) into `<env root>/.build/photo-app-{env}-api.zip`; SHA-256 = `source_code_hash` |
+| `aws_iam_role.api` + `aws_iam_role_policy.api` | NFR-SEC-7. `Table`: `GetItem`, `PutItem`, `UpdateItem`, `DeleteItem`, `ConditionCheckItem`, `Query`, `BatchGetItem`, `BatchWriteItem` on the table and `index/*` (no `Scan`; transaction steps are checked per action). `Originals`: `s3:PutObject` + `s3:GetObject` on `users/*/originals/*` (pre-signed POST/GET use the signer's permissions). `DeletePhotoObjects`: `s3:DeleteObject` on originals, thumbs, previews. `Users`: `cognito-idp:ListUsers` on the pool. Own log group. Tenant isolation is in code (shares/memberships live outside the owner's partition, so no `LeadingKeys` condition) |
+| `aws_cloudwatch_log_group.lambda` | `/aws/lambda/photo-app-{env}-api`, 30 days (NFR-OPS-2) |
+| `aws_lambda_function.api` | `photo-app-{env}-api`; Node.js 22, arm64, 512 MB, 10 s, `index.handler` (Hono AWS adapter); env `TABLE_NAME`, `PHOTO_BUCKET`, `USER_POOL_ID`, `DEFAULT_QUOTA_BYTES`, `NODE_OPTIONS=--enable-source-maps`; JSON log format; created after the role policy |
+| `aws_apigatewayv2_api.main` | HTTP API `photo-app-{env}-api`; default `execute-api` endpoint (CloudFront origin for `/api/*` in Phase 7). **No CORS**: same origin via CloudFront in prod, Vite dev proxy locally (Phase 8) |
+| `aws_apigatewayv2_authorizer.cognito` | JWT, `Authorization` header; issuer = pool URL, audience = web client ID (Cognito access tokens carry it as `client_id`) |
+| `aws_apigatewayv2_integration.lambda` | `AWS_PROXY`, payload 2.0, 10 s |
+| `aws_apigatewayv2_route.api` | `ANY /api/{proxy+}`, JWT, `authorization_scopes = ["openid"]` → only access tokens (ID tokens have no `scope`: 403) |
+| `aws_apigatewayv2_route.health` | `GET /api/health`, `NONE` (smoke test, 5.5); the more specific route wins |
+| `aws_cloudwatch_log_group.access` | `/aws/apigateway/photo-app-{env}-api`, 30 days |
+| `aws_apigatewayv2_stage.default` | `$default`, auto-deploy; throttling for the whole API (`throttling_rate_limit` 25, `throttling_burst_limit` 50 → 429, NFR-SEC-9); JSON access log per request: requestId, time, ip, routeKey, path, status, latency, integration latency/error, **authorizer error** (why a token was rejected), `userId` (sub); no headers, query strings or bodies |
+| `aws_lambda_permission.api_gateway` | `apigateway.amazonaws.com`, `source_arn` = this API's execution ARN `/*/*` |
+
+Inputs: `environment`, `source_dir`, `table_name`/`table_arn`, `bucket_name`/`bucket_arn`, `user_pool_id`/`user_pool_arn`, `issuer_url`, `audience`, `default_quota_bytes` (validated: positive whole number; dev 2 GB, prod 10 GB, spec §13.2), `throttling_rate_limit` (25), `throttling_burst_limit` (50). Outputs: `api_endpoint`, `function_name`.
+Tests: runtime/arch/handler, every env var `config.ts` needs, log retention + JSON, authorizer issuer/audience, protected proxy route with `openid` scope, public health route only, invoke permission scope, throttling, IAM per statement (no `Scan`/table actions, originals-only signing, delete scope, `ListUsers` on the pool), quota validation.
+Verified in dev (2026-10-24) with a real access token from the hosted login (code exchanged at `/oauth2/token`): `GET /api/health` 200; no / garbage / forged token 401; ID token 403; `GET /api/me` 200 (profile + usage, 2 GB quota); `POST /api/photos/upload-url` 201 → S3 POST 204 → `ready` 3.2 s later (thumb/preview paths in the response); download URL 200 with the identical bytes and `Content-Disposition: attachment`; download of a `pending` photo 409; `DELETE` 204 → 404, Usage back to 0, no objects left. Lambda 5–200 ms per request, 146 MB.
+
 **Planned 📋**
 
 | Module | Will contain |
 |---|---|
-| `api` | HTTP API, JWT authorizer, API Lambda, IAM, throttling, logs |
 | `frontend` | Site bucket, CloudFront (OAC, behaviors, SPA fallback), key group, ACM, optional WAF |
 
 ---
@@ -914,6 +938,7 @@ Not started. Target design: spec §12 (TanStack Router file routes with an authe
 | 2026-10-23 | `login_url` output (module + envs): `tofu output login_url` prints the hosted sign-in page. |
 | 2026-10-23 | 4.4: optional Google IdP in the `auth` module (mapping incl. `email_verified`, secret as sensitive variable); env variables + dev client ID; applied to dev. |
 | 2026-10-23 | 4.5: `services/auth-triggers` pre sign-up Lambda (linking, duplicate-email refusal) + tests; §10.1 trigger table, libraries, repo tree, deviation (§15). |
+| 2026-10-24 | 5.4: `api` module (HTTP API, JWT authorizer, routes, Lambda, IAM, throttling, access/Lambda logs) + tests, wired into both envs, deployed to dev and checked with a real access token; API `log.ts` logs objects (§1, §2, §5, §9, §11, §12.2, §12.3). |
 | 2026-10-24 | 6.10: end-to-end upload check in dev (§10.2 measurements). |
 | 2026-10-24 | 6.9: `thumbnails` module (Lambda, IAM, S3 notification, async retries + SQS DLQ destination, logs) + tests; wired into both envs; deployed to dev, arm64 smoke invoke OK (§1, §2, §5, §10.2, §12.2, §12.3). |
 | 2026-10-24 | 6.8: thumbnail packaging `services/thumbnails/build.sh` (aarch64 wheels → `dist/`), root `build:py`; §5 tree, §6 Python row + commands, §10.2 package row. |

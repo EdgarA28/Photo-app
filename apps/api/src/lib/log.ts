@@ -1,10 +1,19 @@
-/** One JSON object per line; CloudWatch Logs Insights can query the fields (spec §10 "Logs"). */
+/**
+ * Structured logs (spec §10 "Logs"). The Lambda uses the JSON log format, which sets `timestamp`,
+ * `level` (from the console method) and `requestId` itself; passing an object instead of a JSON
+ * string keeps our fields queryable instead of escaped inside `message`.
+ */
 type Level = "DEBUG" | "INFO" | "WARN" | "ERROR";
 
+const write: Record<Level, (entry: object) => void> = {
+  DEBUG: (entry) => console.debug(entry),
+  INFO: (entry) => console.info(entry),
+  WARN: (entry) => console.warn(entry),
+  ERROR: (entry) => console.error(entry),
+};
+
 export function log(level: Level, message: string, fields: Record<string, unknown> = {}): void {
-  const line = JSON.stringify({ level, message, ...fields });
-  if (level === "ERROR") console.error(line);
-  else console.log(line);
+  write[level]({ message, ...fields });
 }
 
 export function errorFields(err: unknown): Record<string, unknown> {

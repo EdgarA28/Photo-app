@@ -149,8 +149,9 @@ describe("unexpected errors", () => {
     const { status, body } = await call("/api/boom");
     expect(status).toBe(500);
     expect(expectError(body, "INTERNAL_ERROR")).not.toContain("secret");
-    expect(JSON.parse(spy.mock.calls[0]![0] as string)).toMatchObject({
-      level: "ERROR",
+    // An object, not a JSON string: the Lambda JSON log format keeps its fields queryable.
+    expect(spy.mock.calls[0]![0]).toMatchObject({
+      message: "Unhandled error",
       errorMessage: "secret internal detail",
       path: "/api/boom",
     });

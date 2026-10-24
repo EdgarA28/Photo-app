@@ -15,15 +15,15 @@
 
 | | |
 |---|---|
-| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.15 (incl. 5.6a/b) done (all API routes except media cookies, incl. usernames), 6.1–6.7 + 6.12 done (thumbnail code), Phase 4 done (Cognito + Google IdP + pre sign-up trigger in dev, linking verified) 6.8–6.10 done (thumbnail Lambda deployed in dev, end-to-end upload ≤ 5 s) → next: API infra 5.4 |
+| **Phase** | 3 done (dev), 5.1–5.15 done (all API routes except media cookies; API deployed in dev), 6.1–6.7 + 6.12 done (thumbnail code), Phase 4 done (Cognito + Google IdP + pre sign-up trigger in dev, linking verified) 6.8–6.10 done (thumbnail Lambda deployed in dev, end-to-end upload ≤ 5 s) → next: 6.11 stale-pending sweeper or Phase 7 |
 | **Last updated** | 2026-10-24 |
-| **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` + Cognito pool `us-east-1_vYJcHEj4G` + trigger `photo-app-dev-pre-sign-up` + thumbnail Lambda `photo-app-dev-thumbnails` with DLQ (test resources, destroy when done). general: budget. prod: nothing |
+| **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` + Cognito pool `us-east-1_vYJcHEj4G` + trigger `photo-app-dev-pre-sign-up` + thumbnail Lambda `photo-app-dev-thumbnails` with DLQ + API `https://tnl6uhgwkg.execute-api.us-east-1.amazonaws.com` (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
 
 ## Next up
 
-1. API infra 5.4 (deploy needs approval). Also switch `apps/api/src/lib/log.ts` to log objects like the trigger (a JSON string ends up escaped inside `message` with the Lambda JSON log format, seen in 4.6).
-   Dev app resources (table + photo bucket + Cognito + trigger + thumbnail Lambda + DLQ) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done. Dev plans need `pnpm build` (trigger bundle), `pnpm build:py` (thumbnails) and `source ~/.config/photo-app/dev.env` (Google secret).
+1. 6.11 stale-pending sweeper (needs approval), or Phase 7 (CloudFront, signed cookies, media-cookie routes) so photos can be viewed. Phase 8 (web app) needs the Vite dev proxy for `/api` (the API has no CORS).
+   Dev app resources (table + photo bucket + Cognito + trigger + thumbnail Lambda + DLQ + API) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done. Dev plans need `pnpm build` (trigger + API bundles), `pnpm build:py` (thumbnails) and `source ~/.config/photo-app/dev.env` (Google secret).
 2. Prod bootstrap (1.3/1.4/1.5 for prod) whenever the user approves it; it isn't needed until Phase 11.
 3. Add GitHub repo secrets/environments for the CI roles when Phase 10 starts.
 
@@ -106,7 +106,7 @@
 - [x] **5.2** Middleware: user ID from JWT `sub` only (NFR-SEC-1), error handler → error shape, 404-not-403 helper (NFR-SEC-2), Zod validation
 - [x] **5.3** DynamoDB repository layer (photos, albums, memberships, shares, usage) + cursor encoding
   - 47 API tests (app/middleware, cursor tampering, repositories on DynamoDB Local in Docker); bundle 474 KB, smoke-tested by invoking `dist/index.mjs`
-- [ ] **5.4** `api` infra module: HTTP API, JWT authorizer, Lambda, least-privilege IAM, throttling, 30-day logs (NFR-SEC-7/9, NFR-OPS-2)
+- [x] **5.4** `api` infra module: HTTP API, JWT authorizer, Lambda, least-privilege IAM, throttling, 30-day logs (NFR-SEC-7/9, NFR-OPS-2)
 - [x] **5.5** `GET /health` (for smoke tests) + `GET /me` (usage + quota) (FR-ACC-1, FR-ACC-2). Profile from Cognito `ListUsers` by `sub`; quota = Usage override or `DEFAULT_QUOTA_BYTES`
 - [x] **5.6** `POST /photos/upload-url`: quota check, `pending` item, pre-signed POST with size/type conditions (FR-UP-3/4/7, NFR-SEC-6)
   - `PhotoStorage` (`src/lib/storage.ts`) with a fake in tests; env `PHOTO_BUCKET`; 19 new tests (102 API tests, 146 TS repo-wide, all pass); bundle 1.3 MB
@@ -281,6 +281,7 @@
 | 2026-10-24 | **Thumbnail packaging (6.8):** `manylinux_2_28` instead of manylinux2014: Pillow 13 / pillow-heif 1.8 only publish 2_28 aarch64 wheels, and Lambda `python3.13` (AL2023, glibc 2.34) supports them. Wheels only (`--only-binary :all:`), hashes from `uv.lock`, boto3 left to the runtime, hash-based `.pyc` precompiled. Output is a `dist/` directory (not a zip) so the infra module zips it, same as the auth trigger. No local arm64 emulation (Docker without binfmt), so the arm64 run is checked on Lambda; the build logic was verified with an x86_64 build in a clean venv. |
 | 2026-10-24 | **Thumbnail module (6.9):** failed events go to the SQS queue as a Lambda **on-failure destination** (record includes the error) rather than `dead_letter_config` (event only); still the spec's SQS DLQ with 14-day retention. Trigger prefix `users/` as in the spec (S3 can't filter on `users/*/originals/`; derived writes cost two skipped invocations per photo). The module owns the bucket's single notification configuration. DLQ alarm deferred by the user → 12.9 (consider). |
 | 2026-10-24 | **End-to-end check (6.10):** done with a throwaway script (not committed) that reused the API's `createPending` + `createUploadPost` for a random test user, uploaded through the pre-signed POST, polled the item, and deleted everything afterwards. JPEG ready 3.3 s (cold), HEIC 3.8 s (warm) after upload: NFR-PERF-1 met on these samples, HEIC has the least margin (larger HEICs, e.g. 48 MP, may exceed 5 s; revisit with real phone photos, 12.3). Optional cleanup: botocore's INFO "Found credentials" line. |
+| 2026-10-24 | **API infra (5.4):** HTTP API with one proxy route `ANY /api/{proxy+}` (JWT + scope `openid`, so only access tokens; ID tokens get 403 `insufficient_scope`) and a public `GET /api/health`. No CORS on the API: same origin through CloudFront; Phase 8 uses a Vite proxy. Throttling for the whole API 25 req/s, burst 50 (one proxy route, so no per-route limits); WAF per IP stays in 11.2. API role: no `Scan`, table + `index/*`; tenant isolation stays in code (no `LeadingKeys`: shares/memberships live outside the owner's partition). Quota 2 GB dev / 10 GB prod (spec §13.2). Access log includes `authorizerError` and `userId`, no headers/query/body. API `log.ts` now logs objects like the trigger. |
 | 2026-10-21 | Abandoned uploads: planned 5.6a (reuse `photoId` on retry) + 6.11 (daily sweeper for stale `pending` items); TTL rejected (blind to files that arrived but failed processing, leaves album memberships dangling). |
 
 ## Session log
@@ -323,3 +324,4 @@
 | 2026-10-24 | 6.8 thumbnail packaging: `services/thumbnails/build.sh` + `pnpm build:py`; 30 aarch64 native libs, 38 MB unpacked / 14 MB zipped; x86_64 smoke build ran JPEG + HEIC through the packaged pipeline. Nothing deployed. |
 | 2026-10-24 | 6.9 `thumbnails` module + 4 offline test runs; wired into dev/prod. Applied to dev (8 added), re-plan clean. arm64 smoke invoke: package loads (init 415 ms, 110 MB), `skipped` for a thumbs key, JSON logs keep `extra` fields. Added 12.9 (DLQ alarm, to consider). |
 | 2026-10-24 | 6.10 end-to-end in dev: 12 MP JPEG (EXIF orientation 6 + offset date → 3024×4032, takenAt in UTC) ready 3.3 s after upload incl. cold start; 12 MP HEIC ready 3.8 s (no EXIF → takenAt = uploadedAt). Derived objects + Usage correct; test data deleted (0 objects, 0 items left). |
+| 2026-10-24 | 5.4 `api` module + 5 offline test runs, wired into dev/prod; applied to dev (12 added), re-plan clean. Checked with a real access token: health 200, missing/garbage/forged token 401, ID token 403, `/me` 200, upload-url → S3 POST → ready in 3.2 s, download identical bytes, pending download 409, delete 204 with Usage back to 0 and no objects left. 313 TS tests pass. |

@@ -37,3 +37,11 @@ output "thumbnails_function_name" {
 output "thumbnails_dlq_url" {
   value = module.thumbnails.dlq_url
 }
+
+output "api_endpoint" {
+  value = module.api.api_endpoint
+}
+
+output "api_function_name" {
+  value = module.api.function_name
+}

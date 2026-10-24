@@ -45,3 +45,23 @@ module "thumbnails" {
   table_name  = module.database.table_name
   table_arn   = module.database.table_arn
 }
+
+module "api" {
+  source = "../../modules/api"
+
+  environment = local.environment
+  # Built by `pnpm build` (apps/api); run it before planning.
+  source_dir = "${path.root}/../../../apps/api/dist"
+
+  table_name    = module.database.table_name
+  table_arn     = module.database.table_arn
+  bucket_name   = module.storage.bucket_name
+  bucket_arn    = module.storage.bucket_arn
+  user_pool_id  = module.auth.user_pool_id
+  user_pool_arn = module.auth.user_pool_arn
+  issuer_url    = module.auth.issuer_url
+  audience      = [module.auth.web_client_id]
+
+  # FR-ACC-2, spec §13.2: 10 GB in prod.
+  default_quota_bytes = 10 * 1024 * 1024 * 1024
+}
