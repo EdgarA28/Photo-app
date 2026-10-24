@@ -33,3 +33,15 @@ module "auth" {
   # Built by `pnpm build` (services/auth-triggers); run it before planning.
   pre_sign_up_source_dir = "${path.root}/../../../services/auth-triggers/dist"
 }
+
+module "thumbnails" {
+  source = "../../modules/thumbnails"
+
+  environment = local.environment
+  # Built by `pnpm build:py` (services/thumbnails); run it before planning.
+  source_dir  = "${path.root}/../../../services/thumbnails/dist"
+  bucket_name = module.storage.bucket_name
+  bucket_arn  = module.storage.bucket_arn
+  table_name  = module.database.table_name
+  table_arn   = module.database.table_arn
+}

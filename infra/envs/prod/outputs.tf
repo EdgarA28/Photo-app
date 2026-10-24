@@ -29,3 +29,11 @@ output "login_url" {
 output "pre_sign_up_function_name" {
   value = module.auth.pre_sign_up_function_name
 }
+
+output "thumbnails_function_name" {
+  value = module.thumbnails.function_name
+}
+
+output "thumbnails_dlq_url" {
+  value = module.thumbnails.dlq_url
+}
