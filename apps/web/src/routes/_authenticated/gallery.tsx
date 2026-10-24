@@ -1,8 +1,7 @@
-import { photoSortSchema, ULID_REGEX, type PhotoSort } from "@photo-app/shared";
+import { photoSortSchema, type PhotoSort } from "@photo-app/shared";
 import { useQuery, useSuspenseInfiniteQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useRouter, type ErrorComponentProps } from "@tanstack/react-router";
 import { useMemo } from "react";
-import { z } from "zod";
 import { errorMessage } from "@/api/errors";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,15 +12,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { PhotoGrid } from "@/gallery/PhotoGrid";
+import { gallerySearchSchema } from "@/gallery/search";
 import { albumsQuery } from "@/queries/albums";
 import { galleryQuery } from "@/queries/photos";
-
-// §12.1: `album` filters to one album, `sort` orders by date taken (FR-GAL-1/2/3). Invalid values
-// from a hand-edited or stale URL fall back to the defaults instead of an error page.
-const gallerySearchSchema = z.object({
-  album: z.string().regex(ULID_REGEX).optional().catch(undefined),
-  sort: photoSortSchema.default("taken-desc").catch("taken-desc"),
-});
 
 export const Route = createFileRoute("/_authenticated/gallery")({
   validateSearch: gallerySearchSchema,

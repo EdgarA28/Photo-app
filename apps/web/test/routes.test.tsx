@@ -42,11 +42,6 @@ describe("routes (§12.1)", () => {
     expect(await screen.findByRole("heading", { name: heading })).toBeTruthy();
   });
 
-  it("passes route params to the viewer and album pages", async () => {
-    await renderAt("/photos/01JB2Z3M4N5P6Q7R8S9T0V1W2X");
-    expect(await screen.findByText("Photo 01JB2Z3M4N5P6Q7R8S9T0V1W2X")).toBeTruthy();
-  });
-
   // jsdom applies no media queries, so both the side rail and the bottom bar are present.
   it("offers the four sections in both navigation bars", async () => {
     await renderAt("/gallery");
@@ -81,12 +76,6 @@ describe("routes (§12.1)", () => {
     expect(await screen.findByText(testUser.email!)).toBeTruthy();
   });
 
-  it("shows the viewer full screen, without navigation (FR-GAL-4)", async () => {
-    await renderAt("/photos/01JB2Z3M4N5P6Q7R8S9T0V1W2X");
-    await screen.findByText("Photo 01JB2Z3M4N5P6Q7R8S9T0V1W2X");
-    expect(screen.queryByRole("navigation")).toBeNull();
-  });
-
   it("shows a not-found page for unknown paths", async () => {
     await renderAt("/nowhere");
     expect(await screen.findByRole("heading", { name: "Page not found" })).toBeTruthy();
@@ -94,14 +83,16 @@ describe("routes (§12.1)", () => {
 });
 
 describe("authentication guard (FR-AUTH-6)", () => {
-  it.each(["/gallery?sort=taken-asc", "/photos/01JB2Z3M4N5P6Q7R8S9T0V1W2X", "/settings"])(
-    "sends signed-out users from %s to /login, remembering the page",
-    async (url) => {
-      const { router } = await renderAt(url, { auth: fakeAuth() });
-      expect(router.state.location.pathname).toBe("/login");
-      expect(router.state.location.search).toEqual({ redirect: url });
-    },
-  );
+  // The viewer, like the gallery, puts its default `sort` in the URL.
+  it.each([
+    "/gallery?sort=taken-asc",
+    "/photos/01JB2Z3M4N5P6Q7R8S9T0V1W2X?sort=taken-desc",
+    "/settings",
+  ])("sends signed-out users from %s to /login, remembering the page", async (url) => {
+    const { router } = await renderAt(url, { auth: fakeAuth() });
+    expect(router.state.location.pathname).toBe("/login");
+    expect(router.state.location.search).toEqual({ redirect: url });
+  });
 
   it("lets signed-in users through", async () => {
     const { router, auth } = await renderAt("/gallery");

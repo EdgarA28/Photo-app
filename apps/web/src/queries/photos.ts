@@ -1,10 +1,30 @@
-import type { PhotoSort } from "@photo-app/shared";
-import { infiniteQueryOptions } from "@tanstack/react-query";
+import type { Photo, PhotoPage, PhotoSort } from "@photo-app/shared";
+import { infiniteQueryOptions, queryOptions, type InfiniteData } from "@tanstack/react-query";
 import type { Api } from "@/api/api";
 
 export interface GalleryFilter {
   album?: string | undefined;
   sort: PhotoSort;
+}
+
+/** How often the gallery refetches while photos are processing (§5 step 5, FR-GAL-5). */
+export const PROCESSING_POLL_MS = 3000;
+/**
+ * Processing takes seconds (6.10); a photo still pending after this long is an abandoned upload
+ * (swept by 6.11), so it no longer keeps the gallery polling.
+ */
+export const PROCESSING_WINDOW_MS = 10 * 60 * 1000;
+
+const isProcessing = (photo: Photo, now: number) =>
+  photo.status === "pending" && now - Date.parse(photo.uploadedAt) < PROCESSING_WINDOW_MS;
+
+/** Poll interval for the loaded pages: on while a recent upload is still processing. */
+export function processingPollInterval(
+  data: InfiniteData<PhotoPage> | undefined,
+  now = Date.now(),
+): number | false {
+  const processing = data?.pages.some((page) => page.items.some((p) => isProcessing(p, now)));
+  return processing ? PROCESSING_POLL_MS : false;
 }
 
 /**
@@ -21,4 +41,13 @@ export const galleryQuery = (api: Api, { album, sort }: GalleryFilter) =>
         : api.photos.list({ sort, cursor: pageParam }, { signal }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
+    // Refetches every loaded page, so a finished photo gets its size, thumbnail and date position.
+    refetchInterval: (query) => processingPollInterval(query.state.data),
+  });
+
+/** One own photo (`GET /photos/{id}`), for a viewer opened on a photo outside the loaded pages. */
+export const photoQuery = (api: Api, photoId: string) =>
+  queryOptions({
+    queryKey: ["photos", "one", photoId],
+    queryFn: ({ signal }) => api.photos.get(photoId, { signal }),
   });

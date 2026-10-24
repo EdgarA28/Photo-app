@@ -1,12 +1,255 @@
-import { createFileRoute } from "@tanstack/react-router";
+import type { Photo } from "@photo-app/shared";
+import { useQuery, useSuspenseInfiniteQuery } from "@tanstack/react-query";
+import { createFileRoute, Link, useRouter, type ErrorComponentProps } from "@tanstack/react-router";
+import { ChevronLeft, ChevronRight, ImageOff, LoaderCircle, X } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent,
+  type ReactNode,
+} from "react";
+import { errorMessage } from "@/api/errors";
+import { Button } from "@/components/ui/button";
+import { gallerySearchSchema } from "@/gallery/search";
+import { galleryQuery, photoQuery } from "@/queries/photos";
 
-// Full-screen viewer (FR-GAL-4, 8.8).
+/** Horizontal travel that counts as a swipe; it must also be mostly sideways. */
+const SWIPE_MIN_PX = 50;
+/** Load the next gallery page when the viewer gets this close to the end of the loaded ones. */
+const LOOKAHEAD_PHOTOS = 3;
+
+const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+
+// Full-screen viewer (FR-GAL-4, §12.1). `album`/`sort` say which gallery list prev/next walk.
 export const Route = createFileRoute("/_authenticated/photos/$photoId")({
   staticData: { fullScreen: true },
+  validateSearch: gallerySearchSchema,
+  loaderDeps: ({ search: { album, sort } }) => ({ album, sort }),
+  loader: async ({ context: { queryClient, api }, params: { photoId }, deps }) => {
+    // Usually cached from the gallery. A photo beyond the loaded pages (deep link) is fetched on
+    // its own; then there is no prev/next. 404 for other users' photos (NFR-SEC-2).
+    const list = await queryClient.infiniteQuery({
+      ...galleryQuery(api, deps),
+      staleTime: "static",
+    });
+    if (!list.pages.some((page) => page.items.some((p) => p.photoId === photoId))) {
+      await queryClient.query({ ...photoQuery(api, photoId), staleTime: "static" });
+    }
+  },
   component: Viewer,
+  errorComponent: ViewerError,
 });
 
 function Viewer() {
+  const { api } = Route.useRouteContext();
   const { photoId } = Route.useParams();
-  return <main>Photo {photoId}</main>;
+  const { album, sort } = Route.useSearch();
+  const navigate = Route.useNavigate();
+  const close = useClose();
+
+  const { data, hasNextPage, isFetchingNextPage, fetchNextPage } = useSuspenseInfiniteQuery(
+    galleryQuery(api, { album, sort }),
+  );
+  const photos = useMemo(() => data.pages.flatMap((page) => page.items), [data]);
+  const index = photos.findIndex((p) => p.photoId === photoId);
+  const single = useQuery({ ...photoQuery(api, photoId), enabled: index < 0 });
+  const photo = index >= 0 ? photos[index] : single.data;
+  const prev = index > 0 ? photos[index - 1] : undefined;
+  const next = index >= 0 ? photos[index + 1] : undefined;
+
+  useEffect(() => {
+    if (index >= 0 && index >= photos.length - LOOKAHEAD_PHOTOS && hasNextPage) {
+      if (!isFetchingNextPage) void fetchNextPage();
+    }
+  }, [index, photos.length, hasNextPage, isFetchingNextPage, fetchNextPage]);
+
+  // Replace, so Back/close returns to the gallery rather than through every photo seen.
+  const show = useCallback(
+    (target: Photo | undefined) => {
+      if (!target) return;
+      void navigate({
+        params: { photoId: target.photoId },
+        search: (s) => s,
+        replace: true,
+      });
+    },
+    [navigate],
+  );
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+      if (event.key === "ArrowLeft") show(prev);
+      else if (event.key === "ArrowRight") show(next);
+      else if (event.key === "Escape") close();
+      else return;
+      event.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [show, close, prev, next]);
+
+  usePreload(prev?.previewUrl, next?.previewUrl);
+  const swipe = useSwipe({ onLeft: () => show(next), onRight: () => show(prev) });
+
+  if (!photo) return null; // only while a deep-linked photo's query hydrates; the loader fetched it
+
+  return (
+    <main className="fixed inset-0 flex flex-col bg-black text-white">
+      <header className="flex items-center gap-3 p-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
+        <Button
+          variant="ghost"
+          size="icon-lg"
+          aria-label="Close"
+          onClick={close}
+          className="text-white hover:bg-white/10 hover:text-white"
+        >
+          <X className="size-5" />
+        </Button>
+        <div className="min-w-0">
+          <h1 className="truncate text-sm font-medium">{photo.fileName}</h1>
+          {photo.status === "ready" && (
+            <p className="text-xs text-white/60">{dateFormat.format(new Date(photo.takenAt))}</p>
+          )}
+        </div>
+      </header>
+
+      <div
+        className="relative flex min-h-0 flex-1 touch-pan-y items-center justify-center select-none"
+        {...swipe}
+      >
+        <PhotoView key={photo.photoId} photo={photo} />
+        <NavButton label="Previous photo" target={prev} side="left" />
+        <NavButton label="Next photo" target={next} side="right" />
+      </div>
+    </main>
+  );
+}
+
+/** Preview, or a state for photos without one (FR-GAL-5) or whose preview can't load (Phase 7). */
+function PhotoView({ photo }: { photo: Photo }) {
+  const [broken, setBroken] = useState(false);
+  if (photo.status === "pending") {
+    return (
+      <Message icon={<LoaderCircle className="size-8 motion-safe:animate-spin" />}>
+        This photo is still processing.
+      </Message>
+    );
+  }
+  if (photo.status === "failed") {
+    return (
+      <Message icon={<ImageOff className="size-8 text-red-400" />}>
+        This photo couldn't be processed. The original file is kept.
+      </Message>
+    );
+  }
+  if (!photo.previewUrl || broken) {
+    return <Message icon={<ImageOff className="size-8" />}>The preview can't be shown.</Message>;
+  }
+  return (
+    <img
+      src={photo.previewUrl}
+      alt={photo.fileName}
+      width={photo.width ?? undefined}
+      height={photo.height ?? undefined}
+      draggable={false}
+      onError={() => setBroken(true)}
+      className="size-full object-contain"
+    />
+  );
+}
+
+function Message({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+  return (
+    <div role="status" className="flex flex-col items-center gap-3 px-6 text-center text-white/70">
+      {icon}
+      <p className="text-sm">{children}</p>
+    </div>
+  );
+}
+
+function NavButton({
+  label,
+  target,
+  side,
+}: {
+  label: string;
+  target: Photo | undefined;
+  side: "left" | "right";
+}) {
+  if (!target) return null;
+  const Icon = side === "left" ? ChevronLeft : ChevronRight;
+  return (
+    <Link
+      from={Route.fullPath}
+      to="."
+      params={{ photoId: target.photoId }}
+      search={(s) => s}
+      replace
+      aria-label={label}
+      className={`absolute top-1/2 ${side === "left" ? "left-2" : "right-2"} grid size-11 -translate-y-1/2 place-items-center rounded-full bg-black/40 text-white outline-offset-2 hover:bg-black/60 focus-visible:outline-2 focus-visible:outline-white`}
+    >
+      <Icon className="size-6" />
+    </Link>
+  );
+}
+
+/** Back to where the viewer was opened from (keeps the gallery's scroll), else to the gallery. */
+function useClose() {
+  const router = useRouter();
+  const search = Route.useSearch();
+  return useCallback(() => {
+    if (router.history.canGoBack()) router.history.back();
+    else void router.navigate({ to: "/gallery", search });
+  }, [router, search]);
+}
+
+/** Warms the browser cache with the neighbours' previews so prev/next show instantly. */
+function usePreload(...urls: (string | null | undefined)[]) {
+  const key = urls.join("\n");
+  useEffect(() => {
+    for (const url of key.split("\n")) {
+      if (url) new Image().src = url;
+    }
+  }, [key]);
+}
+
+/** Horizontal swipe on touch (and mouse drag): left → next, right → previous. */
+function useSwipe({ onLeft, onRight }: { onLeft: () => void; onRight: () => void }) {
+  const start = useRef<{ id: number; x: number; y: number } | null>(null);
+  return {
+    onPointerDown: (event: PointerEvent) => {
+      if (event.isPrimary)
+        start.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
+    },
+    onPointerUp: (event: PointerEvent) => {
+      const from = start.current;
+      start.current = null;
+      if (!from || from.id !== event.pointerId) return;
+      const dx = event.clientX - from.x;
+      const dy = event.clientY - from.y;
+      if (Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+      if (dx < 0) onLeft();
+      else onRight();
+    },
+    onPointerCancel: () => {
+      start.current = null;
+    },
+  };
+}
+
+// e.g. a deleted photo or another user's (404), or no network.
+function ViewerError({ error }: ErrorComponentProps) {
+  const close = useClose();
+  return (
+    <main className="fixed inset-0 flex flex-col items-center justify-center gap-4 bg-black px-6 text-center text-white">
+      <p className="text-white/80">{errorMessage(error)}</p>
+      <Button variant="secondary" onClick={close}>
+        Back to the gallery
+      </Button>
+    </main>
+  );
 }

@@ -1,6 +1,11 @@
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "../src/api/errors";
+import {
+  PROCESSING_POLL_MS,
+  PROCESSING_WINDOW_MS,
+  processingPollInterval,
+} from "../src/queries/photos";
 import { emptyPage, fakeApi, testId, testPhoto, testPhotoPage } from "./fakes";
 import { defaultResponses, renderAt } from "./render";
 
@@ -32,7 +37,7 @@ describe("gallery (FR-GAL-1/2/3)", () => {
       "IMG_1.jpg",
       "IMG_2.jpg",
     ]);
-    expect(links[0]!.getAttribute("href")).toBe(`/photos/${testId(0)}`);
+    expect(links[0]!.getAttribute("href")).toBe(`/photos/${testId(0)}?sort=taken-desc`);
     expect(links[0]!.querySelector("img")!.getAttribute("src")).toBe(testPhoto(0).thumbUrl);
     expect(queriesTo(request, "/photos")).toEqual([{ sort: "taken-desc", cursor: undefined }]);
   });
@@ -89,20 +94,76 @@ describe("gallery (FR-GAL-1/2/3)", () => {
     expect(await screen.findByRole("link", { name: "IMG_10.jpg" })).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
   });
+});
 
-  it("keeps a square placeholder without an image for photos still processing", async () => {
-    const { api } = setup({
-      "GET /photos": {
-        items: [testPhoto(0, { status: "pending", width: null, height: null, thumbUrl: null })],
-        nextCursor: null,
-      },
-    });
+describe("processing and failed photos (FR-GAL-5)", () => {
+  const pending = (n: number, uploadedAt = new Date().toISOString()) =>
+    testPhoto(n, { status: "pending", width: null, height: null, thumbUrl: null, uploadedAt });
+
+  afterEach(() => vi.useRealTimers());
+
+  it("shows a square spinner placeholder without an image while processing", async () => {
+    const { api } = setup({ "GET /photos": { items: [pending(0)], nextCursor: null } });
     await renderAt("/gallery", { api });
-    const tile = await screen.findByRole("link", { name: "IMG_0.jpg" });
+    const tile = await screen.findByRole("link", { name: "IMG_0.jpg, processing" });
     expect(tile.style.width).toBe("192px");
     expect(tile.querySelector("img")).toBeNull();
+    expect(tile.querySelector("svg.lucide-loader-circle")).not.toBeNull();
   });
 
+  it("shows an error state for a photo that failed processing", async () => {
+    const { api } = setup({
+      "GET /photos": { items: [testPhoto(0, { status: "failed" })], nextCursor: null },
+    });
+    await renderAt("/gallery", { api });
+    const tile = await screen.findByRole("link", { name: "IMG_0.jpg, couldn't be processed" });
+    expect(tile.textContent).toBe("Failed");
+    expect(tile.querySelector("img")).toBeNull();
+    // Still opens the viewer, where it can be downloaded or deleted (8.8/8.9).
+    expect(tile.getAttribute("href")).toBe(`/photos/${testId(0)}?sort=taken-desc`);
+  });
+
+  it("refetches while a photo is processing and shows it once ready", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let ready = false;
+    const { api, request } = setup({
+      "GET /photos": () => ({ items: [ready ? testPhoto(0) : pending(0)], nextCursor: null }),
+    });
+    await renderAt("/gallery", { api });
+    await screen.findByRole("link", { name: "IMG_0.jpg, processing" });
+    ready = true;
+    await vi.advanceTimersByTimeAsync(PROCESSING_POLL_MS);
+    const tile = await screen.findByRole("link", { name: "IMG_0.jpg" });
+    expect(tile.querySelector("img")).not.toBeNull();
+    const calls = queriesTo(request, "/photos").length;
+    await vi.advanceTimersByTimeAsync(PROCESSING_POLL_MS * 3);
+    expect(queriesTo(request, "/photos")).toHaveLength(calls);
+  });
+});
+
+describe("processingPollInterval", () => {
+  const now = Date.parse("2026-10-24T12:00:00.000Z");
+  const pageOf = (...items: ReturnType<typeof testPhoto>[]) =>
+    ({ pages: [{ items, nextCursor: null }], pageParams: [undefined] }) as never;
+  const uploaded = (msAgo: number) => new Date(now - msAgo).toISOString();
+
+  it("polls while a recent upload is pending", () => {
+    const data = pageOf(
+      testPhoto(0),
+      testPhoto(1, { status: "pending", uploadedAt: uploaded(5000) }),
+    );
+    expect(processingPollInterval(data, now)).toBe(PROCESSING_POLL_MS);
+  });
+
+  it("stops for ready/failed photos and for abandoned uploads", () => {
+    expect(processingPollInterval(undefined, now)).toBe(false);
+    expect(processingPollInterval(pageOf(testPhoto(0, { status: "failed" })), now)).toBe(false);
+    const stale = testPhoto(0, { status: "pending", uploadedAt: uploaded(PROCESSING_WINDOW_MS) });
+    expect(processingPollInterval(pageOf(stale), now)).toBe(false);
+  });
+});
+
+describe("gallery fallbacks", () => {
   it("falls back to the placeholder when a thumbnail can't load", async () => {
     const { api } = setup({ "GET /photos": testPhotoPage(0, 1) });
     await renderAt("/gallery", { api });

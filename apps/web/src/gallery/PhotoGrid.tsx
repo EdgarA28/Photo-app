@@ -1,7 +1,9 @@
 import type { Photo } from "@photo-app/shared";
 import { Link } from "@tanstack/react-router";
 import { useWindowVirtualizer } from "@tanstack/react-virtual";
+import { ImageOff, LoaderCircle } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { cn } from "@/lib/utils";
 import { justifyRows } from "./justify";
 
 const GAP = 4;
@@ -86,18 +88,44 @@ export function PhotoGrid({
   );
 }
 
+const STATUS_LABELS = {
+  pending: "processing",
+  failed: "couldn't be processed",
+} as const;
+
 function PhotoTile({ photo, width }: { photo: Photo; width: number }) {
   // Until Phase 7 (CloudFront + media cookie) thumbnails don't load: keep the placeholder.
   const [broken, setBroken] = useState(false);
+  const failed = photo.status === "failed";
   return (
     <Link
       to="/photos/$photoId"
       params={{ photoId: photo.photoId }}
-      aria-label={photo.fileName}
-      className="block h-full shrink-0 overflow-hidden bg-muted outline-offset-2 focus-visible:outline-2 focus-visible:outline-ring"
+      // Keeps album/sort, so the viewer's prev/next follow this list (FR-GAL-4).
+      search={(prev) => prev}
+      aria-label={
+        photo.status === "ready"
+          ? photo.fileName
+          : `${photo.fileName}, ${STATUS_LABELS[photo.status]}`
+      }
+      title={failed ? "This photo couldn't be processed" : undefined}
+      className={cn(
+        "flex h-full shrink-0 items-center justify-center overflow-hidden outline-offset-2 focus-visible:outline-2 focus-visible:outline-ring",
+        failed ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground",
+      )}
       style={{ width }}
     >
-      {photo.thumbUrl && !broken && (
+      {/* FR-GAL-5: processing → spinner placeholder, failed → error state. */}
+      {photo.status === "pending" && (
+        <LoaderCircle aria-hidden className="size-5 motion-safe:animate-spin" />
+      )}
+      {failed && (
+        <span className="flex flex-col items-center gap-1 text-xs font-medium">
+          <ImageOff aria-hidden className="size-5" />
+          Failed
+        </span>
+      )}
+      {photo.status === "ready" && photo.thumbUrl && !broken && (
         <img
           src={photo.thumbUrl}
           alt=""
