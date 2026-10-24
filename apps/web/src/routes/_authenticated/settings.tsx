@@ -1,22 +1,31 @@
+import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { formatBytes } from "@/lib/format";
+import { meQuery } from "@/queries/me";
 
-// Usage, quota, logout (FR-ACC-1, FR-AUTH-5). 8.13 adds usage/quota and clearing the media
-// cookie, Query cache and IndexedDB on logout.
+// Usage, quota, logout (FR-ACC-1, FR-AUTH-5). 8.13 adds the quota bar, username and clearing the
+// media cookie, Query cache and IndexedDB on logout.
 export const Route = createFileRoute("/_authenticated/settings")({
+  loader: ({ context }) => context.queryClient.ensureQueryData(meQuery(context.api)),
   component: Settings,
 });
 
 function Settings() {
-  const { auth, user } = Route.useRouteContext();
+  const { auth, api } = Route.useRouteContext();
+  const { data: me } = useSuspenseQuery(meQuery(api));
   const [busy, setBusy] = useState(false);
 
   return (
     <main className="space-y-4">
       <h1 className="text-xl font-semibold">Settings</h1>
       <p>
-        Signed in as <span className="font-medium">{user.email ?? user.name ?? user.sub}</span>
+        Signed in as <span className="font-medium">{me.email}</span>
+      </p>
+      <p>
+        {formatBytes(me.usage.bytesUsed)} of {formatBytes(me.usage.quotaBytes)} used ·{" "}
+        {me.usage.photoCount} {me.usage.photoCount === 1 ? "photo" : "photos"}
       </p>
       <Button
         variant="outline"

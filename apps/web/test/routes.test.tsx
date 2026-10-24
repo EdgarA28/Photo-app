@@ -5,16 +5,24 @@ import { afterEach, describe, expect, it } from "vitest";
 import { App } from "../src/App";
 import type { AppConfig } from "../src/config";
 import { createAppRouter, createQueryClient } from "../src/router";
-import { fakeAuth, testConfig } from "./fakes";
+import { ApiRequestError } from "../src/api/errors";
+import { fakeApi, fakeAuth, testConfig, testMe } from "./fakes";
 
 afterEach(cleanup);
 
 async function renderAt(
   url: string,
-  { auth = fakeAuth({ signedIn: true }), config = testConfig as AppConfig } = {},
+  {
+    auth = fakeAuth({ signedIn: true }),
+    config = testConfig as AppConfig,
+    api = fakeApi({ "GET /me": testMe }).api,
+  } = {},
 ) {
   const queryClient = createQueryClient();
-  const router = createAppRouter(queryClient, auth, createMemoryHistory({ initialEntries: [url] }));
+  const router = createAppRouter(
+    { queryClient, auth, api },
+    createMemoryHistory({ initialEntries: [url] }),
+  );
   render(<App config={config} queryClient={queryClient} router={router} />);
   await router.load();
   return { router, auth };
@@ -147,10 +155,27 @@ describe("/auth/callback", () => {
 });
 
 describe("settings", () => {
-  it("shows who is signed in and logs out", async () => {
+  it("shows the account from GET /me and logs out", async () => {
     const { auth } = await renderAt("/settings");
-    expect(await screen.findByText("user@example.com")).toBeTruthy();
+    expect(await screen.findByText(testMe.email)).toBeTruthy();
+    expect(screen.getByText("1.5 MB of 2.0 GB used · 3 photos")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Log out" }));
     expect(auth.logout).toHaveBeenCalledOnce();
+  });
+
+  it("shows API errors with a readable message", async () => {
+    const api = fakeApi({
+      "GET /me": new ApiRequestError("INTERNAL_ERROR", "Internal server error", 500),
+    }).api;
+    await renderAt("/settings", { api });
+    expect(
+      await screen.findByText(
+        "Something went wrong on our side. Try again later.",
+        {},
+        {
+          timeout: 5000,
+        },
+      ),
+    ).toBeTruthy();
   });
 });

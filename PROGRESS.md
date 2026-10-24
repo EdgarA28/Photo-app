@@ -15,14 +15,14 @@
 
 | | |
 |---|---|
-| **Phase** | 3 done (dev), 5.1–5.15 done (all API routes except media cookies; API deployed in dev), 6.1–6.7 + 6.12 done (thumbnail code), Phase 4 done (Cognito + Google IdP + pre sign-up trigger in dev, linking verified) 6.8–6.10 done (thumbnail Lambda deployed in dev, end-to-end upload ≤ 5 s), 8.1–8.3 done (web scaffold, Tailwind + shadcn/ui, login) → next: 8.4 API client. 6.11 moved to Phase 13 (after everything else) |
+| **Phase** | 3 done (dev), 5.1–5.15 done (all API routes except media cookies; API deployed in dev), 6.1–6.7 + 6.12 done (thumbnail code), Phase 4 done (Cognito + Google IdP + pre sign-up trigger in dev, linking verified) 6.8–6.10 done (thumbnail Lambda deployed in dev, end-to-end upload ≤ 5 s), 8.1–8.4 done (web scaffold, Tailwind + shadcn/ui, login, API client) → next: 8.5 layout + navigation. 6.11 moved to Phase 13 (after everything else) |
 | **Last updated** | 2026-10-24 |
 | **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` + Cognito pool `us-east-1_vYJcHEj4G` + trigger `photo-app-dev-pre-sign-up` + thumbnail Lambda `photo-app-dev-thumbnails` with DLQ + API `https://tnl6uhgwkg.execute-api.us-east-1.amazonaws.com` (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
 
 ## Next up
 
-1. Phase 8 (user's choice, 2026-10-24): 8.4 API client (bearer token from `auth.getAccessToken()`, Zod parsing, 401 handling). Run locally: `pnpm --filter @photo-app/web env:dev` once (needs the dev SSO session), then `pnpm --filter @photo-app/web dev`. Images (thumbs/previews) need Phase 7 (CloudFront + media cookie) before the gallery can show them; 6.11 is in Phase 13.
+1. Phase 8 (user's choice, 2026-10-24): 8.5 app layout + navigation, then 8.6 gallery list (data only; images need Phase 7). Run locally: `pnpm --filter @photo-app/web env:dev` once (needs the dev SSO session), then `pnpm --filter @photo-app/web dev`. Images (thumbs/previews) need Phase 7 (CloudFront + media cookie) before the gallery can show them; 6.11 is in Phase 13.
    Dev app resources (table + photo bucket + Cognito + trigger + thumbnail Lambda + DLQ + API) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done. Dev plans need `pnpm build` (trigger + API bundles), `pnpm build:py` (thumbnails) and `source ~/.config/photo-app/dev.env` (Google secret).
 2. Prod bootstrap (1.3/1.4/1.5 for prod) whenever the user approves it; it isn't needed until Phase 11.
 3. Add GitHub repo secrets/environments for the CI roles when Phase 10 starts.
@@ -169,6 +169,7 @@
 - [ ] **7.1** `frontend` module: site bucket, CloudFront with OAC, behaviors `/` (site), `/api/*` (API GW), `/users/*` (photo bucket), SPA fallback
 - [ ] **7.2** CloudFront key pair + key group; private key in Secrets Manager / SSM for the API
 - [ ] **7.3** `POST /session/media-cookie`: signed cookies for `/users/{sub}/*`, 8 h; `DELETE /session/media-cookie`: expire them on logout (FR-AUTH-5, spec v0.3)
+  - Web side (moved from 8.4): `api.session.mediaCookie()` after login and each token refresh, before images load
 - [ ] **7.4** Signed URLs (15 min) for photos in albums shared with me
 - [ ] **7.5** Update Cognito callback URLs + S3 CORS with the CloudFront domain
 
@@ -180,7 +181,8 @@
   - User chose Tailwind CSS + shadcn/ui (2026-10-24). Tailwind 4 (Vite plugin), shadcn style `radix-nova`, Button added and used in the nav; `@/` alias; Prettier sorts classes
 - [x] **8.3** Auth: `oidc-client-ts` (D-2), PKCE, `/login`, `/auth/callback`, token refresh, `_authenticated` guard (FR-AUTH-1/4/6)
   - Token storage option A (user, 2026-10-24): access/ID in memory, refresh token in localStorage; basic logout (revoke + Cognito `/logout`); `pnpm env:dev` writes the local config from dev; 57 web tests (auth against mocked Cognito endpoints). Verified by the user in the browser against dev
-- [ ] **8.4** API client with bearer token + Zod response parsing; media cookie call after login/refresh
+- [x] **8.4** API client with bearer token + Zod response parsing; media cookie call after login/refresh
+  - `src/api`: one function per route, 401 → forced refresh + one retry → else clear session and `/login`; error codes → messages; Query retries only network/429/5xx; settings shows `GET /me` (email, usage). Media cookie call moved to 7.3 (route doesn't exist yet)
 - [ ] **8.5** App layout + navigation (gallery, albums, upload, settings)
 - [ ] **8.6** Gallery: `useInfiniteQuery`, TanStack Virtual grid, reserved tile sizes, URL search params `album`/`sort` (FR-GAL-1/2/3, NFR-PERF-3)
 - [ ] **8.7** Pending / failed tile states (FR-GAL-5)
@@ -338,3 +340,4 @@ Deferred by the user (2026-10-24): done once Phases 7–12 are finished. Until t
 | 2026-10-24 | 6.11 moved to a new Phase 13 (after everything else) at the user's request; Phase 8 started. 8.1 web scaffold: Vite 8 + React 19 + TanStack Router/Query, §12.1 routes, Zod gallery search, `/api` proxy checked against the dev API (health 200, `/me` 401 without token). 323 TS tests pass. Nothing deployed. |
 | 2026-10-24 | 8.2: Tailwind CSS 4 + shadcn/ui (`radix-nova`, neutral); Button in the nav; `cn` package checked (shadcn-ui/cn, no install scripts); build-only packages kept in devDependencies; lockfile keeps existing versions. 11 web tests. |
 | 2026-10-24 | 8.3 web login: `src/auth` (oidc-client-ts, PKCE, `SessionStore` option A, refresh, logout with revocation), guard, `/login`, `/auth/callback`, settings logout, `pnpm env:dev`. Cognito token/revoke CORS for localhost confirmed. User verified in the browser against dev: guard → /login, Google login → gallery, settings shows the email, reload + reopened tab stay signed in, logout → /login, email login asks for the password again. 370 TS tests pass. Nothing deployed. |
+| 2026-10-24 | 8.4 web API client: `src/api` (client, typed routes, errors), Query retry policy, `meQuery`, settings shows email + usage from `GET /me`; `Auth.refreshAccessToken`/`clearSession`. 102 web tests, 415 TS tests pass. Nothing deployed. |

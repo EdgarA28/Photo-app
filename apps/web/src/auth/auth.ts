@@ -25,10 +25,14 @@ export interface Auth {
   getUser(): Promise<SessionUser | null>;
   /** Current access token for `Authorization: Bearer` (8.4), refreshed if needed. */
   getAccessToken(): Promise<string | null>;
+  /** New access token even if the current one looks valid (the API rejected it); null = session over. */
+  refreshAccessToken(): Promise<string | null>;
   /** Redirects to Cognito (Google directly, or managed login for email/password). */
   login(options: { provider: LoginProvider; redirect: string | undefined }): Promise<void>;
   /** Finishes the redirect on /auth/callback; returns the path to continue to. */
   completeLogin(url?: string): Promise<string>;
+  /** Forgets the local session only (the API rejected it): the next guard check goes to /login. */
+  clearSession(): Promise<void>;
   /** Revokes the refresh token, forgets the session, ends the Cognito session (FR-AUTH-5). */
   logout(): Promise<void>;
 }
@@ -90,9 +94,9 @@ export function createAuth(config: AppConfig, deps: AuthDeps = {}): Auth {
   // Concurrent callers (route guard + API calls) share one refresh request.
   let pending: Promise<User | null> | null = null;
 
-  async function validUser(): Promise<User | null> {
+  async function validUser({ force = false } = {}): Promise<User | null> {
     const user = await manager.getUser();
-    if (user && !user.expired && user.access_token) return user;
+    if (!force && user && !user.expired && user.access_token) return user;
     if (!user?.refresh_token) return null;
     pending ??= manager.signinSilent().finally(() => {
       pending = null;
@@ -126,6 +130,10 @@ export function createAuth(config: AppConfig, deps: AuthDeps = {}): Auth {
       return (await validUser())?.access_token ?? null;
     },
 
+    async refreshAccessToken() {
+      return (await validUser({ force: true }))?.access_token ?? null;
+    },
+
     async login({ provider, redirect }) {
       const request = await client.createSigninRequest({
         request_type: "si:r",
@@ -138,6 +146,10 @@ export function createAuth(config: AppConfig, deps: AuthDeps = {}): Auth {
       // Checks `state`, exchanges the code with the PKCE verifier, stores the session (§11).
       const user = await manager.signinRedirectCallback(url);
       return safeRedirect(typeof user.state === "string" ? user.state : undefined);
+    },
+
+    async clearSession() {
+      await manager.removeUser();
     },
 
     async logout() {

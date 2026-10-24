@@ -5,12 +5,15 @@ import {
   Outlet,
   type ErrorComponentProps,
 } from "@tanstack/react-router";
+import type { Api } from "@/api/api";
+import { errorMessage } from "@/api/errors";
 import type { Auth } from "@/auth/auth";
 import { Button } from "@/components/ui/button";
 
 export interface RouterContext {
   queryClient: QueryClient;
   auth: Auth;
+  api: Api;
 }
 
 export const Route = createRootRouteWithContext<RouterContext>()({
@@ -33,9 +36,7 @@ function RootError({ error }: ErrorComponentProps) {
   return (
     <main className="space-y-3 p-4">
       <h1 className="text-xl font-semibold">Something went wrong</h1>
-      <p className="text-muted-foreground">
-        {error instanceof Error ? error.message : String(error)}
-      </p>
+      <p className="text-muted-foreground">{errorMessage(error)}</p>
       <Button onClick={() => window.location.reload()}>Try again</Button>
     </main>
   );

@@ -209,6 +209,25 @@ describe("token storage (option A)", () => {
     expect(persistent.length).toBe(1);
   });
 
+  it("forces a refresh when the API rejected a still-valid token (8.4)", async () => {
+    const auth = openTab();
+    await signIn(auth);
+    fetchMock.mockResolvedValueOnce(tokenResponse({ access_token: "access-2" }));
+    expect(await auth.refreshAccessToken()).toBe("access-2");
+    expect(formBody(fetchMock.mock.calls[1]!).get("grant_type")).toBe("refresh_token");
+    expect(await auth.getAccessToken()).toBe("access-2");
+  });
+
+  it("clears the local session without contacting Cognito", async () => {
+    const auth = openTab();
+    await signIn(auth);
+    await auth.clearSession();
+    expect(await auth.getUser()).toBeNull();
+    expect(persistent.length).toBe(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // only the login
+    expect(navigate).toHaveBeenCalledTimes(1); // only the login redirect
+  });
+
   it("has no session without a login", async () => {
     expect(await openTab().getUser()).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
