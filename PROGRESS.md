@@ -147,7 +147,7 @@
     - Share by username (case-insensitive, with `@`); unknown or held name → `SHARE_TARGET_NOT_FOUND`; non-owner album → 404 before the lookup.
     - Share list hides email for username shares; a rename shows up in share lists and shared albums.
   - [x] **Docs:** ARCHITECTURE §7.4 schemas, §8.2 items, §9 conventions + API table, changelog
-  - Frontend follow-ups (Phase 8): "choose a username" step after first login (skippable), username field in settings (8.13), share dialog accepts `@username` or an email (8.12), "Shared by @name" in Shared with me
+  - Frontend follow-ups (Phase 8): "choose a username" step after first login (skippable, 8.15), username field in settings (8.13), share dialog accepts `@username` or an email (8.12), "Shared by @name" in Shared with me (8.12)
 
 ## Phase 6 — Thumbnail service (`services/thumbnails`, §10)
 
@@ -193,9 +193,10 @@
   - In the viewer: download via the pre-signed `attachment` URL (album passed for shared photos; off while pending); delete only for own photos, AlertDialog confirmation, then next/previous photo or back to the gallery, cache + usage/albums refreshed. Not yet checked against the real S3 URL in a browser
 - [ ] **8.10** Upload queue in IndexedDB: picker, drag & drop, camera; 3 concurrent; progress; retry on `online`/start (FR-UP-1/5/6)
 - [ ] **8.11** Albums: list, create, rename, delete, add/remove photos, album view (FR-ALB-1/2)
-- [ ] **8.12** Sharing UI: share by email, revoke, "Shared with me" section (FR-SHR-1..4)
-- [ ] **8.13** Settings: usage/quota bar, logout calling `DELETE /session/media-cookie` and clearing tokens, Query cache, IndexedDB (FR-ACC-1, FR-AUTH-5)
+- [ ] **8.12** Sharing UI: share by email or `@username`, revoke, "Shared with me" section with "Shared by @name" (FR-SHR-1..5)
+- [ ] **8.13** Settings: usage/quota bar, username field (set/change via `PUT /me/username`, rules from `usernameSchema`, "taken" message), logout calling `DELETE /session/media-cookie` and clearing tokens, Query cache, IndexedDB (FR-ACC-1, FR-ACC-3, FR-AUTH-5)
 - [ ] **8.14** Quota exceeded + error messages (FR-UP-7)
+- [ ] **8.15** "Choose a username" step after the first login (FR-ACC-3): shown once when `GET /me` has `username: null`, skippable ("Later"; remembered so it doesn't come back on every login), same validation and "taken" handling as 8.13
 
 ## Phase 9 — PWA (§12.5)
 
@@ -350,3 +351,4 @@ Deferred by the user (2026-10-24): done once Phases 7–12 are finished. Until t
 | 2026-10-24 | 8.7 processing/failed tiles (FR-GAL-5) + `processingPollInterval` polling (3 s, recent pending uploads only). Polling test checked to fail without the poll. 130 web tests pass; lint/typecheck/format clean. Nothing deployed. |
 | 2026-10-24 | 8.8 viewer: `photos/$photoId.tsx` (preview, prev/next, ←/→/Escape, swipe, preload, deep link, 404), shared `gallerySearchSchema`, `photoQuery`. 13 viewer tests (album-context test checked to fail when broken). 141 web tests pass; lint/typecheck/format/build clean. Not checked in a browser. Nothing deployed. |
 | 2026-10-24 | 8.9 download + delete in the viewer (`src/lib/download.ts`, shadcn AlertDialog, `removePhotoFromCache`); error screen when a loaded photo vanishes. 10 new tests (dialog key-guard test checked to fail without the guard). 151 web tests pass; lint/typecheck/format/build clean. Nothing deployed. |
+| 2026-10-24 | Username UI planned as tasks (user's request): 8.12 share by `@username` + "Shared by @name", 8.13 username field in settings, new 8.15 skippable "choose a username" step after first login. |
