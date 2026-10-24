@@ -1,32 +1,11 @@
-import { createMemoryHistory } from "@tanstack/react-router";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { ErrorResponse } from "oidc-client-ts";
 import { afterEach, describe, expect, it } from "vitest";
-import { App } from "../src/App";
-import type { AppConfig } from "../src/config";
-import { createAppRouter, createQueryClient } from "../src/router";
 import { ApiRequestError } from "../src/api/errors";
 import { fakeApi, fakeAuth, testConfig, testMe, testUser } from "./fakes";
+import { defaultResponses, renderAt } from "./render";
 
 afterEach(cleanup);
-
-async function renderAt(
-  url: string,
-  {
-    auth = fakeAuth({ signedIn: true }),
-    config = testConfig as AppConfig,
-    api = fakeApi({ "GET /me": testMe }).api,
-  } = {},
-) {
-  const queryClient = createQueryClient();
-  const router = createAppRouter(
-    { queryClient, auth, api },
-    createMemoryHistory({ initialEntries: [url] }),
-  );
-  render(<App config={config} queryClient={queryClient} router={router} />);
-  await router.load();
-  return { router, auth };
-}
 
 describe("routes (§12.1)", () => {
   it("redirects / to the gallery", async () => {
@@ -49,7 +28,9 @@ describe("routes (§12.1)", () => {
   it("drops invalid gallery search params instead of failing", async () => {
     const { router } = await renderAt("/gallery?album=nope&sort=random");
     expect(router.state.location.search).toEqual({ sort: "taken-desc" });
-    expect(await screen.findByText("Sort: taken-desc")).toBeTruthy();
+    expect((await screen.findByRole("combobox", { name: "Sort order" })).textContent).toBe(
+      "Newest first",
+    );
   });
 
   it.each([
@@ -198,6 +179,7 @@ describe("settings", () => {
 
   it("shows API errors with a readable message", async () => {
     const api = fakeApi({
+      ...defaultResponses,
       "GET /me": new ApiRequestError("INTERNAL_ERROR", "Internal server error", 500),
     }).api;
     await renderAt("/settings", { api });

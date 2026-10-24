@@ -8,7 +8,8 @@ import { meQuery } from "@/queries/me";
 // Usage, quota, logout (FR-ACC-1, FR-AUTH-5). 8.13 adds the quota bar, username and clearing the
 // media cookie, Query cache and IndexedDB on logout.
 export const Route = createFileRoute("/_authenticated/settings")({
-  loader: ({ context }) => context.queryClient.ensureQueryData(meQuery(context.api)),
+  loader: ({ context }) =>
+    context.queryClient.query({ ...meQuery(context.api), staleTime: "static" }),
   component: Settings,
 });
 

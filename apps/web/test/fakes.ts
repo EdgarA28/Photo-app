@@ -65,16 +65,20 @@ export class MemoryStorage implements Storage {
   }
 }
 
+/** A canned response: a value, an error to throw, or a function of the request's query. */
+export type FakeResponse = unknown | ((query: RequestOptions<unknown>["query"]) => unknown);
+
 /**
  * Api backed by a table of canned responses keyed by "METHOD /path" (no query string). Responses
  * still go through the route's schema, as in the real client.
  */
-export function fakeApi(responses: Record<string, unknown> = {}) {
+export function fakeApi(responses: Record<string, FakeResponse> = {}) {
   const request = vi.fn(
     async (method: string, path: string, options: RequestOptions<unknown> = {}) => {
       const key = `${method} ${path}`;
       if (!(key in responses)) throw new Error(`fakeApi: no response for ${key}`);
-      const value = responses[key];
+      const entry = responses[key];
+      const value = typeof entry === "function" ? entry(options.query) : entry;
       if (value instanceof Error) throw value;
       return options.schema ? options.schema.parse(value) : undefined;
     },
@@ -89,3 +93,38 @@ export const testMe = {
   username: null,
   usage: { bytesUsed: 1536 * 1024, photoCount: 3, quotaBytes: 2 * 1024 ** 3 },
 };
+
+const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/** A valid ULID that encodes `n` in its last characters (stable, readable test IDs). */
+export function testId(n: number): string {
+  let suffix = "";
+  for (let i = 0; i < 6; i++, n = Math.floor(n / 32)) suffix = CROCKFORD[n % 32] + suffix;
+  return `01JB2Z3M4N5P6Q7R8S9T${suffix}`;
+}
+
+/** A ready 4:3 photo as GET /photos returns it. */
+export function testPhoto(n: number, overrides: Record<string, unknown> = {}) {
+  const photoId = testId(n);
+  return {
+    photoId,
+    status: "ready",
+    fileName: `IMG_${n}.jpg`,
+    contentType: "image/jpeg",
+    sizeBytes: 2_000_000,
+    width: 4032,
+    height: 3024,
+    takenAt: "2026-10-01T10:00:00.000Z",
+    uploadedAt: "2026-10-02T10:00:00.000Z",
+    thumbUrl: `/users/${testUser.sub}/thumbs/${photoId}.jpg`,
+    previewUrl: `/users/${testUser.sub}/previews/${photoId}.jpg`,
+    ...overrides,
+  };
+}
+
+/** A page of `count` photos starting at `from`. */
+export function testPhotoPage(from: number, count: number, nextCursor: string | null = null) {
+  return { items: Array.from({ length: count }, (_, i) => testPhoto(from + i)), nextCursor };
+}
+
+export const emptyPage = { items: [], nextCursor: null };
