@@ -1,8 +1,35 @@
 # Offline tests: mocked AWS provider, nothing is created. Run: tofu test
+mock_provider "archive" {}
+
 mock_provider "aws" {
   mock_data "aws_caller_identity" {
     defaults = {
       account_id = "123456789012"
+    }
+  }
+
+  # Policies only need to be valid JSON for the IAM resources' plan-time checks.
+  mock_data "aws_iam_policy_document" {
+    defaults = {
+      json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
+    }
+  }
+
+  mock_resource "aws_iam_role" {
+    defaults = {
+      arn = "arn:aws:iam::123456789012:role/test"
+    }
+  }
+
+  mock_resource "aws_cognito_user_pool" {
+    defaults = {
+      arn = "arn:aws:cognito-idp:us-east-1:123456789012:userpool/us-east-1_test"
+    }
+  }
+
+  mock_resource "aws_lambda_function" {
+    defaults = {
+      arn = "arn:aws:lambda:us-east-1:123456789012:function:test"
     }
   }
 
@@ -199,4 +226,55 @@ run "google_needs_secret" {
   }
 
   expect_failures = [aws_cognito_identity_provider.google]
+}
+
+run "no_trigger_without_bundle" {
+  command = plan
+
+  assert {
+    condition     = length(aws_lambda_function.pre_sign_up) == 0 && length(aws_cognito_user_pool.main.lambda_config) == 0
+    error_message = "No pre sign-up trigger without a built bundle."
+  }
+}
+
+run "pre_sign_up_trigger" {
+  command = plan
+
+  variables {
+    pre_sign_up_source_dir = "./tests/fixtures/trigger"
+  }
+
+  assert {
+    condition = (
+      aws_lambda_function.pre_sign_up[0].runtime == "nodejs22.x" &&
+      aws_lambda_function.pre_sign_up[0].architectures == tolist(["arm64"]) &&
+      aws_lambda_function.pre_sign_up[0].handler == "index.handler"
+    )
+    error_message = "Trigger runs dist/index.mjs on Node.js 22, arm64 (spec §4)."
+  }
+
+  assert {
+    condition     = one(aws_cognito_user_pool.main.lambda_config).pre_sign_up == aws_lambda_function.pre_sign_up[0].arn
+    error_message = "The pool must call the trigger before sign-up (FR-AUTH-3)."
+  }
+
+  assert {
+    condition     = aws_lambda_function.pre_sign_up[0].timeout <= 5
+    error_message = "Cognito waits at most 5 s for a trigger."
+  }
+
+  assert {
+    condition     = aws_cloudwatch_log_group.pre_sign_up[0].retention_in_days == 30 && one(aws_lambda_function.pre_sign_up[0].logging_config).log_format == "JSON"
+    error_message = "Structured JSON logs, 30-day retention (spec §10)."
+  }
+
+  assert {
+    condition     = aws_lambda_permission.pre_sign_up[0].principal == "cognito-idp.amazonaws.com"
+    error_message = "Only Cognito may invoke the trigger."
+  }
+
+  assert {
+    condition     = toset(data.aws_iam_policy_document.pre_sign_up[0].statement[0].actions) == toset(["cognito-idp:ListUsers", "cognito-idp:AdminLinkProviderForUser"])
+    error_message = "The trigger may only look up users and link identities (NFR-SEC-7)."
+  }
 }

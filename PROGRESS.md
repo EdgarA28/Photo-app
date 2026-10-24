@@ -15,16 +15,16 @@
 
 | | |
 |---|---|
-| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.15 (incl. 5.6a/b) done (all API routes except media cookies, incl. usernames), 6.1–6.7 + 6.12 done (thumbnail code), 4.1–4.5 done (Cognito + Google IdP in dev, trigger code) → next: 4.6 deploy the trigger |
-| **Last updated** | 2026-10-23 |
-| **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` + Cognito pool `us-east-1_vYJcHEj4G` (test resources, destroy when done). general: budget. prod: nothing |
+| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.15 (incl. 5.6a/b) done (all API routes except media cookies, incl. usernames), 6.1–6.7 + 6.12 done (thumbnail code), Phase 4 done (Cognito + Google IdP + pre sign-up trigger in dev, linking verified) → next: thumbnails 6.8/6.9 |
+| **Last updated** | 2026-10-24 |
+| **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` + Cognito pool `us-east-1_vYJcHEj4G` + trigger `photo-app-dev-pre-sign-up` (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
 
 ## Next up
 
-1. Phase 4 (auth): 4.6 deploy the pre sign-up trigger (needs approval): Lambda (Node.js 22, arm64, `dist/index.mjs`), role with `cognito-idp:ListUsers` + `AdminLinkProviderForUser` scoped by ARN pattern (avoids the pool ↔ Lambda cycle), `lambda_config.pre_sign_up`, `aws_lambda_permission` for `cognito-idp.amazonaws.com`, JSON logs 30 days. Then manual check, incl. whether the first Google sign-in after linking succeeds or must be retried. Until the trigger exists, a Google login with the email of an existing password account creates a second, unlinked user. Dev plans need the Google secret: `source ~/.config/photo-app/dev.env` (user's file, `chmod 600`, outside the repo) before `tofu plan`. Still to verify in 4.6: a full password sign-up/sign-in through managed login with only `ALLOW_REFRESH_TOKEN_AUTH` on the client.
-   Dev app resources (table + photo bucket + Cognito) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done.
-2. Thumbnails 6.8 (aarch64 packaging) + 6.9 (infra module, can be written and `tofu test`ed offline; deploy needs approval). IAM must include `s3:DeleteObject` on `thumbs/`+`previews/` (race cleanup) and on `originals/` (orphan cleanup, 6.12), and Lambda JSON log format.
+1. Thumbnails 6.8 (aarch64 packaging) + 6.9 (infra module, can be written and `tofu test`ed offline; deploy needs approval). IAM must include `s3:DeleteObject` on `thumbs/`+`previews/` (race cleanup) and on `originals/` (orphan cleanup, 6.12), and Lambda JSON log format (check after deploy that `logging` `extra` fields arrive as JSON fields, not escaped text, like 4.6).
+2. API infra 5.4: also switch `apps/api/src/lib/log.ts` to log objects like the trigger (a JSON string ends up escaped inside `message` with the Lambda JSON log format, seen in 4.6).
+   Dev app resources (table + photo bucket + Cognito + trigger) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done. Dev plans need `pnpm build` (trigger bundle) and `source ~/.config/photo-app/dev.env` (Google secret).
 3. Prod bootstrap (1.3/1.4/1.5 for prod) whenever the user approves it; it isn't needed until Phase 11.
 4. Add GitHub repo secrets/environments for the CI roles when Phase 10 starts.
 
@@ -99,7 +99,7 @@
   - Optional in the module (`google_client_id` null → off; prod stays off until 11.3); client ID in `envs/dev/env.tfvars`, secret via `TF_VAR_google_client_secret` (precondition fails without it). Google's endpoint `provider_details` listed explicitly (no plan drift). Applied 2026-10-23 (1 added, 1 changed); re-plan clean; sign-in page shows Google; `identity_provider=Google` reaches Google's sign-in page (client + redirect URI accepted). 9 module test runs
 - [x] **4.5** `services/auth-triggers`: pre-sign-up Lambda linking Google → existing verified native user (`AdminLinkProviderForUser`) + tests (FR-AUTH-3)
   - `src/preSignUp.ts`: Google sign-up with Google-verified email → link to the single confirmed, enabled, verified native user (none → new user, several → no link + WARN, link error → sign-in fails). Also refuses email/password sign-up when a Google user has the email (deviation, ARCHITECTURE §15). `src/directory.ts` Cognito adapter; 23 tests; bundle 0.5 MB
-- [ ] **4.6** Deploy trigger via `auth` module; manually verify both login methods + linking
+- [x] **4.6** Deploy trigger via `auth` module; manually verify both login methods + linking
 
 ## Phase 5 — API Lambda (`apps/api`, §9)
 
@@ -277,6 +277,7 @@
 | 2026-10-23 | **Email case (from 5.12 note):** Cognito stores `email` exactly as entered (`Case.Test@Example.com`), but with `case_sensitive = false` the `ListUsers` filter `email = "…"` matches case-insensitively (lowercase and mixed-case both found the user). The API's lowercased lookup therefore works; no change needed. Recheck for Google users in 4.6. |
 | 2026-10-23 | **Google secret handling (4.4):** the user keeps it in a password manager and in `~/.config/photo-app/dev.env` (`export TF_VAR_google_client_secret=…`, mode 600, outside the repo), sourced before dev plans; never in chat, tfvars or git (NFR-SEC-8). It is also stored in Cognito and in the dev state (S3, SSE; client-side state encryption is 12.5). CI (Phase 10) will need it as a GitHub secret. |
 | 2026-10-23 | **Account linking (4.5):** links only when Google reports the email verified and exactly one confirmed, enabled, email-verified native user matches. Also refuses email/password sign-up for an email a Google user already has (spec only covers native-first; the reverse link can't happen in pre sign-up, and two accounts would split photos and break email sharing). Side effect: sign-up reveals that an email has a Google account (native emails are revealed by Cognito's own duplicate check already). |
+| 2026-10-24 | **Trigger deploy (4.6):** the role policy names the exact pool ARN instead of an ARN pattern: as a separate `aws_iam_role_policy` it depends on the pool without a cycle (pool → Lambda → role). Code is zipped by `archive_file` from `services/auth-triggers/dist` (build before plan) and uploaded directly (no S3). Lambda JSON log format wraps a `console.log` string as escaped text in `message`, so `log.ts` now passes objects (fields under `message.*`, level from the console method). Verified: native sign-up → Google sign-in with the same email links on the first attempt (no retry needed). |
 | 2026-10-21 | Abandoned uploads: planned 5.6a (reuse `photoId` on retry) + 6.11 (daily sweeper for stale `pending` items); TTL rejected (blind to files that arrived but failed processing, leaves album memberships dangling). |
 
 ## Session log
@@ -315,3 +316,4 @@
 | 2026-10-23 | `login_url` output added (`AWS_PROFILE=dev tofu output -raw login_url` in `infra/envs/dev`); applied to dev (outputs only, 0 resources). |
 | 2026-10-23 | 4.3 (user: Google OAuth client, testing mode) + 4.4 Google IdP: optional in the `auth` module, applied to dev (1 added, 1 changed), re-plan clean, Google button + redirect to Google verified. 9 auth test runs. |
 | 2026-10-23 | 4.5 pre sign-up trigger (`services/auth-triggers`): linking + duplicate-email refusal, Cognito adapter, esbuild bundle; 23 tests. 312 tests pass repo-wide; lint/typecheck/format clean. Nothing deployed. |
+| 2026-10-24 | 4.6 pre sign-up trigger in the `auth` module (archive zip, Lambda, IAM, log group, permission, pool `lambda_config`); 11 auth test runs. Applied to dev (5 added, 1 changed), re-plan clean; log fix redeployed (1 changed). User verified password sign-up + Google sign-in; Cognito shows one linked user. Phase 4 done. |

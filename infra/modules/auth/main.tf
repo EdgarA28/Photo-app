@@ -1,7 +1,5 @@
 # Cognito user pool, domain, app client and Google IdP (spec §11, §13.1).
-#
-# Added later in this module:
-#   - pre-sign-up trigger from services/auth-triggers (4.5/4.6) → lambda_config
+# The pre sign-up trigger is in pre-sign-up.tf.
 
 data "aws_caller_identity" "current" {}
 
@@ -69,6 +67,14 @@ resource "aws_cognito_user_pool" "main" {
   }
 
   mfa_configuration = "OFF"
+
+  # FR-AUTH-3: link Google sign-ups to an existing native user with the same verified email.
+  dynamic "lambda_config" {
+    for_each = aws_lambda_function.pre_sign_up
+    content {
+      pre_sign_up = lambda_config.value.arn
+    }
+  }
 }
 
 # Hosted sign-in pages at https://<prefix>.auth.<region>.amazoncognito.com (version 2 = managed login).

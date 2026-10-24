@@ -31,3 +31,9 @@ variable "google_client_secret" {
   default     = null
   sensitive   = true
 }
+
+variable "pre_sign_up_source_dir" {
+  description = "Built pre sign-up trigger (services/auth-triggers/dist, `pnpm build`). Null = no trigger."
+  type        = string
+  default     = null
+}

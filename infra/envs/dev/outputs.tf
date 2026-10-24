@@ -25,3 +25,7 @@ output "google_redirect_uri" {
 output "login_url" {
   value = module.auth.login_url
 }
+
+output "pre_sign_up_function_name" {
+  value = module.auth.pre_sign_up_function_name
+}

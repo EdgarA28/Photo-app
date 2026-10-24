@@ -46,11 +46,11 @@
 | AWS bootstrap — prod | `infra/bootstrap` (ws `prod`) | 📋 | Code ready, plan clean, not applied |
 | Environment roots | `infra/envs/{dev,prod}` | 🚧 | Database + storage + auth **deployed in dev**; prod validated only |
 | Infra modules: database, storage | `infra/modules/{database,storage}` | ✅ (dev) | Offline `tofu test` suites (7 runs) |
-| Infra module: auth | `infra/modules/auth` | 🚧 | User pool, prefix domain (managed login), PKCE web client (4.1), optional Google IdP (4.4) + 9 offline test runs; pre-sign-up trigger (4.6) to come; **deployed in dev** (with Google) |
+| Infra module: auth | `infra/modules/auth` | ✅ (dev) | User pool, prefix domain (managed login), PKCE web client (4.1), optional Google IdP (4.4), optional pre sign-up trigger Lambda (4.6) + 11 offline test runs; **deployed in dev** (with Google + trigger) |
 | Infra modules: api, thumbnails, frontend | `infra/modules/*` | 📋 | |
 | API Lambda | `apps/api` | 🚧 | Skeleton (5.1–5.3) + routes `GET /me`, `POST /photos/upload-url` (incl. retry), `GET /photos`, `GET /photos/{id}`, `GET /photos/{id}/download-url`, `DELETE /photos/{id}`, album CRUD, album photos, sharing, recipient read access and usernames (5.5, 5.6, 5.6a/b, 5.7–5.13, 5.15); 223 tests (incl. DynamoDB Local). Media cookies and signed URLs (Phase 7) not yet; not deployed |
 | Thumbnail Lambda | `services/thumbnails` | 🚧 | Handler, image pipeline, S3-key mirror, orphan cleanup + 76 pytest tests (6.1–6.7, 6.12); not packaged or deployed yet (6.8–6.10) |
-| Auth trigger Lambda | `services/auth-triggers` | 🚧 | Pre sign-up handler (Google → native account linking, refuses duplicate email sign-ups) + 23 tests (4.5); not deployed (4.6) |
+| Auth trigger Lambda | `services/auth-triggers` | ✅ (dev) | Pre sign-up handler (Google → native account linking, refuses duplicate email sign-ups) + 24 tests (4.5); **deployed in dev** (4.6), linking verified manually |
 | Web app / PWA | `apps/web` | 📋 | Folder skeleton only |
 | CI/CD workflows | `.github/workflows` | 📋 | AWS-side roles exist (dev); no workflows yet |
 
@@ -73,8 +73,8 @@ flowchart LR
   end
 
   subgraph AWS["AWS us-east-1 (per environment account)"]
-    COG["📋 Cognito user pool<br/>+ Google IdP"]
-    TRIG["📋 Pre-sign-up Lambda<br/>services/auth-triggers"]
+    COG["✅ Cognito user pool<br/>+ Google IdP (dev)"]
+    TRIG["✅ Pre-sign-up Lambda (dev)<br/>services/auth-triggers"]
     APIGW["📋 API Gateway HTTP API<br/>JWT authorizer"]
     API["🚧 API Lambda (Hono)<br/>apps/api"]
     DDB[("✅ DynamoDB<br/>single table (dev)")]
@@ -269,7 +269,7 @@ Photo-app/
 │   │   │   ├── imaging.py       pure pipeline: decode, orient, EXIF date, resize, strip, JPEG
 │   │   │   └── s3_keys.py       mirror of packages/shared s3Keys.ts
 │   │   └── tests/               ✅ pytest: key vectors, imaging, handler on moto; fixtures generated in conftest.py
-│   └── auth-triggers/           🚧 Cognito pre sign-up Lambda (TS): src/index.ts (handler), preSignUp.ts (decisions), directory.ts (Cognito: ListUsers, AdminLinkProviderForUser), log.ts; test/; build.mjs (esbuild → dist/index.mjs, ~0.5 MB)
+│   └── auth-triggers/           ✅ Cognito pre sign-up Lambda (TS): src/index.ts (handler), preSignUp.ts (decisions), directory.ts (Cognito: ListUsers, AdminLinkProviderForUser), log.ts (objects for the Lambda JSON log format); test/; build.mjs (esbuild → dist/index.mjs ~0.5 MB + source map; zipped by the `auth` module)
 │
 ├── infra/
 │   ├── bootstrap/               ✅ one-time per-account setup (local state, workspaces)
@@ -599,7 +599,7 @@ sequenceDiagram
   A-->>U: Set-Cookie: CloudFront signed cookies for /users/{sub}/*
 ```
 
-**Pre sign-up trigger (`services/auth-triggers`, 🚧 code + tests, deployed in 4.6).** Cognito calls it before creating any user; the pool ID comes from the event (no configuration). Keeps one account per verified email (FR-AUTH-3, spec §11.3):
+**Pre sign-up trigger (`services/auth-triggers`, ✅ deployed in dev 2026-10-24).** Cognito calls it before creating any user; the pool ID comes from the event (no configuration). Keeps one account per verified email (FR-AUTH-3, spec §11.3):
 
 | `triggerSource` | Behaviour |
 |---|---|
@@ -607,7 +607,7 @@ sequenceDiagram
 | `PreSignUp_SignUp` (email/password) | Refused (`EMAIL_TAKEN_MESSAGE`, "…Sign in with Google instead.") when an enabled federated user already has this email verified. Cognito itself rejects duplicate native emails |
 | `PreSignUp_AdminCreateUser`, others | Pass through |
 
-Linking makes the Google identity sign in as the native user from then on, so `sub` (and every photo) stays the same. **To verify in 4.6:** whether the very first Google sign-in after linking completes as the native user, or fails once (some Cognito setups report "Already found an entry for username" on that first attempt) and succeeds on retry; the UI may need a hint. IAM for 4.6: `cognito-idp:ListUsers` + `cognito-idp:AdminLinkProviderForUser`; the pool's `lambda_config` references the Lambda while the role references the pool, so scope the policy by an ARN pattern (account + region) to avoid a dependency cycle.
+Linking makes the Google identity sign in as the native user from then on, so `sub` (and every photo) stays the same. **Verified in dev (4.6):** password sign-up → Google sign-in with the same email linked the identity (`identities` attribute on the native user, no separate `Google_…` user, log "Linked external identity to native user"); the first Google sign-in after linking completed without a retry. Logs: one JSON event per call with our fields under `message` (e.g. `message.provider`); `level`/`timestamp`/`requestId` come from the runtime. Cold start ~0.9 s incl. the first `ListUsers`, warm ~3 ms (Cognito allows 5 s).
 
 ### 10.2 Upload & processing 🚧 (contracts ✅, thumbnail code ✅, API ✅, not deployed)
 
@@ -749,8 +749,8 @@ Tags on everything: `Project=photo-app`, `Environment=<ws>`, `ManagedBy=opentofu
 | `versions.tf` | OpenTofu ≥ 1.10, AWS `~> 6.0`, S3 backend: bucket `photo-app-tfstate-<acct>`, key `<env>/terraform.tfstate`, `use_lockfile = true`, `encrypt = true` |
 | `providers.tf` | region var (default `us-east-1`), `allowed_account_ids`, default tags (`Project`, `Environment`, `ManagedBy`); credentials from `AWS_PROFILE` locally / OIDC in CI |
 | `variables.tf` | `region`; `app_origins` (web app origins → S3 CORS, Cognito callback + sign-out URLs); `google_client_id` (in `env.tfvars`); `google_client_secret` (sensitive, `TF_VAR_google_client_secret`; locally `source ~/.config/photo-app/dev.env`) |
-| `main.tf` | `module "database"`, `module "storage"`, `module "auth"` with per-env settings (below) |
-| `outputs.tf` | `table_name`, `photo_bucket_name`, `user_pool_id`, `web_client_id`, `cognito_domain_url`, `google_redirect_uri`, `login_url` |
+| `main.tf` | `module "database"`, `module "storage"`, `module "auth"` with per-env settings (below); `auth` gets `pre_sign_up_source_dir = services/auth-triggers/dist`, so run `pnpm build` before planning |
+| `outputs.tf` | `table_name`, `photo_bucket_name`, `user_pool_id`, `web_client_id`, `cognito_domain_url`, `google_redirect_uri`, `login_url`, `pre_sign_up_function_name` |
 | `env.tfvars` | Non-secret settings, committed. Run with `-var-file=env.tfvars` |
 
 | Setting | dev | prod |
@@ -765,8 +765,9 @@ Tags on everything: `Project=photo-app`, `Environment=<ws>`, `ManagedBy=opentofu
 | User pool | `photo-app-dev`, deletion protection off | `photo-app-prod`, deletion protection on |
 | Cognito domain | `photo-app-dev-063359189013` | `photo-app-prod-968632140314` |
 | Google sign-in | on: client `1093239771558-h98qa…apps.googleusercontent.com` (testing mode) | off until 11.3 |
+| Pre sign-up trigger | `photo-app-dev-pre-sign-up` | `photo-app-prod-pre-sign-up` (not applied) |
 
-dev: **deployed 2026-10-19** (9 resources) + auth **2026-10-23** (4 resources: pool `us-east-1_vYJcHEj4G`, client `jkfonk4j32kup18bl98jqkr67`, domain `https://photo-app-dev-063359189013.auth.us-east-1.amazoncognito.com`); test resources, destroyed when testing is done. prod: validated with `-backend=false` only.
+dev: **deployed 2026-10-19** (9 resources) + auth **2026-10-23** (4 resources: pool `us-east-1_vYJcHEj4G`, client `jkfonk4j32kup18bl98jqkr67`, domain `https://photo-app-dev-063359189013.auth.us-east-1.amazoncognito.com`) + pre sign-up trigger **2026-10-24** (5 resources, pool updated in place); test resources, destroyed when testing is done. prod: validated with `-backend=false` only.
 
 ### 12.3 Modules — `infra/modules`
 
@@ -798,7 +799,7 @@ Inputs: `environment`, `cors_allowed_origins`, `versioning` (false), `noncurrent
 Tests: name format, private + encrypted, `force_destroy` default, CORS origins/methods, versioning off/on with matching lifecycle rules.
 Not here by design: the S3 → Lambda event notification (one per bucket; `thumbnails` module) and CloudFront read access (Phase 7).
 
-**`auth` 🚧** (4.1 + 4.4 done; pre-sign-up trigger 4.6 still 📋)
+**`auth` ✅** (4.1, 4.4, 4.6; deployed in dev)
 
 | Resource | Detail |
 |---|---|
@@ -807,9 +808,15 @@ Not here by design: the S3 → Lambda event notification (one per bucket; `thumb
 | `aws_cognito_user_pool_client.web` | `photo-app-{env}-web`; public (no secret); OAuth `code` only (PKCE enforced by the client, 8.3); scopes `openid email profile`; IdPs `COGNITO` + the Google IdP when enabled (referenced from the IdP resource so the client waits for it); callbacks `<origin>/auth/callback`, sign-out `<origin>/login` per `app_origins`; `explicit_auth_flows = ["ALLOW_REFRESH_TOKEN_AUTH"]` (sign-in only on the hosted pages); access/ID 1 h, refresh 30 d (FR-AUTH-4); token revocation on; `prevent_user_existence_errors` |
 | `aws_cognito_identity_provider.google` | only when `google_client_id` is set (`count`); type/name `Google`; `authorize_scopes = "openid email profile"`; Google's endpoints listed explicitly in `provider_details` (Cognito fills them in otherwise → diff on every plan); mapping `sub`→username, `email`, `email_verified` (needed to receive shares, 5.12), `name`, `picture` (§11.2); precondition: secret must be set (FR-AUTH-1) |
 | `aws_cognito_managed_login_branding.web` | Cognito's default style (required for managed login per client) |
+| `aws_cognito_user_pool.main` `lambda_config` | `pre_sign_up` = the trigger Lambda (dynamic block, only with a bundle) |
+| `data.archive_file.pre_sign_up` | zips `pre_sign_up_source_dir` (`services/auth-triggers/dist`, needs `pnpm build` first) into `<env root>/.build/photo-app-{env}-pre-sign-up.zip` (git-ignored); its SHA-256 is the function's `source_code_hash`, so a rebuilt bundle shows as an in-place update |
+| `aws_lambda_function.pre_sign_up` | `photo-app-{env}-pre-sign-up`; Node.js 22, arm64, 256 MB, 5 s timeout (Cognito's trigger limit), `index.handler`, `NODE_OPTIONS=--enable-source-maps`, JSON log format |
+| `aws_iam_role.pre_sign_up` + `aws_iam_role_policy.pre_sign_up` | assumed by `lambda.amazonaws.com`; `cognito-idp:ListUsers` + `cognito-idp:AdminLinkProviderForUser` on this pool's ARN only, `logs:CreateLogStream`/`PutLogEvents` on its log group (NFR-SEC-7). The policy is a separate resource, so it can name the exact pool ARN without a pool ↔ Lambda cycle |
+| `aws_cloudwatch_log_group.pre_sign_up` | `/aws/lambda/photo-app-{env}-pre-sign-up`, 30 days; created before the function |
+| `aws_lambda_permission.pre_sign_up` | `cognito-idp.amazonaws.com`, `source_arn` = this pool |
 
-Inputs: `environment`, `app_origins` (validated: scheme + host, no path), `deletion_protection` (true), `google_client_id` (null = Google off), `google_client_secret` (sensitive; from `TF_VAR_google_client_secret`, never in git). Outputs: `user_pool_id`, `user_pool_arn`, `issuer_url`, `web_client_id`, `domain_url`, `google_redirect_uri`, `login_url` (hosted sign-in page for the first app origin, manual testing; no PKCE).
-Tests: email sign-in + verification + verified email changes, deletion protection default/off, domain prefix + Google redirect URI + login URL, public code-only client with spec scopes and token lifetimes, callback/sign-out URLs, origin validation, Google off without a client ID, Google IdP scopes + mapping + client providers, secret required.
+Inputs: `environment`, `app_origins` (validated: scheme + host, no path), `deletion_protection` (true), `google_client_id` (null = Google off), `google_client_secret` (sensitive; from `TF_VAR_google_client_secret`, never in git), `pre_sign_up_source_dir` (null = no trigger). Providers: `aws`, `archive` (`~> 2.7`). Outputs: `user_pool_id`, `user_pool_arn`, `issuer_url`, `web_client_id`, `domain_url`, `google_redirect_uri`, `login_url` (hosted sign-in page for the first app origin, manual testing; no PKCE), `pre_sign_up_function_name`.
+Tests: email sign-in + verification + verified email changes, deletion protection default/off, domain prefix + Google redirect URI + login URL, public code-only client with spec scopes and token lifetimes, callback/sign-out URLs, origin validation, Google off without a client ID, Google IdP scopes + mapping + client providers, secret required, no trigger without a bundle, trigger runtime/arch/timeout/logs/permission/IAM actions and pool `lambda_config`.
 Not yet: refresh-token rotation (single-use refresh tokens; revisit with the web client, 8.3).
 Verified in dev: `/oauth2/authorize` with PKCE shows the sign-in page; an unlisted redirect URI → `redirect_mismatch`. `email` is stored as entered, but `ListUsers` `email = "…"` matches case-insensitively (`case_sensitive = false`), so the API's lowercased share lookup finds mixed-case addresses.
 
@@ -884,3 +891,4 @@ Not started. Target design: spec §12 (TanStack Router file routes with an authe
 | 2026-10-23 | `login_url` output (module + envs): `tofu output login_url` prints the hosted sign-in page. |
 | 2026-10-23 | 4.4: optional Google IdP in the `auth` module (mapping incl. `email_verified`, secret as sensitive variable); env variables + dev client ID; applied to dev. |
 | 2026-10-23 | 4.5: `services/auth-triggers` pre sign-up Lambda (linking, duplicate-email refusal) + tests; §10.1 trigger table, libraries, repo tree, deviation (§15). |
+| 2026-10-24 | 4.6: pre sign-up trigger in the `auth` module (`pre-sign-up.tf`: zip, Lambda, role/policy on the exact pool ARN, log group, permission; pool `lambda_config`), `archive` provider, env wiring + output; deployed to dev and linking verified (§10.1, §12.2, §12.3). Trigger `log.ts` now logs objects for the Lambda JSON log format. |
