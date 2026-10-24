@@ -8,7 +8,7 @@ export const Route = createFileRoute("/_authenticated/upload")({
 function Upload() {
   return (
     <main>
-      <h1>Upload</h1>
+      <h1 className="text-2xl font-semibold tracking-tight">Upload</h1>
     </main>
   );
 }

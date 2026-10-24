@@ -19,7 +19,7 @@ function Settings() {
 
   return (
     <main className="space-y-4">
-      <h1 className="text-xl font-semibold">Settings</h1>
+      <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
       <p>
         Signed in as <span className="font-medium">{me.email}</span>
       </p>

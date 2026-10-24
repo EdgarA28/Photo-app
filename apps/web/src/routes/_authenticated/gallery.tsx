@@ -18,7 +18,7 @@ function Gallery() {
   const { album, sort } = Route.useSearch();
   return (
     <main>
-      <h1>Gallery</h1>
+      <h1 className="text-2xl font-semibold tracking-tight">Gallery</h1>
       <p>
         Sort: {sort}
         {album ? ` · album ${album}` : ""}

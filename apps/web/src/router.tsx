@@ -43,4 +43,8 @@ declare module "@tanstack/react-router" {
   interface Register {
     router: ReturnType<typeof createAppRouter>;
   }
+  interface StaticDataRouteOption {
+    /** Render without the app shell's navigation (the viewer, FR-GAL-4). */
+    fullScreen?: boolean;
+  }
 }

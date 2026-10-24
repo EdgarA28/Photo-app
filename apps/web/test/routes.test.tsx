@@ -1,12 +1,12 @@
 import { createMemoryHistory } from "@tanstack/react-router";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { ErrorResponse } from "oidc-client-ts";
 import { afterEach, describe, expect, it } from "vitest";
 import { App } from "../src/App";
 import type { AppConfig } from "../src/config";
 import { createAppRouter, createQueryClient } from "../src/router";
 import { ApiRequestError } from "../src/api/errors";
-import { fakeApi, fakeAuth, testConfig, testMe } from "./fakes";
+import { fakeApi, fakeAuth, testConfig, testMe, testUser } from "./fakes";
 
 afterEach(cleanup);
 
@@ -66,11 +66,44 @@ describe("routes (§12.1)", () => {
     expect(await screen.findByText("Photo 01JB2Z3M4N5P6Q7R8S9T0V1W2X")).toBeTruthy();
   });
 
-  it("marks the current page in the navigation", async () => {
-    await renderAt("/albums");
-    const current = await screen.findByRole("link", { current: "page" });
-    expect(current.textContent).toBe("Albums");
-    expect(current.dataset.slot).toBe("button");
+  // jsdom applies no media queries, so both the side rail and the bottom bar are present.
+  it("offers the four sections in both navigation bars", async () => {
+    await renderAt("/gallery");
+    const navs = await screen.findAllByRole("navigation", { name: "Main" });
+    expect(navs).toHaveLength(2);
+    for (const nav of navs) {
+      const links = within(nav).getAllByRole("link");
+      expect(links.map((link) => [link.textContent, link.getAttribute("href")])).toEqual([
+        ["Gallery", "/gallery"],
+        ["Albums", "/albums"],
+        ["Upload", "/upload"],
+        ["Settings", "/settings"],
+      ]);
+    }
+  });
+
+  it.each([
+    ["/albums", "Albums"],
+    ["/albums/01JB2Z3M4N5P6Q7R8S9T0V1W2X", "Albums"],
+    ["/gallery?sort=taken-asc", "Gallery"],
+    ["/settings", "Settings"],
+  ])("marks the current section on %s", async (url, label) => {
+    await renderAt(url);
+    for (const nav of await screen.findAllByRole("navigation", { name: "Main" })) {
+      const current = within(nav).getAllByRole("link", { current: "page" });
+      expect(current.map((link) => link.textContent)).toEqual([label]);
+    }
+  });
+
+  it("shows the signed-in email in the side rail", async () => {
+    await renderAt("/gallery");
+    expect(await screen.findByText(testUser.email!)).toBeTruthy();
+  });
+
+  it("shows the viewer full screen, without navigation (FR-GAL-4)", async () => {
+    await renderAt("/photos/01JB2Z3M4N5P6Q7R8S9T0V1W2X");
+    await screen.findByText("Photo 01JB2Z3M4N5P6Q7R8S9T0V1W2X");
+    expect(screen.queryByRole("navigation")).toBeNull();
   });
 
   it("shows a not-found page for unknown paths", async () => {
@@ -157,7 +190,7 @@ describe("/auth/callback", () => {
 describe("settings", () => {
   it("shows the account from GET /me and logs out", async () => {
     const { auth } = await renderAt("/settings");
-    expect(await screen.findByText(testMe.email)).toBeTruthy();
+    expect(within(await screen.findByRole("main")).getByText(testMe.email)).toBeTruthy();
     expect(screen.getByText("1.5 MB of 2.0 GB used · 3 photos")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Log out" }));
     expect(auth.logout).toHaveBeenCalledOnce();

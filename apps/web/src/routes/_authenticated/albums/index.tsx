@@ -8,7 +8,7 @@ export const Route = createFileRoute("/_authenticated/albums/")({
 function Albums() {
   return (
     <main>
-      <h1>Albums</h1>
+      <h1 className="text-2xl font-semibold tracking-tight">Albums</h1>
     </main>
   );
 }
