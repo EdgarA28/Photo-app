@@ -15,14 +15,14 @@
 
 | | |
 |---|---|
-| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.15 (incl. 5.6a/b) done (all API routes except media cookies, incl. usernames), 6.1–6.7 + 6.12 done (thumbnail code), Phase 4 done (Cognito + Google IdP + pre sign-up trigger in dev, linking verified) → next: thumbnails 6.8/6.9 |
+| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.15 (incl. 5.6a/b) done (all API routes except media cookies, incl. usernames), 6.1–6.7 + 6.12 done (thumbnail code), Phase 4 done (Cognito + Google IdP + pre sign-up trigger in dev, linking verified) 6.8 done (thumbnail package) → next: thumbnails 6.9 |
 | **Last updated** | 2026-10-24 |
 | **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` + Cognito pool `us-east-1_vYJcHEj4G` + trigger `photo-app-dev-pre-sign-up` (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
 
 ## Next up
 
-1. Thumbnails 6.8 (aarch64 packaging) + 6.9 (infra module, can be written and `tofu test`ed offline; deploy needs approval). IAM must include `s3:DeleteObject` on `thumbs/`+`previews/` (race cleanup) and on `originals/` (orphan cleanup, 6.12), and Lambda JSON log format (check after deploy that `logging` `extra` fields arrive as JSON fields, not escaped text, like 4.6).
+1. Thumbnails 6.9 (infra module, can be written and `tofu test`ed offline; deploy needs approval): zip `services/thumbnails/dist` with `archive_file` like the auth trigger (`pnpm build:py` before plans), runtime `python3.13`, arm64, handler `thumbnails.handler.handler`, env `TABLE_NAME`. First arm64 run of the package happens here / in 6.10. IAM must include `s3:DeleteObject` on `thumbs/`+`previews/` (race cleanup) and on `originals/` (orphan cleanup, 6.12), and Lambda JSON log format (check after deploy that `logging` `extra` fields arrive as JSON fields, not escaped text, like 4.6).
 2. API infra 5.4: also switch `apps/api/src/lib/log.ts` to log objects like the trigger (a JSON string ends up escaped inside `message` with the Lambda JSON log format, seen in 4.6).
    Dev app resources (table + photo bucket + Cognito + trigger) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done. Dev plans need `pnpm build` (trigger bundle) and `source ~/.config/photo-app/dev.env` (Google secret).
 3. Prod bootstrap (1.3/1.4/1.5 for prod) whenever the user approves it; it isn't needed until Phase 11.
@@ -160,7 +160,7 @@
 - [x] **6.6** Python mirror of S3 key format + tests kept in sync with `packages/shared`
 - [x] **6.7** pytest fixtures: JPEG with orientation, PNG with alpha, HEIC, corrupt file
   - 73 tests (key vectors, imaging, handler/processor on moto S3 + DynamoDB); fixtures generated in `conftest.py`, no binaries in git
-- [ ] **6.8** Packaging: manylinux2014 aarch64 wheels → zip
+- [x] **6.8** Packaging: aarch64 wheels → `dist/` (manylinux_2_28; zipped by the 6.9 module like the auth trigger)
 - [ ] **6.9** `thumbnails` infra module: Lambda (1536 MB, 60 s), IAM (read + delete `originals/`, write + delete `thumbs/`+`previews/`), S3 notification, retries 2×, SQS DLQ 14 days, logs (NFR-SEC-7)
 - [ ] **6.11** Stale-pending sweeper (abandoned uploads): scheduled Lambda (EventBridge, daily) finds `pending` photos older than 24 h; `HeadObject` on `originalKey` → missing: delete the item via the same logic as `repos.photos.delete` (memberships, conditional on `status = pending`); present: leave it and log a warning (processing problem, see DLQ). Needs a way to find old pending items without scanning every user (e.g. sparse GSI on pending items, or a Scan with filter while small); IAM: `s3:HeadObject`/`GetObject` on `users/*/originals/*`, table read/write. New AWS resources, **needs approval**. Complements upload-photo reuse in 5.6a
 - [x] **6.12** Orphaned originals: a `pending` photo deleted (5.9) while its upload POST is still valid (≤ 15 min) can still receive the original; the Lambda then logs "no photo item" and skips, leaving an unreferenced, uncounted original. Fix: on "no photo item", delete the original (safe: the item is always written before the POST is handed out, and the read is consistent). IAM: `s3:DeleteObject` on `originals/` too
@@ -278,6 +278,7 @@
 | 2026-10-23 | **Google secret handling (4.4):** the user keeps it in a password manager and in `~/.config/photo-app/dev.env` (`export TF_VAR_google_client_secret=…`, mode 600, outside the repo), sourced before dev plans; never in chat, tfvars or git (NFR-SEC-8). It is also stored in Cognito and in the dev state (S3, SSE; client-side state encryption is 12.5). CI (Phase 10) will need it as a GitHub secret. |
 | 2026-10-23 | **Account linking (4.5):** links only when Google reports the email verified and exactly one confirmed, enabled, email-verified native user matches. Also refuses email/password sign-up for an email a Google user already has (spec only covers native-first; the reverse link can't happen in pre sign-up, and two accounts would split photos and break email sharing). Side effect: sign-up reveals that an email has a Google account (native emails are revealed by Cognito's own duplicate check already). |
 | 2026-10-24 | **Trigger deploy (4.6):** the role policy names the exact pool ARN instead of an ARN pattern: as a separate `aws_iam_role_policy` it depends on the pool without a cycle (pool → Lambda → role). Code is zipped by `archive_file` from `services/auth-triggers/dist` (build before plan) and uploaded directly (no S3). Lambda JSON log format wraps a `console.log` string as escaped text in `message`, so `log.ts` now passes objects (fields under `message.*`, level from the console method). Verified: native sign-up → Google sign-in with the same email links on the first attempt (no retry needed). |
+| 2026-10-24 | **Thumbnail packaging (6.8):** `manylinux_2_28` instead of manylinux2014: Pillow 13 / pillow-heif 1.8 only publish 2_28 aarch64 wheels, and Lambda `python3.13` (AL2023, glibc 2.34) supports them. Wheels only (`--only-binary :all:`), hashes from `uv.lock`, boto3 left to the runtime, hash-based `.pyc` precompiled. Output is a `dist/` directory (not a zip) so the infra module zips it, same as the auth trigger. No local arm64 emulation (Docker without binfmt), so the arm64 run is checked on Lambda; the build logic was verified with an x86_64 build in a clean venv. |
 | 2026-10-21 | Abandoned uploads: planned 5.6a (reuse `photoId` on retry) + 6.11 (daily sweeper for stale `pending` items); TTL rejected (blind to files that arrived but failed processing, leaves album memberships dangling). |
 
 ## Session log
@@ -317,3 +318,4 @@
 | 2026-10-23 | 4.3 (user: Google OAuth client, testing mode) + 4.4 Google IdP: optional in the `auth` module, applied to dev (1 added, 1 changed), re-plan clean, Google button + redirect to Google verified. 9 auth test runs. |
 | 2026-10-23 | 4.5 pre sign-up trigger (`services/auth-triggers`): linking + duplicate-email refusal, Cognito adapter, esbuild bundle; 23 tests. 312 tests pass repo-wide; lint/typecheck/format clean. Nothing deployed. |
 | 2026-10-24 | 4.6 pre sign-up trigger in the `auth` module (archive zip, Lambda, IAM, log group, permission, pool `lambda_config`); 11 auth test runs. Applied to dev (5 added, 1 changed), re-plan clean; log fix redeployed (1 changed). User verified password sign-up + Google sign-in; Cognito shows one linked user. Phase 4 done. |
+| 2026-10-24 | 6.8 thumbnail packaging: `services/thumbnails/build.sh` + `pnpm build:py`; 30 aarch64 native libs, 38 MB unpacked / 14 MB zipped; x86_64 smoke build ran JPEG + HEIC through the packaged pipeline. Nothing deployed. |
