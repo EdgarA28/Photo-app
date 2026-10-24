@@ -15,18 +15,17 @@
 
 | | |
 |---|---|
-| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.15 (incl. 5.6a/b) done (all API routes except media cookies, incl. usernames), 6.1–6.7 + 6.12 done (thumbnail code), Phase 4 done (Cognito + Google IdP + pre sign-up trigger in dev, linking verified) 6.8 + 6.9 done (thumbnail package + Lambda deployed in dev) → next: 6.10 end-to-end upload check |
+| **Phase** | 3 done (dev), 5.1–5.3 + 5.5–5.15 (incl. 5.6a/b) done (all API routes except media cookies, incl. usernames), 6.1–6.7 + 6.12 done (thumbnail code), Phase 4 done (Cognito + Google IdP + pre sign-up trigger in dev, linking verified) 6.8–6.10 done (thumbnail Lambda deployed in dev, end-to-end upload ≤ 5 s) → next: API infra 5.4 |
 | **Last updated** | 2026-10-24 |
 | **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` + Cognito pool `us-east-1_vYJcHEj4G` + trigger `photo-app-dev-pre-sign-up` + thumbnail Lambda `photo-app-dev-thumbnails` with DLQ (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
 
 ## Next up
 
-1. 6.10 end-to-end check in dev: create a `pending` Photo item + Usage reservation like `POST /photos/upload-url` does (API isn't deployed yet: script against the table, or wait for 5.4), upload through a pre-signed POST, confirm thumb + preview + item `ready` within 5 s (NFR-PERF-1), then delete the test data. Optional: quiet botocore's INFO "Found credentials" log line.
-2. API infra 5.4: also switch `apps/api/src/lib/log.ts` to log objects like the trigger (a JSON string ends up escaped inside `message` with the Lambda JSON log format, seen in 4.6).
-   Dev app resources (table + photo bucket + Cognito + trigger) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done. Dev plans need `pnpm build` (trigger bundle) and `source ~/.config/photo-app/dev.env` (Google secret).
-3. Prod bootstrap (1.3/1.4/1.5 for prod) whenever the user approves it; it isn't needed until Phase 11.
-4. Add GitHub repo secrets/environments for the CI roles when Phase 10 starts.
+1. API infra 5.4 (deploy needs approval). Also switch `apps/api/src/lib/log.ts` to log objects like the trigger (a JSON string ends up escaped inside `message` with the Lambda JSON log format, seen in 4.6).
+   Dev app resources (table + photo bucket + Cognito + trigger + thumbnail Lambda + DLQ) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done. Dev plans need `pnpm build` (trigger bundle), `pnpm build:py` (thumbnails) and `source ~/.config/photo-app/dev.env` (Google secret).
+2. Prod bootstrap (1.3/1.4/1.5 for prod) whenever the user approves it; it isn't needed until Phase 11.
+3. Add GitHub repo secrets/environments for the CI roles when Phase 10 starts.
 
 ---
 
@@ -164,7 +163,7 @@
 - [x] **6.9** `thumbnails` infra module: Lambda (1536 MB, 60 s), IAM (read + delete `originals/`, write + delete `thumbs/`+`previews/`), S3 notification, retries 2×, SQS DLQ 14 days, logs (NFR-SEC-7)
 - [ ] **6.11** Stale-pending sweeper (abandoned uploads): scheduled Lambda (EventBridge, daily) finds `pending` photos older than 24 h; `HeadObject` on `originalKey` → missing: delete the item via the same logic as `repos.photos.delete` (memberships, conditional on `status = pending`); present: leave it and log a warning (processing problem, see DLQ). Needs a way to find old pending items without scanning every user (e.g. sparse GSI on pending items, or a Scan with filter while small); IAM: `s3:HeadObject`/`GetObject` on `users/*/originals/*`, table read/write. New AWS resources, **needs approval**. Complements upload-photo reuse in 5.6a
 - [x] **6.12** Orphaned originals: a `pending` photo deleted (5.9) while its upload POST is still valid (≤ 15 min) can still receive the original; the Lambda then logs "no photo item" and skips, leaving an unreferenced, uncounted original. Fix: on "no photo item", delete the original (safe: the item is always written before the POST is handed out, and the read is consistent). IAM: `s3:DeleteObject` on `originals/` too
-- [ ] **6.10** End-to-end check: upload via pre-signed POST → thumb ≤ 5 s (NFR-PERF-1)
+- [x] **6.10** End-to-end check: upload via pre-signed POST → thumb ≤ 5 s (NFR-PERF-1)
 
 ## Phase 7 — CloudFront & media access (§5, §13.1 `frontend`)
 
@@ -281,6 +280,7 @@
 | 2026-10-24 | **Trigger deploy (4.6):** the role policy names the exact pool ARN instead of an ARN pattern: as a separate `aws_iam_role_policy` it depends on the pool without a cycle (pool → Lambda → role). Code is zipped by `archive_file` from `services/auth-triggers/dist` (build before plan) and uploaded directly (no S3). Lambda JSON log format wraps a `console.log` string as escaped text in `message`, so `log.ts` now passes objects (fields under `message.*`, level from the console method). Verified: native sign-up → Google sign-in with the same email links on the first attempt (no retry needed). |
 | 2026-10-24 | **Thumbnail packaging (6.8):** `manylinux_2_28` instead of manylinux2014: Pillow 13 / pillow-heif 1.8 only publish 2_28 aarch64 wheels, and Lambda `python3.13` (AL2023, glibc 2.34) supports them. Wheels only (`--only-binary :all:`), hashes from `uv.lock`, boto3 left to the runtime, hash-based `.pyc` precompiled. Output is a `dist/` directory (not a zip) so the infra module zips it, same as the auth trigger. No local arm64 emulation (Docker without binfmt), so the arm64 run is checked on Lambda; the build logic was verified with an x86_64 build in a clean venv. |
 | 2026-10-24 | **Thumbnail module (6.9):** failed events go to the SQS queue as a Lambda **on-failure destination** (record includes the error) rather than `dead_letter_config` (event only); still the spec's SQS DLQ with 14-day retention. Trigger prefix `users/` as in the spec (S3 can't filter on `users/*/originals/`; derived writes cost two skipped invocations per photo). The module owns the bucket's single notification configuration. DLQ alarm deferred by the user → 12.9 (consider). |
+| 2026-10-24 | **End-to-end check (6.10):** done with a throwaway script (not committed) that reused the API's `createPending` + `createUploadPost` for a random test user, uploaded through the pre-signed POST, polled the item, and deleted everything afterwards. JPEG ready 3.3 s (cold), HEIC 3.8 s (warm) after upload: NFR-PERF-1 met on these samples, HEIC has the least margin (larger HEICs, e.g. 48 MP, may exceed 5 s; revisit with real phone photos, 12.3). Optional cleanup: botocore's INFO "Found credentials" line. |
 | 2026-10-21 | Abandoned uploads: planned 5.6a (reuse `photoId` on retry) + 6.11 (daily sweeper for stale `pending` items); TTL rejected (blind to files that arrived but failed processing, leaves album memberships dangling). |
 
 ## Session log
@@ -322,3 +322,4 @@
 | 2026-10-24 | 4.6 pre sign-up trigger in the `auth` module (archive zip, Lambda, IAM, log group, permission, pool `lambda_config`); 11 auth test runs. Applied to dev (5 added, 1 changed), re-plan clean; log fix redeployed (1 changed). User verified password sign-up + Google sign-in; Cognito shows one linked user. Phase 4 done. |
 | 2026-10-24 | 6.8 thumbnail packaging: `services/thumbnails/build.sh` + `pnpm build:py`; 30 aarch64 native libs, 38 MB unpacked / 14 MB zipped; x86_64 smoke build ran JPEG + HEIC through the packaged pipeline. Nothing deployed. |
 | 2026-10-24 | 6.9 `thumbnails` module + 4 offline test runs; wired into dev/prod. Applied to dev (8 added), re-plan clean. arm64 smoke invoke: package loads (init 415 ms, 110 MB), `skipped` for a thumbs key, JSON logs keep `extra` fields. Added 12.9 (DLQ alarm, to consider). |
+| 2026-10-24 | 6.10 end-to-end in dev: 12 MP JPEG (EXIF orientation 6 + offset date → 3024×4032, takenAt in UTC) ready 3.3 s after upload incl. cold start; 12 MP HEIC ready 3.8 s (no EXIF → takenAt = uploadedAt). Derived objects + Usage correct; test data deleted (0 objects, 0 items left). |
