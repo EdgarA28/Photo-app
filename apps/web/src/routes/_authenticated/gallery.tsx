@@ -15,6 +15,8 @@ import { PhotoGrid } from "@/gallery/PhotoGrid";
 import { gallerySearchSchema } from "@/gallery/search";
 import { albumsQuery } from "@/queries/albums";
 import { galleryQuery } from "@/queries/photos";
+import { GalleryUploads } from "@/upload/GalleryUploads";
+import { useUploads } from "@/upload/useUploads";
 
 export const Route = createFileRoute("/_authenticated/gallery")({
   validateSearch: gallerySearchSchema,
@@ -33,6 +35,12 @@ function Gallery() {
   const { data, hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } =
     useSuspenseInfiniteQuery(galleryQuery(api, { album, sort }));
   const photos = useMemo(() => data.pages.flatMap((page) => page.items), [data]);
+  // Not-yet-uploaded files (FR-UP-6); uploads go to all photos, not to the album being viewed.
+  const entries = useUploads();
+  const uploads = useMemo(
+    () => (album ? [] : entries.filter((entry) => entry.status !== "done")),
+    [album, entries],
+  );
 
   return (
     <main className="space-y-5">
@@ -40,8 +48,9 @@ function Gallery() {
         <h1 className="text-2xl font-semibold tracking-tight">Gallery</h1>
         <GalleryFilters album={album} sort={sort} />
       </header>
+      {uploads.length > 0 && <GalleryUploads entries={uploads} />}
       {photos.length === 0 ? (
-        <EmptyGallery inAlbum={album !== undefined} />
+        uploads.length === 0 && <EmptyGallery inAlbum={album !== undefined} />
       ) : (
         <PhotoGrid
           photos={photos}

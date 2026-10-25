@@ -6,7 +6,10 @@ import { createRequest } from "./api/client";
 import { App } from "./App";
 import { createAuth } from "./auth/auth";
 import { loadConfig } from "./config";
+import { refreshAfterUpload } from "./queries/photos";
 import { createAppRouter, createQueryClient } from "./router";
+import { createUploadQueue, UPLOAD_CHANNEL_NAME } from "./upload/queue";
+import { createIdbStore } from "./upload/store";
 
 const config = loadConfig();
 const queryClient = createQueryClient();
@@ -24,7 +27,18 @@ const api = createApi(
     },
   }),
 );
-const router = createAppRouter({ queryClient, auth, api });
+const uploads = createUploadQueue({
+  api,
+  store: createIdbStore(),
+  onUploaded: () => refreshAfterUpload(queryClient),
+  locks: navigator.locks,
+  createChannel:
+    typeof BroadcastChannel === "undefined"
+      ? undefined
+      : () => new BroadcastChannel(UPLOAD_CHANNEL_NAME),
+  requestPersistence: () => navigator.storage?.persist?.(),
+});
+const router = createAppRouter({ queryClient, auth, api, uploads });
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

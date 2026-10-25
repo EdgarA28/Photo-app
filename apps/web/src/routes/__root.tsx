@@ -9,11 +9,14 @@ import type { Api } from "@/api/api";
 import { errorMessage } from "@/api/errors";
 import type { Auth } from "@/auth/auth";
 import { Button } from "@/components/ui/button";
+import type { UploadQueue } from "@/upload/queue";
 
 export interface RouterContext {
   queryClient: QueryClient;
   auth: Auth;
   api: Api;
+  /** App-wide, so uploads keep running while the user moves around (8.10). */
+  uploads: UploadQueue;
 }
 
 export const Route = createRootRouteWithContext<RouterContext>()({

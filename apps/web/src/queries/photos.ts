@@ -59,6 +59,16 @@ export const photoQuery = (api: Api, photoId: string) =>
     queryFn: ({ signal }) => api.photos.get(photoId, { signal }),
   });
 
+/**
+ * After an upload reached S3 (8.10): the photo now exists as `pending`, so the gallery shows it as
+ * processing (and polls until ready), and usage counts it (5.6b).
+ */
+export const refreshAfterUpload = (queryClient: QueryClient) =>
+  Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["photos"] }),
+    queryClient.invalidateQueries({ queryKey: ["me"] }),
+  ]);
+
 /** Drops a deleted photo from every cached list and its own entry, before the refetch confirms. */
 export function removePhotoFromCache(queryClient: QueryClient, photoId: string) {
   queryClient.removeQueries({ queryKey: photoKey(photoId) });

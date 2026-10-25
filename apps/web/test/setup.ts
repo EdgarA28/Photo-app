@@ -17,3 +17,7 @@ globalThis.ResizeObserver ??= class {
 Element.prototype.hasPointerCapture ??= () => false;
 Element.prototype.releasePointerCapture ??= () => {};
 Element.prototype.scrollIntoView ??= () => {};
+
+// Local previews of queued uploads (8.10): jsdom has no object URLs.
+URL.createObjectURL ??= () => "blob:test";
+URL.revokeObjectURL ??= () => {};

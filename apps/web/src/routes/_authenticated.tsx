@@ -1,4 +1,5 @@
 import { createFileRoute, Outlet, redirect, useMatches } from "@tanstack/react-router";
+import { useEffect } from "react";
 import { BottomNav, SideNav } from "@/components/app-nav";
 
 // Pathless layout for every signed-in page (§12.1, FR-AUTH-6): without a valid session (after a
@@ -15,7 +16,13 @@ export const Route = createFileRoute("/_authenticated")({
 // App shell (8.5): side rail from `md`, bottom tab bar below. Routes with `staticData.fullScreen`
 // (the viewer, FR-GAL-4) get the whole screen.
 function AuthenticatedLayout() {
-  const { user } = Route.useRouteContext();
+  const { user, uploads } = Route.useRouteContext();
+  // The upload queue runs while signed in (8.10). Stopped when the session ends, so it doesn't
+  // keep hitting the API with a dead session; the stored queue resumes on the next login.
+  useEffect(() => {
+    void uploads.start(user.sub);
+    return () => uploads.stop();
+  }, [uploads, user.sub]);
   const fullScreen = useMatches({
     select: (matches) => matches.some((m) => m.staticData.fullScreen),
   });

@@ -3,6 +3,7 @@ import type { Api } from "./api/api";
 import { ApiRequestError } from "./api/errors";
 import { createRouter, type RouterHistory } from "@tanstack/react-router";
 import type { Auth } from "./auth/auth";
+import type { UploadQueue } from "./upload/queue";
 import { routeTree } from "./routeTree.gen";
 
 /** §12.2: below the 15-minute lifetime of signed URLs in API responses (§9). */
@@ -25,12 +26,16 @@ export interface AppDeps {
   queryClient: QueryClient;
   auth: Auth;
   api: Api;
+  uploads: UploadQueue;
 }
 
-export function createAppRouter({ queryClient, auth, api }: AppDeps, history?: RouterHistory) {
+export function createAppRouter(
+  { queryClient, auth, api, uploads }: AppDeps,
+  history?: RouterHistory,
+) {
   return createRouter({
     routeTree,
-    context: { queryClient, auth, api },
+    context: { queryClient, auth, api, uploads },
     ...(history ? { history } : {}),
     defaultPreload: "intent",
     // Loaders read through the Query cache (ensureQueryData), which decides freshness.

@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { BookImage, ImageUp, Images, Settings, type LucideIcon } from "lucide-react";
 import { Viewfinder } from "@/components/viewfinder";
 import { cn } from "@/lib/utils";
+import { isActive, useUploads } from "@/upload/useUploads";
 
 interface NavItem {
   to: "/gallery" | "/albums" | "/upload" | "/settings";
@@ -20,6 +21,23 @@ const NAV: readonly NavItem[] = [
 // Prefix matching (the default) keeps Albums current on /albums/$albumId.
 const linkBase =
   "group relative flex items-center rounded-md text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 aria-[current=page]:font-medium aria-[current=page]:text-foreground";
+
+/** Uploads still waiting or running (8.10), on the Upload item. */
+function UploadCount({ className }: { className?: string }) {
+  const count = useUploads().filter(isActive).length;
+  if (count === 0) return null;
+  return (
+    <span
+      aria-label={`${count} uploading`}
+      className={cn(
+        "min-w-4 rounded-full bg-primary px-1 text-center text-[0.625rem] leading-4 font-medium text-primary-foreground tabular-nums",
+        className,
+      )}
+    >
+      {count}
+    </span>
+  );
+}
 
 function ActiveFrame() {
   return <Viewfinder className="opacity-0 group-aria-[current=page]:opacity-100" />;
@@ -42,6 +60,7 @@ export function BottomNav() {
               <ActiveFrame />
               <Icon aria-hidden className="size-5" />
               {label}
+              {to === "/upload" && <UploadCount className="absolute top-0.5 right-2" />}
             </Link>
           </li>
         ))}
@@ -75,6 +94,7 @@ export function SideNav({ email }: { email: string | undefined }) {
                 <ActiveFrame />
                 <Icon aria-hidden className="size-4" />
                 {label}
+                {to === "/upload" && <UploadCount className="ml-auto" />}
               </Link>
             </li>
           ))}

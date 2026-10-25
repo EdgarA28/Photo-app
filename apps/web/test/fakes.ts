@@ -1,8 +1,12 @@
+import type { UploadUrlResponse } from "@photo-app/shared";
 import { vi } from "vitest";
 import { createApi } from "../src/api/api";
 import type { Request, RequestOptions } from "../src/api/client";
 import type { Auth, SessionUser } from "../src/auth/auth";
 import type { AppConfig } from "../src/config";
+import { createUploadQueue, type UploadQueueDeps } from "../src/upload/queue";
+import type { PostToS3 } from "../src/upload/s3Post";
+import type { UploadItem, UploadStore } from "../src/upload/store";
 
 export const testConfig: AppConfig = {
   origin: "http://localhost:5173",
@@ -128,3 +132,74 @@ export function testPhotoPage(from: number, count: number, nextCursor: string | 
 }
 
 export const emptyPage = { items: [], nextCursor: null };
+
+/** The upload queue's store in memory (jsdom's Blob doesn't survive fake-indexeddb). */
+export class MemoryUploadStore implements UploadStore {
+  readonly items = new Map<string, UploadItem>();
+  async list(userId: string) {
+    return [...this.items.values()]
+      .filter((item) => item.userId === userId)
+      .sort((a, b) => a.addedAt - b.addedAt);
+  }
+  async put(item: UploadItem) {
+    this.items.set(item.id, { ...item });
+  }
+  async delete(id: string) {
+    this.items.delete(id);
+  }
+  async clear() {
+    this.items.clear();
+  }
+}
+
+/** An S3 POST the test finishes by hand: `next()` is the oldest unfinished one. */
+export function controlledPost() {
+  const calls: {
+    upload: UploadUrlResponse["upload"];
+    file: Blob;
+    progress: (fraction: number) => void;
+    resolve: () => void;
+    reject: (error: unknown) => void;
+    signal: AbortSignal | undefined;
+  }[] = [];
+  const post = vi.fn<PostToS3>(
+    (upload, file, options = {}) =>
+      new Promise<void>((resolve, reject) => {
+        calls.push({
+          upload,
+          file,
+          progress: (fraction) => options.onProgress?.(fraction),
+          resolve,
+          reject,
+          signal: options.signal,
+        });
+        options.signal?.addEventListener("abort", () =>
+          reject(new DOMException("Upload cancelled", "AbortError")),
+        );
+      }),
+  );
+  return { post, calls };
+}
+
+/** An upload queue on a memory store whose S3 POSTs succeed at once (unless `post` is given). */
+export function testUploadQueue(
+  api: UploadQueueDeps["api"],
+  overrides: Partial<UploadQueueDeps> = {},
+) {
+  const store = new MemoryUploadStore();
+  let n = 0;
+  const queue = createUploadQueue({
+    api,
+    store,
+    post: async () => {},
+    isOnline: () => true,
+    newId: () => `local-${++n}`,
+    ...overrides,
+  });
+  return { queue, store };
+}
+
+/** A File of `size` bytes. */
+export function testFile(name: string, size = 1000, type = "image/jpeg") {
+  return new File([new Uint8Array(size)], name, { type });
+}
