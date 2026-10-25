@@ -4,6 +4,7 @@ import { ApiRequestError } from "./api/errors";
 import { createRouter, type RouterHistory } from "@tanstack/react-router";
 import type { Auth } from "./auth/auth";
 import type { MediaCookies } from "./auth/mediaCookie";
+import { QUERY_GC_TIME_MS, type PersistedQueryCache } from "./queries/persistedCache";
 import type { UploadQueue } from "./upload/queue";
 import { routeTree } from "./routeTree.gen";
 
@@ -15,6 +16,8 @@ export function createQueryClient(): QueryClient {
     defaultOptions: {
       queries: {
         staleTime: STALE_TIME_MS,
+        // Unused data stays in memory, and so in the saved cache, for a day (9.3).
+        gcTime: QUERY_GC_TIME_MS,
         // Retrying a 404 or a validation error can't help; network, 429 and 5xx can.
         retry: (failures, error) =>
           failures < 2 && (!(error instanceof ApiRequestError) || error.retryable),
@@ -29,15 +32,16 @@ export interface AppDeps {
   api: Api;
   media: MediaCookies;
   uploads: UploadQueue;
+  persistedCache: PersistedQueryCache;
 }
 
 export function createAppRouter(
-  { queryClient, auth, api, media, uploads }: AppDeps,
+  { queryClient, auth, api, media, uploads, persistedCache }: AppDeps,
   history?: RouterHistory,
 ) {
   return createRouter({
     routeTree,
-    context: { queryClient, auth, api, media, uploads },
+    context: { queryClient, auth, api, media, uploads, persistedCache },
     ...(history ? { history } : {}),
     defaultPreload: "intent",
     // Loaders read through the Query cache (ensureQueryData), which decides freshness.

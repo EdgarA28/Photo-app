@@ -5,6 +5,7 @@ import type { Request, RequestOptions } from "../src/api/client";
 import type { Auth, SessionUser } from "../src/auth/auth";
 import type { MediaCookies } from "../src/auth/mediaCookie";
 import type { AppConfig } from "../src/config";
+import type { PersistedQueryCache } from "../src/queries/persistedCache";
 import { createUploadQueue, type UploadQueueDeps } from "../src/upload/queue";
 import type { PostToS3 } from "../src/upload/s3Post";
 import type { UploadItem, UploadStore } from "../src/upload/store";
@@ -30,6 +31,7 @@ export function fakeAuth(options: { signedIn?: boolean; callbackTarget?: string 
   let user: SessionUser | null = options.signedIn ? testUser : null;
   const auth = {
     getUser: vi.fn(async () => user),
+    getStoredUser: vi.fn(async () => user && { sub: user.sub, email: undefined, name: undefined }),
     getAccessToken: vi.fn(async () => (user ? "access-token" : null)),
     refreshAccessToken: vi.fn(async () => (user ? "access-token-2" : null)),
     login: vi.fn(async () => {}),
@@ -54,6 +56,14 @@ export function fakeMedia() {
     ensure: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),
   } satisfies MediaCookies;
+}
+
+/** Saved Query cache that saves nothing; tests of the real one use createPersistedQueryCache. */
+export function fakePersistedCache() {
+  return {
+    start: vi.fn(async () => {}),
+    clear: vi.fn(async () => {}),
+  } satisfies PersistedQueryCache;
 }
 
 /** Minimal Web Storage (a separate sessionStorage per simulated tab). */

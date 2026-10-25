@@ -209,6 +209,25 @@ describe("token storage (option A)", () => {
     expect(persistent.length).toBe(1);
   });
 
+  it("knows the stored session's user offline, by sub only (9.3)", async () => {
+    await signIn(openTab());
+    const restarted = openTab();
+    expect(await restarted.getStoredUser()).toEqual({
+      sub: testUser.sub,
+      email: undefined,
+      name: undefined,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1); // only the login: no refresh needed
+  });
+
+  it("has no stored user without a session", async () => {
+    expect(await openTab().getStoredUser()).toBeNull();
+    const auth = openTab();
+    await signIn(auth);
+    await auth.clearSession();
+    expect(await openTab().getStoredUser()).toBeNull();
+  });
+
   it("forces a refresh when the API rejected a still-valid token (8.4)", async () => {
     const auth = openTab();
     await signIn(auth);

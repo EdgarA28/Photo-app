@@ -23,6 +23,11 @@ export type LoginProvider = "Google" | "email";
 export interface Auth {
   /** The signed-in user, refreshing expired tokens first; null if there is no valid session. */
   getUser(): Promise<SessionUser | null>;
+  /**
+   * The user of the stored session without contacting Cognito, for starting offline (9.3): after
+   * a restart only `sub` is known. Null without a session. Grants nothing: the API needs a token.
+   */
+  getStoredUser(): Promise<SessionUser | null>;
   /** Current access token for `Authorization: Bearer` (8.4), refreshed if needed. */
   getAccessToken(): Promise<string | null>;
   /** New access token even if the current one looks valid (the API rejected it); null = session over. */
@@ -119,13 +124,12 @@ export function createAuth(config: AppConfig, deps: AuthDeps = {}): Auth {
   return {
     async getUser() {
       const user = await validUser();
-      if (!user) return null;
-      const { sub, email, name } = user.profile;
-      return {
-        sub,
-        email: typeof email === "string" ? email : undefined,
-        name: typeof name === "string" ? name : undefined,
-      };
+      return user && sessionUser(user);
+    },
+
+    async getStoredUser() {
+      const user = await manager.getUser();
+      return user?.refresh_token && user.profile.sub ? sessionUser(user) : null;
     },
 
     async getAccessToken() {
@@ -180,6 +184,14 @@ export function createAuth(config: AppConfig, deps: AuthDeps = {}): Auth {
 }
 
 /** Sign-in request: Google skips the Cognito page (`identity_provider`); `state` carries the target. */
+function sessionUser({ profile: { sub, email, name } }: User): SessionUser {
+  return {
+    sub,
+    email: typeof email === "string" ? email : undefined,
+    name: typeof name === "string" ? name : undefined,
+  };
+}
+
 export function signinArgs(provider: LoginProvider, redirect: string | undefined) {
   return {
     state: safeRedirect(redirect),

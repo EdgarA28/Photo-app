@@ -5,6 +5,7 @@ import type { MediaCookies } from "../src/auth/mediaCookie";
 import type { AppConfig } from "../src/config";
 import { createAppRouter, createQueryClient } from "../src/router";
 import type { QueryClient } from "@tanstack/react-query";
+import type { PersistedQueryCache } from "../src/queries/persistedCache";
 import { refreshAfterUpload } from "../src/queries/photos";
 import type { UploadQueue } from "../src/upload/queue";
 import {
@@ -12,6 +13,7 @@ import {
   fakeApi,
   fakeAuth,
   fakeMedia,
+  fakePersistedCache,
   testConfig,
   testMe,
   testUploadQueue,
@@ -34,19 +36,25 @@ export async function renderAt(
     api = fakeApi(defaultResponses).api,
     media = fakeMedia() as MediaCookies,
     uploads = undefined as UploadQueue | ((queryClient: QueryClient) => UploadQueue) | undefined,
+    persistedCache = undefined as
+      PersistedQueryCache | ((queryClient: QueryClient) => PersistedQueryCache) | undefined,
   } = {},
 ) {
   const queryClient = createQueryClient();
+  const cache =
+    typeof persistedCache === "function"
+      ? persistedCache(queryClient)
+      : (persistedCache ?? fakePersistedCache());
   const queue =
     typeof uploads === "function"
       ? uploads(queryClient)
       : (uploads ??
         testUploadQueue(api, { onUploaded: () => refreshAfterUpload(queryClient) }).queue);
   const router = createAppRouter(
-    { queryClient, auth, api, media, uploads: queue },
+    { queryClient, auth, api, media, uploads: queue, persistedCache: cache },
     createMemoryHistory({ initialEntries: [url] }),
   );
   render(<App config={config} queryClient={queryClient} router={router} />);
   await router.load();
-  return { router, auth, media };
+  return { router, auth, media, persistedCache: cache };
 }

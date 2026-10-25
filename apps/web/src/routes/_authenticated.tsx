@@ -6,12 +6,20 @@ import { UsernamePrompt } from "@/settings/UsernamePrompt";
 import { useOnline } from "@/upload/useUploads";
 
 // Pathless layout for every signed-in page (§12.1, FR-AUTH-6): without a valid session (after a
-// refresh attempt) go to /login, remembering the page. Pages render only once the media cookies
-// for this token are set (7.3), so the first images don't fail with 403; ensure() never throws.
+// refresh attempt) go to /login, remembering the page. If the refresh can't reach Cognito
+// (offline), the stored session's user is enough to open the app with its saved data (9.3,
+// FR-PWA-2); nothing new loads without a token anyway. Then that user's saved Query cache is
+// restored, before any loader reads the cache. Pages render only once the media cookies for this
+// token are set (7.3), so the first images don't fail with 403; ensure() never throws.
 export const Route = createFileRoute("/_authenticated")({
   beforeLoad: async ({ context, location }) => {
-    const user = await context.auth.getUser();
+    const user = await context.auth.getUser().catch(async (error: unknown) => {
+      const stored = await context.auth.getStoredUser();
+      if (!stored) throw error;
+      return stored;
+    });
     if (!user) throw redirect({ to: "/login", search: { redirect: location.href } });
+    await context.persistedCache.start(user.sub);
     await context.media.ensure();
     return { user };
   },

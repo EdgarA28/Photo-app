@@ -10,6 +10,7 @@ import { errorMessage } from "@/api/errors";
 import type { Auth } from "@/auth/auth";
 import type { MediaCookies } from "@/auth/mediaCookie";
 import { Button } from "@/components/ui/button";
+import type { PersistedQueryCache } from "@/queries/persistedCache";
 import type { UploadQueue } from "@/upload/queue";
 
 export interface RouterContext {
@@ -20,6 +21,8 @@ export interface RouterContext {
   media: MediaCookies;
   /** App-wide, so uploads keep running while the user moves around (8.10). */
   uploads: UploadQueue;
+  /** The Query cache saved to IndexedDB for offline use (9.3). */
+  persistedCache: PersistedQueryCache;
 }
 
 export const Route = createRootRouteWithContext<RouterContext>()({

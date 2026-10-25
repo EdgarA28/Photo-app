@@ -175,6 +175,20 @@ describe("settings: logout (FR-AUTH-5)", () => {
     );
   });
 
+  it("deletes the saved query cache before ending the session (9.3)", async () => {
+    const { api } = setup();
+    const auth = fakeAuth({ signedIn: true });
+    const { persistedCache } = await renderAt("/settings", { api, auth });
+    await screen.findByRole("meter");
+
+    fireEvent.click(screen.getByRole("button", { name: "Log out" }));
+    await waitFor(() => expect(auth.logout).toHaveBeenCalledOnce());
+    expect(persistedCache.clear).toHaveBeenCalledOnce();
+    expect(vi.mocked(persistedCache.clear).mock.invocationCallOrder[0]!).toBeLessThan(
+      auth.logout.mock.invocationCallOrder[0]!,
+    );
+  });
+
   it("deletes the service worker's thumbnail cache before ending the session (9.2)", async () => {
     const { api } = setup();
     const auth = fakeAuth({ signedIn: true });

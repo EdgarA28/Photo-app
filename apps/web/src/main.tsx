@@ -7,6 +7,7 @@ import { App } from "./App";
 import { createAuth } from "./auth/auth";
 import { createMediaCookies } from "./auth/mediaCookie";
 import { loadConfig } from "./config";
+import { createPersistedQueryCache } from "./queries/persistedCache";
 import { refreshAfterUpload } from "./queries/photos";
 import { createAppRouter, createQueryClient } from "./router";
 import { createUploadQueue, UPLOAD_CHANNEL_NAME } from "./upload/queue";
@@ -43,7 +44,8 @@ const uploads = createUploadQueue({
       : () => new BroadcastChannel(UPLOAD_CHANNEL_NAME),
   requestPersistence: () => navigator.storage?.persist?.(),
 });
-const router = createAppRouter({ queryClient, auth, api, media, uploads });
+const persistedCache = createPersistedQueryCache(queryClient);
+const router = createAppRouter({ queryClient, auth, api, media, uploads, persistedCache });
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

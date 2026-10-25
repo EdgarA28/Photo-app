@@ -2,7 +2,10 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 import { ErrorResponse } from "oidc-client-ts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "../src/api/errors";
-import { fakeApi, fakeAuth, testConfig, testUser } from "./fakes";
+import type { QueryClient } from "@tanstack/react-query";
+import { IDBFactory } from "fake-indexeddb";
+import { createIdbKeyValue, createPersistedQueryCache } from "../src/queries/persistedCache";
+import { fakeApi, fakeAuth, testConfig, testPhotoPage, testUser } from "./fakes";
 import { defaultResponses, renderAt } from "./render";
 
 afterEach(cleanup);
@@ -120,6 +123,46 @@ describe("authentication guard (FR-AUTH-6)", () => {
     const { router, auth } = await renderAt("/gallery");
     expect(router.state.location.pathname).toBe("/gallery");
     expect(auth.getUser).toHaveBeenCalled();
+  });
+
+  it("restores the user's saved cache before the page loads (9.3)", async () => {
+    const { persistedCache } = await renderAt("/gallery");
+    expect(persistedCache.start).toHaveBeenCalledWith(testUser.sub);
+  });
+});
+
+describe("offline start (9.3, FR-PWA-2)", () => {
+  const offline = () => new TypeError("Failed to fetch");
+
+  it("opens the gallery with the last saved photos when Cognito can't be reached", async () => {
+    const storage = createIdbKeyValue(new IDBFactory());
+    const persisted = (queryClient: QueryClient) =>
+      createPersistedQueryCache(queryClient, { storage, throttleTime: 0 });
+    // Online: the gallery loads and is saved.
+    await renderAt("/gallery", {
+      api: fakeApi({ ...defaultResponses, "GET /photos": testPhotoPage(0, 2) }).api,
+      persistedCache: persisted,
+    });
+    await screen.findByRole("link", { name: "IMG_1.jpg" });
+    await vi.waitFor(async () => expect(await storage.getItem("query-client")).toBeTruthy());
+    cleanup();
+
+    // Restart offline: the token refresh fails, and so would every API call.
+    const auth = fakeAuth({ signedIn: true });
+    auth.getUser.mockRejectedValue(offline());
+    const { api, request } = fakeApi({});
+    const { router } = await renderAt("/gallery", { auth, api, persistedCache: persisted });
+    expect(router.state.location.pathname).toBe("/gallery");
+    expect(await screen.findByRole("link", { name: "IMG_1.jpg" })).toBeTruthy();
+    expect(request.mock.calls.filter(([, path]) => path === "/photos")).toEqual([]);
+  });
+
+  it("shows the error page when offline without a stored session", async () => {
+    const auth = fakeAuth();
+    auth.getUser.mockRejectedValue(offline());
+    const { router } = await renderAt("/gallery", { auth });
+    expect(router.state.location.pathname).toBe("/gallery");
+    expect(await screen.findByRole("heading", { name: "Something went wrong" })).toBeTruthy();
   });
 });
 

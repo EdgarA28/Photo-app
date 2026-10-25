@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { THUMBNAIL_CACHE } from "@/pwa/thumbnailCache";
+import type { PersistedQueryCache } from "@/queries/persistedCache";
 import type { UploadQueue } from "@/upload/queue";
 import type { Auth } from "./auth";
 import type { MediaCookies } from "./mediaCookie";
@@ -9,22 +10,35 @@ export interface LogoutDeps {
   queryClient: QueryClient;
   uploads: Pick<UploadQueue, "stop" | "clear">;
   media: Pick<MediaCookies, "clear">;
+  persistedCache: Pick<PersistedQueryCache, "clear">;
 }
 
 /**
  * Logs out and leaves nothing private on the device (FR-AUTH-5, §5.2 Logout): the upload queue
- * (files in IndexedDB, every account's), the Query cache, the service worker's thumbnail cache,
- * the media cookies, then the tokens and
- * the Cognito session (`auth.logout` ends with a full-page redirect). The session always ends, even if clearing local
+ * (files in IndexedDB, every account's), the Query cache (in memory and saved, 9.3), the service
+ * worker's thumbnail cache (9.2), the media cookies, then the tokens and the Cognito session
+ * (`auth.logout` ends with a full-page redirect). The session always ends, even if clearing local
  * data fails (e.g. IndexedDB blocked or evicted): staying signed in would be the worse outcome.
  */
-export async function logout({ auth, queryClient, uploads, media }: LogoutDeps): Promise<void> {
+export async function logout({
+  auth,
+  queryClient,
+  uploads,
+  media,
+  persistedCache,
+}: LogoutDeps): Promise<void> {
   try {
     uploads.stop();
     await uploads.clear();
   } catch (error) {
     console.warn("Clearing the upload queue failed", error);
   } finally {
+    // Stop saving first, so clearing the memory cache isn't written back.
+    try {
+      await persistedCache.clear();
+    } catch (error) {
+      console.warn("Deleting the saved query cache failed", error);
+    }
     queryClient.clear();
     // Thumbnails the service worker kept (9.2): the next account on this device mustn't see them.
     try {
