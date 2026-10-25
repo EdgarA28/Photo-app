@@ -18,7 +18,14 @@ export const Route = createFileRoute("/_authenticated")({
       if (!stored) throw error;
       return stored;
     });
-    if (!user) throw redirect({ to: "/login", search: { redirect: location.href } });
+    if (!user) {
+      // The session ended without a logout (refresh token rejected, API rejected the token):
+      // the saved data goes too (FR-AUTH-5). Without a session there is nothing to delete.
+      await context.persistedCache
+        .clear()
+        .catch((error: unknown) => console.warn("Deleting the saved query cache failed", error));
+      throw redirect({ to: "/login", search: { redirect: location.href } });
+    }
     await context.persistedCache.start(user.sub);
     await context.media.ensure();
     return { user };

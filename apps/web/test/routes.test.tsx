@@ -125,6 +125,12 @@ describe("authentication guard (FR-AUTH-6)", () => {
     expect(auth.getUser).toHaveBeenCalled();
   });
 
+  it("deletes the saved cache when the session has ended without a logout (9.3)", async () => {
+    const { persistedCache } = await renderAt("/gallery", { auth: fakeAuth() });
+    expect(persistedCache.clear).toHaveBeenCalled();
+    expect(persistedCache.start).not.toHaveBeenCalled();
+  });
+
   it("restores the user's saved cache before the page loads (9.3)", async () => {
     const { persistedCache } = await renderAt("/gallery");
     expect(persistedCache.start).toHaveBeenCalledWith(testUser.sub);

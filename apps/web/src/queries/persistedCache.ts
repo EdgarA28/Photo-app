@@ -33,7 +33,12 @@ export interface PersistedQueryCache {
    * user's or an expired saved cache is discarded instead. Once per session; never throws.
    */
   start(userId: string): Promise<void>;
-  /** Stops saving and deletes the saved cache (logout, FR-AUTH-5). */
+  /**
+   * Stops saving and deletes the saved cache when the session ends (logout, FR-AUTH-5, or a
+   * rejected session). Final for this page: `start()` does nothing afterwards, so a navigation
+   * during logout can't resume saving. Logout and login both end with a full-page navigation, so
+   * the next session gets a fresh page.
+   */
   clear(): Promise<void>;
 }
 
@@ -97,10 +102,12 @@ export function createPersistedQueryCache(
     },
   });
   let started: { userId: string; done: Promise<void> } | null = null;
+  let closed = false;
   let unsubscribe: (() => void) | null = null;
 
   return {
     start(userId) {
+      if (closed) return Promise.resolve();
       if (started?.userId === userId) return started.done;
       unsubscribe?.();
       // The saved cache is tagged with its user: restoring it for anyone else discards it.
@@ -125,6 +132,7 @@ export function createPersistedQueryCache(
     },
 
     async clear() {
+      closed = true;
       saving = false;
       unsubscribe?.();
       unsubscribe = null;

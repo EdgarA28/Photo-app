@@ -116,6 +116,20 @@ describe("persisted Query cache (9.3, FR-PWA-2)", () => {
     expect(await storage.getItem(KEY)).toBeNull();
   });
 
+  it("stays cleared: a start during logout neither restores nor saves", async () => {
+    const { storage } = device();
+    const queryClient = createQueryClient();
+    const cache = createPersistedQueryCache(queryClient, { storage, throttleTime: 0 });
+    await cache.start(testUser.sub);
+    await cache.clear();
+
+    // E.g. the guard runs again while auth.logout is still revoking the token.
+    await cache.start(testUser.sub);
+    queryClient.setQueryData(["albums"], { items: [] });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(await storage.getItem(KEY)).toBeNull();
+  });
+
   it("works without saving when IndexedDB can't be read", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
