@@ -78,7 +78,7 @@ describe("settings: username (FR-ACC-3)", () => {
   });
 
   it("explains invalid and reserved names live, without sending them", async () => {
-    const { api, request } = setup();
+    const { api, request } = setup({ "GET /me": meWith({ username: null }) });
     await renderAt("/settings", { api });
     const field = await openEditor("Choose a username");
     const save = screen.getByRole("button", { name: "Save" });
@@ -98,6 +98,7 @@ describe("settings: username (FR-ACC-3)", () => {
 
   it("says when the name is taken and keeps the field open", async () => {
     const { api } = setup({
+      "GET /me": meWith({ username: null }),
       "PUT /me/username": new ApiRequestError("USERNAME_TAKEN", "taken", 409),
     });
     await renderAt("/settings", { api });

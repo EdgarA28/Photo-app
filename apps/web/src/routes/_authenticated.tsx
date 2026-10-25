@@ -2,6 +2,7 @@ import { createFileRoute, Outlet, redirect, useMatches } from "@tanstack/react-r
 import { WifiOff } from "lucide-react";
 import { useEffect } from "react";
 import { BottomNav, SideNav } from "@/components/app-nav";
+import { UsernamePrompt } from "@/settings/UsernamePrompt";
 import { useOnline } from "@/upload/useUploads";
 
 // Pathless layout for every signed-in page (§12.1, FR-AUTH-6): without a valid session (after a
@@ -37,6 +38,7 @@ function AuthenticatedLayout() {
         <OfflineBanner />
         <Outlet />
       </div>
+      <UsernamePrompt key={user.sub} userId={user.sub} />
       <BottomNav />
     </div>
   );
