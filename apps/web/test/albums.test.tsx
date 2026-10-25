@@ -229,12 +229,17 @@ describe("album view (FR-ALB-1/2)", () => {
     expect(screen.getByRole("link", { name: "IMG_0.jpg" })).toBeTruthy();
   });
 
-  it("says when the album doesn't exist", async () => {
+  it("says when the album doesn't exist (or is no longer shared with me)", async () => {
     const { api } = setup({
-      [`GET /albums/${testId(999)}/photos`]: { items: [], nextCursor: null },
+      [`GET /albums/${testId(999)}/photos`]: new ApiRequestError(
+        "NOT_FOUND",
+        "Album not found",
+        404,
+      ),
     });
     await renderAt(`/albums/${testId(999)}`, { api });
     expect(await screen.findByRole("heading", { name: "Album not found" })).toBeTruthy();
+    expect(screen.getByText(/no longer shared with you/)).toBeTruthy();
     expect(screen.getByRole("link", { name: "Back to albums" })).toBeTruthy();
   });
 });

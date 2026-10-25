@@ -1,5 +1,6 @@
 import type { Photo } from "@photo-app/shared";
 import {
+  useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
@@ -40,6 +41,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { AddToAlbumDialog } from "@/albums/AddToAlbumDialog";
+import { sharedBy } from "@/albums/sharedBy";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -51,6 +53,7 @@ import { gallerySearchSchema } from "@/gallery/search";
 import { startDownload } from "@/lib/download";
 import { albumsQuery, useRemoveFromAlbum, useUpdateAlbum } from "@/queries/albums";
 import { galleryQuery, photoQuery, removePhotoFromCache } from "@/queries/photos";
+import { sharedAlbumsQuery } from "@/queries/shares";
 
 /** Horizontal travel that counts as a swipe; it must also be mostly sideways. */
 const SWIPE_MIN_PX = 50;
@@ -163,6 +166,7 @@ function Viewer() {
           {photo.status === "ready" && (
             <p className="text-xs text-white/60">{dateFormat.format(new Date(photo.takenAt))}</p>
           )}
+          {album && <SharedByLine album={album} />}
         </div>
         <PhotoActions
           key={photo.photoId}
@@ -188,6 +192,20 @@ function Viewer() {
 }
 
 const iconButton = "text-white hover:bg-white/10 hover:text-white";
+
+/** "Shared by @name" for a photo seen through an album shared with me (FR-SHR-3). */
+function SharedByLine({ album }: { album: string }) {
+  const { api } = Route.useRouteContext();
+  const { data: albums } = useQuery(albumsQuery(api));
+  const own = !albums || albums.items.some((a) => a.albumId === album);
+  // Usually cached from the albums page; only the loaded pages are searched.
+  const { data } = useInfiniteQuery({ ...sharedAlbumsQuery(api), enabled: !own });
+  const shared = own
+    ? undefined
+    : data?.pages.flatMap((page) => page.items).find((a) => a.albumId === album);
+  if (!shared) return null;
+  return <p className="truncate text-xs text-white/60">{sharedBy(shared)}</p>;
+}
 
 /**
  * Download (FR-DL-1/2) and delete (FR-DEL-1/2). Delete is offered for own photos only: in an album

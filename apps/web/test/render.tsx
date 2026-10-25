@@ -13,6 +13,7 @@ export const defaultResponses = {
   "GET /me": testMe,
   "GET /photos": emptyPage,
   "GET /albums": { items: [] },
+  "GET /shared-albums": emptyPage,
 };
 
 /** Renders the whole app at `url` with a memory history and waits for the first load. */

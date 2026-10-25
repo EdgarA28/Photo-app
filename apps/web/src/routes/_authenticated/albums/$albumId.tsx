@@ -1,5 +1,9 @@
 import type { Album } from "@photo-app/shared";
-import { useSuspenseInfiniteQuery, useSuspenseQuery } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useSuspenseInfiniteQuery,
+  useSuspenseQuery,
+} from "@tanstack/react-query";
 import {
   createFileRoute,
   Link,
@@ -7,10 +11,12 @@ import {
   useRouter,
   type ErrorComponentProps,
 } from "@tanstack/react-router";
-import { ChevronLeft, Ellipsis, ImagePlus, Pencil, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { ChevronLeft, Ellipsis, ImagePlus, Pencil, Share2, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { DeleteAlbumDialog, RenameAlbumDialog } from "@/albums/AlbumDialogs";
-import { errorMessage } from "@/api/errors";
+import { ShareDialog } from "@/albums/ShareDialog";
+import { sharedBy } from "@/albums/sharedBy";
+import { ApiRequestError, errorMessage } from "@/api/errors";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -24,11 +30,13 @@ import { SelectionBar } from "@/gallery/SelectionBar";
 import { useSelection } from "@/gallery/useSelection";
 import { albumsQuery, useRemoveFromAlbum, useUpdateAlbum } from "@/queries/albums";
 import { galleryQuery } from "@/queries/photos";
+import { sharedAlbumsQuery } from "@/queries/shares";
 
 // Album photos are listed in upload order (§9), so sort doesn't apply.
 const listOf = (albumId: string): GallerySearch => ({ album: albumId, sort: "taken-desc" });
 
-// Album view (FR-ALB-1/2, 8.11): the album's photos, add/remove, rename, cover, delete.
+// Album view (FR-ALB-1/2, 8.11): the album's photos, add/remove, rename, cover, delete, share
+// (FR-SHR-1/2, 8.12). Albums shared with me open read-only (FR-SHR-4).
 export const Route = createFileRoute("/_authenticated/albums/$albumId")({
   loader: ({ context: { queryClient, api }, params: { albumId } }) =>
     Promise.all([
@@ -44,8 +52,9 @@ function AlbumPage() {
   const { albumId } = Route.useParams();
   const { data: albums } = useSuspenseQuery(albumsQuery(api));
   const album = albums.items.find((a) => a.albumId === albumId);
-  // Albums shared with me get their own view in 8.12; until then only my own open here.
-  if (!album) return <NotFound />;
+  // Not mine, yet the loader could list its photos: shared with me (an unknown or revoked album
+  // is a 404 there, AlbumError). The API decides access; this only picks the read-only view.
+  if (!album) return <SharedAlbumView key={albumId} albumId={albumId} />;
   return <AlbumView key={albumId} album={album} />;
 }
 
@@ -60,7 +69,7 @@ function AlbumView({ album }: { album: Album }) {
   const selection = useSelection();
   const remove = useRemoveFromAlbum(album.albumId);
   const cover = useUpdateAlbum(album.albumId);
-  const [dialog, setDialog] = useState<"rename" | "delete" | null>(null);
+  const [dialog, setDialog] = useState<"rename" | "delete" | "share" | null>(null);
   const [status, setStatus] = useState<string | null>(null);
 
   const removeSelected = () =>
@@ -123,6 +132,10 @@ function AlbumView({ album }: { album: Album }) {
                   <ImagePlus aria-hidden />
                   Add photos
                 </Link>
+              </Button>
+              <Button variant="outline" onClick={() => setDialog("share")}>
+                <Share2 aria-hidden />
+                Share
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -201,6 +214,11 @@ function AlbumView({ album }: { album: Album }) {
         </SelectionBar>
       )}
 
+      <ShareDialog
+        album={album}
+        open={dialog === "share"}
+        onOpenChange={(open) => setDialog(open ? "share" : null)}
+      />
       <RenameAlbumDialog
         album={album}
         open={dialog === "rename"}
@@ -216,25 +234,79 @@ function AlbumView({ album }: { album: Album }) {
   );
 }
 
-function NotFound() {
+/**
+ * An album someone shared with me (FR-SHR-3/4): view and download only. Its name and owner come
+ * from `GET /shared-albums` (there is no single-album route), paged through until it turns up.
+ */
+function SharedAlbumView({ albumId }: { albumId: string }) {
+  const { api } = Route.useRouteContext();
+  const search = listOf(albumId);
+  const { data: photoPages, ...photos } = useSuspenseInfiniteQuery(galleryQuery(api, search));
+  const shared = useInfiniteQuery(sharedAlbumsQuery(api));
+  const album = shared.data?.pages.flatMap((page) => page.items).find((a) => a.albumId === albumId);
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = shared;
+  useEffect(() => {
+    if (!album && hasNextPage && !isFetchingNextPage) void fetchNextPage();
+  }, [album, hasNextPage, isFetchingNextPage, fetchNextPage]);
+  const searching = !album && (shared.isPending || hasNextPage);
+  const items = useMemo(() => photoPages.pages.flatMap((page) => page.items), [photoPages]);
+
   return (
-    <main className="space-y-3">
-      <h1 className="text-2xl font-semibold tracking-tight">Album not found</h1>
-      <p className="text-muted-foreground">This album doesn't exist or was deleted.</p>
-      <Button asChild variant="outline">
-        <Link to="/albums">Back to albums</Link>
-      </Button>
+    <main className="space-y-5">
+      <header className="space-y-3">
+        <Link
+          to="/albums"
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <ChevronLeft aria-hidden className="size-4" />
+          Albums
+        </Link>
+        <div>
+          <h1 className="truncate text-2xl font-semibold tracking-tight">
+            {album?.name ?? (searching ? "\u00a0" : "Shared album")}
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            {album ? sharedBy(album) : "Shared with you"} · view only
+          </p>
+        </div>
+      </header>
+      {items.length === 0 ? (
+        <p className="py-24 text-center text-muted-foreground">This album has no photos yet.</p>
+      ) : (
+        <PhotoGrid
+          photos={items}
+          hasNextPage={photos.hasNextPage && !photos.isFetchNextPageError}
+          isFetchingNextPage={photos.isFetchingNextPage}
+          fetchNextPage={photos.fetchNextPage}
+          viewerSearch={search}
+        />
+      )}
+      {photos.isFetchNextPageError && (
+        <div role="alert" className="flex items-center justify-center gap-3 py-4 text-sm">
+          <span className="text-muted-foreground">More photos couldn't be loaded.</span>
+          <Button variant="outline" size="sm" onClick={() => void photos.fetchNextPage()}>
+            Try again
+          </Button>
+        </div>
+      )}
     </main>
   );
 }
 
-// e.g. a deleted album (404 from its photo list), or no network.
+// 404 from the album's photo list: unknown, deleted, or no longer shared with me. Or no network.
 function AlbumError({ error }: ErrorComponentProps) {
   const router = useRouter();
+  const notFound = error instanceof ApiRequestError && error.status === 404;
   return (
     <main className="space-y-3">
-      <h1 className="text-2xl font-semibold tracking-tight">Album</h1>
-      <p className="text-muted-foreground">{errorMessage(error)}</p>
+      <h1 className="text-2xl font-semibold tracking-tight">
+        {notFound ? "Album not found" : "Album"}
+      </h1>
+      <p className="text-muted-foreground">
+        {notFound
+          ? "This album doesn't exist, was deleted, or is no longer shared with you."
+          : errorMessage(error)}
+      </p>
       <div className="flex gap-2">
         <Button asChild variant="outline">
           <Link to="/albums">Back to albums</Link>

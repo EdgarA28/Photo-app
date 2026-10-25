@@ -1,5 +1,5 @@
 import type { Album } from "@photo-app/shared";
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useSuspenseQuery } from "@tanstack/react-query";
 import {
   createFileRoute,
   Link,
@@ -10,11 +10,13 @@ import {
 import { BookImage, Plus } from "lucide-react";
 import { useState } from "react";
 import { CreateAlbumDialog } from "@/albums/AlbumDialogs";
+import { sharedBy } from "@/albums/sharedBy";
 import { errorMessage } from "@/api/errors";
 import { Button } from "@/components/ui/button";
 import { albumsQuery } from "@/queries/albums";
+import { sharedAlbumsQuery } from "@/queries/shares";
 
-// My albums (FR-ALB-1, 8.11); "Shared with me" comes with 8.12 (FR-SHR-3).
+// My albums (FR-ALB-1, 8.11) and albums shared with me (FR-SHR-3, 8.12).
 export const Route = createFileRoute("/_authenticated/albums/")({
   loader: ({ context }) =>
     context.queryClient.query({ ...albumsQuery(context.api), staleTime: "static" }),
@@ -41,7 +43,7 @@ function Albums() {
       </header>
 
       {albums.length === 0 ? (
-        <div className="flex flex-col items-center gap-3 py-24 text-center">
+        <div className="flex flex-col items-center gap-3 py-16 text-center">
           <BookImage aria-hidden className="size-8 text-muted-foreground" />
           <p className="text-muted-foreground">No albums yet.</p>
           <Button variant="outline" onClick={() => setCreating(true)}>
@@ -58,6 +60,8 @@ function Albums() {
         </ul>
       )}
 
+      <SharedWithMe />
+
       {/* Straight into the new album, ready to add photos. */}
       <CreateAlbumDialog
         open={creating}
@@ -70,7 +74,50 @@ function Albums() {
   );
 }
 
-function AlbumCard({ album }: { album: Album }) {
+/** Albums others shared with me (FR-SHR-3): hidden while there are none. */
+function SharedWithMe() {
+  const { api } = Route.useRouteContext();
+  // Not in the loader: my own albums shouldn't wait for (or fail with) this list.
+  const { data, isError, error, refetch, hasNextPage, isFetchingNextPage, fetchNextPage } =
+    useInfiniteQuery(sharedAlbumsQuery(api));
+  const albums = data?.pages.flatMap((page) => page.items) ?? [];
+  if (!isError && albums.length === 0) return null;
+
+  return (
+    <section aria-labelledby="shared-with-me" className="space-y-4 border-t pt-6">
+      <h2 id="shared-with-me" className="text-lg font-semibold tracking-tight">
+        Shared with me
+      </h2>
+      {isError && albums.length === 0 ? (
+        <div role="alert" className="flex items-center gap-3 text-sm">
+          <span className="text-muted-foreground">{errorMessage(error)}</span>
+          <Button variant="outline" size="sm" onClick={() => void refetch()}>
+            Try again
+          </Button>
+        </div>
+      ) : (
+        <ul className="grid grid-cols-2 gap-x-3 gap-y-5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+          {albums.map((album) => (
+            <li key={`${album.ownerId}/${album.albumId}`}>
+              <AlbumCard album={album} subtitle={sharedBy(album)} />
+            </li>
+          ))}
+        </ul>
+      )}
+      {hasNextPage && (
+        <Button
+          variant="outline"
+          disabled={isFetchingNextPage}
+          onClick={() => void fetchNextPage()}
+        >
+          {isFetchingNextPage ? "Loading…" : "Show more"}
+        </Button>
+      )}
+    </section>
+  );
+}
+
+function AlbumCard({ album, subtitle }: { album: Album; subtitle?: string }) {
   // Until Phase 7 the cover's thumbnail path doesn't load: keep the placeholder.
   const [broken, setBroken] = useState(false);
   return (
@@ -97,6 +144,7 @@ function AlbumCard({ album }: { album: Album }) {
         <p className="text-xs text-muted-foreground tabular-nums">
           {album.photoCount === 1 ? "1 photo" : `${album.photoCount} photos`}
         </p>
+        {subtitle && <p className="truncate text-xs text-muted-foreground">{subtitle}</p>}
       </div>
     </Link>
   );
