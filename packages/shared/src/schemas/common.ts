@@ -6,10 +6,15 @@ import {
   USERNAME_MAX_LENGTH,
   USERNAME_MIN_LENGTH,
 } from "../constants";
-import { ULID_REGEX } from "../ids";
+import { ULID_REGEX, USER_ID_REGEX } from "../ids";
 
 export const idSchema = z.string().regex(ULID_REGEX, "Invalid ID");
-export const userIdSchema = z.uuid();
+/**
+ * Cognito `sub`. Not `z.uuid()`: that requires the RFC 4122 variant (8, 9, a or b at the start of
+ * the 4th group), and Cognito subs don't always have it (e.g. `…-707e-e65a-…`), which made `GET /me`
+ * unreadable for such users. Same rule as the API's `requireUser` (`USER_ID_REGEX`).
+ */
+export const userIdSchema = z.string().regex(USER_ID_REGEX, "Invalid user ID");
 export const isoDateTimeSchema = z.iso.datetime();
 
 const USERNAME_REGEX = new RegExp(

@@ -23,8 +23,7 @@ function errorCode(body: unknown) {
 }
 
 /** A registered user with a unique email. */
-function register(name = "User") {
-  const userId = newUserId();
+function register(name = "User", userId: string = newUserId()) {
   const email = `${name.toLowerCase()}-${userId.slice(0, 8)}@example.com`;
   profiles.set(userId, { email, name });
   return { userId, email };
@@ -220,6 +219,20 @@ describe("DELETE /albums/{albumId}/shares/{userId} (FR-SHR-2)", () => {
     const path = `/albums/${a.albumId}/shares/${friend.userId}`;
     expect((await api(friend.userId, "DELETE", path)).status).toBe(404);
     expect(await repos.shares.get(a.albumId, friend.userId)).not.toBeNull();
+  });
+
+  // Cognito subs aren't always RFC 4122 UUIDs (variant `e` here, a real dev user); z.uuid() made
+  // this route answer 400 for them.
+  test("revokes a share with a user whose sub isn't an RFC 4122 UUID", async () => {
+    const owner = register();
+    const friend = register("Friend", `${newUserId().slice(0, 19)}e65a-20ae6c5231fc`);
+    const a = await album(owner.userId);
+    await api(owner.userId, "POST", `/albums/${a.albumId}/shares`, { email: friend.email });
+    const list = await api(owner.userId, "GET", `/albums/${a.albumId}/shares`);
+    expect(albumShareListSchema.parse(list.body).items[0]!.userId).toBe(friend.userId);
+
+    const path = `/albums/${a.albumId}/shares/${friend.userId}`;
+    expect((await api(owner.userId, "DELETE", path)).status).toBe(204);
   });
 
   test("invalid user ID → 400", async () => {

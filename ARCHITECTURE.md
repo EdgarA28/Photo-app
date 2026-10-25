@@ -420,7 +420,7 @@ All request/response bodies of §9 as Zod schemas with inferred TS types.
 | Schema | Shape |
 |---|---|
 | `idSchema` | string matching `ULID_REGEX` |
-| `userIdSchema` | UUID |
+| `userIdSchema` | Cognito `sub`: lowercase UUID by `USER_ID_REGEX` (same rule as `requireUser`). Not `z.uuid()`: Cognito subs don't always carry the RFC 4122 variant (a dev user has `…-707e-e65a-…`), which made `GET /me` unreadable in the web app and the revoke route answer 400 for such users (fixed 2026-10-25) |
 | `isoDateTimeSchema` | ISO-8601 date-time |
 | `cursorSchema` | opaque string, 1–2048 chars (encoded DynamoDB `LastEvaluatedKey`) |
 | `pageQuerySchema` | `{ cursor?, limit = 60 (coerced, 1–200) }` |
@@ -1012,6 +1012,7 @@ Target design: spec §12 (TanStack Router file routes with an authenticated layo
 | 2026-10-23 | `login_url` output (module + envs): `tofu output login_url` prints the hosted sign-in page. |
 | 2026-10-23 | 4.4: optional Google IdP in the `auth` module (mapping incl. `email_verified`, secret as sensitive variable); env variables + dev client ID; applied to dev. |
 | 2026-10-23 | 4.5: `services/auth-triggers` pre sign-up Lambda (linking, duplicate-email refusal) + tests; §10.1 trigger table, libraries, repo tree, deviation (§15). |
+| 2026-10-25 | Fix: `userIdSchema` = `USER_ID_REGEX` instead of `z.uuid()` (Cognito subs without RFC 4122 variant bits broke `GET /me` in the web app and share revocation in the API). API redeployed to dev (1 in-place change), re-plan clean (§7.4). |
 | 2026-10-25 | 8.11: albums — `/albums` list + create, `/albums/$albumId` view (rename, delete, select mode: remove, set cover), gallery select mode + `AddToAlbumDialog`, `?addTo=` picker, viewer album actions; album mutation hooks; `PhotoGrid` select mode + `viewerSearch`; shadcn dialog, dropdown-menu, input, label (§1, §5, §14.1). |
 | 2026-10-24 | 8.10: upload queue (`src/upload/`: IndexedDB store, worker with 3 parallel uploads, backoff, re-sign with `photoId`, 404/409 handling, Web Lock + BroadcastChannel, per-user scoping), `/upload` page, gallery upload tiles, nav badge; `uploads` in the router context; `refreshAfterUpload`; fake-indexeddb for tests (§1, §3.3, §5, §10.2, §14.1). |
 | 2026-10-24 | 8.9: viewer download (pre-signed `attachment` URL via `startDownload`) and delete (AlertDialog confirmation, own photos only, cache removal + invalidation); shadcn AlertDialog; error screen when a loaded photo vanishes. |

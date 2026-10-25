@@ -6,6 +6,8 @@ import {
   createAlbumRequestSchema,
   createShareRequestSchema,
   downloadUrlQuerySchema,
+  meResponseSchema,
+  userIdSchema,
   setUsernameRequestSchema,
   usernameSchema,
   listPhotosQuerySchema,
@@ -163,6 +165,32 @@ describe("usernameSchema (FR-ACC-3)", () => {
   test("set-username request", () => {
     expect(setUsernameRequestSchema.parse({ username: "Ana" })).toEqual({ username: "ana" });
     expect(setUsernameRequestSchema.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("userIdSchema (Cognito sub)", () => {
+  test("accepts subs without the RFC 4122 variant bits", () => {
+    // A real dev user's sub: `e` starts the 4th group, which z.uuid() rejects.
+    const sub = "54589468-8071-707e-e65a-20ae6c5231fc";
+    expect(userIdSchema.parse(sub)).toBe(sub);
+    const me = {
+      userId: sub,
+      email: "user@example.com",
+      name: null,
+      username: null,
+      usage: { bytesUsed: 0, photoCount: 0, quotaBytes: 1 },
+    };
+    expect(meResponseSchema.parse(me)).toEqual(me);
+  });
+
+  test("rejects anything that isn't a lowercase UUID", () => {
+    for (const bad of [
+      "54589468-8071-707E-E65A-20AE6C5231FC",
+      "54589468807170 7ee65a20ae6c5231fc",
+      "x",
+    ]) {
+      expect(userIdSchema.safeParse(bad).success).toBe(false);
+    }
   });
 });
 

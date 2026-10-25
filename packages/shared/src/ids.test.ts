@@ -28,6 +28,8 @@ describe("validators", () => {
 
   test("isUserId", () => {
     expect(isUserId("3f1c2b4a-9d8e-4f7a-b6c5-1a2b3c4d5e6f")).toBe(true);
+    // A real Cognito sub without the RFC 4122 variant bits.
+    expect(isUserId("54589468-8071-707e-e65a-20ae6c5231fc")).toBe(true);
     expect(isUserId("3F1C2B4A-9D8E-4F7A-B6C5-1A2B3C4D5E6F")).toBe(false);
     expect(isUserId("3f1c2b4a9d8e4f7ab6c51a2b3c4d5e6f")).toBe(false);
   });
