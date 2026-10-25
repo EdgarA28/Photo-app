@@ -33,10 +33,11 @@ export default defineConfig(({ mode }) => {
       tanstackRouter({ target: "react", autoCodeSplitting: true }),
       react(),
       tailwindcss(),
-      // Installable app (9.1, FR-PWA-1, §12.5). The service worker is built but not registered
-      // (`injectRegister: false`) until the update prompt (`registerType: 'prompt'`, 9.4) exists:
-      // a precached shell without a way to update would keep old versions alive.
+      // Installable app (9.1, FR-PWA-1, §12.5). The service worker is registered by
+      // src/pwa/UpdatePrompt.tsx (`useRegisterSW`), not by an injected script; a new version
+      // waits for the user's "Reload" (9.4, FR-PWA-3).
       VitePWA({
+        registerType: "prompt",
         injectRegister: false,
         // Service worker caching (9.2, NFR-PERF-4).
         workbox: {
