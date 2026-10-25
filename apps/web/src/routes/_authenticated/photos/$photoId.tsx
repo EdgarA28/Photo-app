@@ -10,7 +10,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  Ellipsis,
+  FolderMinus,
+  FolderPlus,
   ImageOff,
+  ImageUp,
   LoaderCircle,
   Trash2,
   X,
@@ -35,10 +39,17 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { AddToAlbumDialog } from "@/albums/AddToAlbumDialog";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { gallerySearchSchema } from "@/gallery/search";
 import { startDownload } from "@/lib/download";
-import { albumsQuery } from "@/queries/albums";
+import { albumsQuery, useRemoveFromAlbum, useUpdateAlbum } from "@/queries/albums";
 import { galleryQuery, photoQuery, removePhotoFromCache } from "@/queries/photos";
 
 /** Horizontal travel that counts as a swipe; it must also be mostly sideways. */
@@ -104,12 +115,14 @@ function Viewer() {
     [navigate],
   );
 
-  // The delete dialog handles its own keys (Escape closes only the dialog).
+  // The delete dialog handles its own keys (Escape closes only the dialog); so do the album
+  // menu and dialog (`overlay`).
   const [confirming, setConfirming] = useState(false);
+  const [overlay, setOverlay] = useState(false);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (confirming || event.defaultPrevented) return;
+      if (confirming || overlay || event.defaultPrevented) return;
       if (event.altKey || event.ctrlKey || event.metaKey) return;
       if (event.key === "ArrowLeft") void show(prev);
       else if (event.key === "ArrowRight") void show(next);
@@ -119,7 +132,7 @@ function Viewer() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [confirming, show, close, prev, next]);
+  }, [confirming, overlay, show, close, prev, next]);
 
   usePreload(prev?.previewUrl, next?.previewUrl);
   const swipe = useSwipe({ onLeft: () => void show(next), onRight: () => void show(prev) });
@@ -157,6 +170,7 @@ function Viewer() {
           album={album}
           confirming={confirming}
           setConfirming={setConfirming}
+          setOverlay={setOverlay}
           onDeleted={afterDelete}
         />
       </header>
@@ -184,12 +198,14 @@ function PhotoActions({
   album,
   confirming,
   setConfirming,
+  setOverlay,
   onDeleted,
 }: {
   photo: Photo;
   album: string | undefined;
   confirming: boolean;
   setConfirming: (open: boolean) => void;
+  setOverlay: (open: boolean) => void;
   onDeleted: () => Promise<void>;
 }) {
   const { api } = Route.useRouteContext();
@@ -243,6 +259,9 @@ function PhotoActions({
         )}
       </Button>
       {own && (
+        <AlbumActions photo={photo} album={album} setOverlay={setOverlay} onRemoved={onDeleted} />
+      )}
+      {own && (
         <AlertDialog
           open={confirming}
           onOpenChange={(open) => {
@@ -289,6 +308,86 @@ function PhotoActions({
           </AlertDialogContent>
         </AlertDialog>
       )}
+    </>
+  );
+}
+
+/**
+ * Album actions for own photos (FR-ALB-2): add to an album; inside an album, make it the cover or
+ * take it out (the photo stays in the library, the viewer moves on as after a delete).
+ */
+function AlbumActions({
+  photo,
+  album,
+  setOverlay,
+  onRemoved,
+}: {
+  photo: Photo;
+  album: string | undefined;
+  setOverlay: (open: boolean) => void;
+  onRemoved: () => Promise<void>;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const cover = useUpdateAlbum(album ?? "");
+  const remove = useRemoveFromAlbum(album ?? "", { beforeCacheUpdate: onRemoved });
+  const error = cover.error ?? remove.error;
+
+  useEffect(() => setOverlay(menuOpen || adding), [menuOpen, adding, setOverlay]);
+
+  return (
+    <>
+      {(status || error) && (
+        <p
+          role={error ? "alert" : "status"}
+          className={`absolute top-full right-2 max-w-[calc(100%-1rem)] rounded-md bg-black/80 px-3 py-2 text-sm ${error ? "text-red-300" : "text-white"}`}
+        >
+          {error ? errorMessage(error) : status}
+        </p>
+      )}
+      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon-lg" aria-label="Album actions" className={iconButton}>
+            <Ellipsis className="size-5" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onSelect={() => setAdding(true)}>
+            <FolderPlus aria-hidden />
+            Add to album…
+          </DropdownMenuItem>
+          {album && (
+            <>
+              <DropdownMenuItem
+                disabled={photo.status !== "ready" || cover.isPending}
+                onSelect={() =>
+                  cover.mutate(
+                    { coverPhotoId: photo.photoId },
+                    { onSuccess: () => setStatus("Set as album cover") },
+                  )
+                }
+              >
+                <ImageUp aria-hidden />
+                Set as album cover
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={remove.isPending}
+                onSelect={() => remove.mutate([photo.photoId])}
+              >
+                <FolderMinus aria-hidden />
+                Remove from album
+              </DropdownMenuItem>
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <AddToAlbumDialog
+        photoIds={[photo.photoId]}
+        open={adding}
+        onOpenChange={setAdding}
+        onAdded={(target) => setStatus(`Added to ${target.name}`)}
+      />
     </>
   );
 }

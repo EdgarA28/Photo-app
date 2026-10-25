@@ -1,7 +1,8 @@
 import { photoSortSchema, type PhotoSort } from "@photo-app/shared";
 import { useQuery, useSuspenseInfiniteQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useRouter, type ErrorComponentProps } from "@tanstack/react-router";
-import { useMemo } from "react";
+import { useMemo, useState, type ReactNode } from "react";
+import { AddToAlbumDialog } from "@/albums/AddToAlbumDialog";
 import { errorMessage } from "@/api/errors";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,7 +14,9 @@ import {
 } from "@/components/ui/select";
 import { PhotoGrid } from "@/gallery/PhotoGrid";
 import { gallerySearchSchema } from "@/gallery/search";
-import { albumsQuery } from "@/queries/albums";
+import { SelectionBar } from "@/gallery/SelectionBar";
+import { useSelection } from "@/gallery/useSelection";
+import { albumsQuery, useAddToAlbum } from "@/queries/albums";
 import { galleryQuery } from "@/queries/photos";
 import { GalleryUploads } from "@/upload/GalleryUploads";
 import { useUploads } from "@/upload/useUploads";
@@ -31,23 +34,48 @@ export const Route = createFileRoute("/_authenticated/gallery")({
 
 function Gallery() {
   const { api } = Route.useRouteContext();
-  const { album, sort } = Route.useSearch();
+  const { album, sort, addTo } = Route.useSearch();
   const { data, hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } =
     useSuspenseInfiniteQuery(galleryQuery(api, { album, sort }));
   const photos = useMemo(() => data.pages.flatMap((page) => page.items), [data]);
   // Not-yet-uploaded files (FR-UP-6); uploads go to all photos, not to the album being viewed.
   const entries = useUploads();
   const uploads = useMemo(
-    () => (album ? [] : entries.filter((entry) => entry.status !== "done")),
-    [album, entries],
+    () => (album || addTo ? [] : entries.filter((entry) => entry.status !== "done")),
+    [album, addTo, entries],
   );
+
+  const selection = useSelection({ forced: addTo !== undefined });
+  const [status, setStatus] = useState<ReactNode>(null);
 
   return (
     <main className="space-y-5">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">Gallery</h1>
-        <GalleryFilters album={album} sort={sort} />
-      </header>
+      {addTo ? (
+        <AddToHeader albumId={addTo} />
+      ) : (
+        <header className="flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-2xl font-semibold tracking-tight">Gallery</h1>
+          <div className="flex flex-wrap gap-2">
+            <GalleryFilters album={album} sort={sort} />
+            {photos.length > 0 && !selection.active && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setStatus(null);
+                  selection.start();
+                }}
+              >
+                Select
+              </Button>
+            )}
+          </div>
+        </header>
+      )}
+      {status && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {status}
+        </p>
+      )}
       {uploads.length > 0 && <GalleryUploads entries={uploads} />}
       {photos.length === 0 ? (
         uploads.length === 0 && <EmptyGallery inAlbum={album !== undefined} />
@@ -57,6 +85,7 @@ function Gallery() {
           hasNextPage={hasNextPage && !isFetchNextPageError}
           isFetchingNextPage={isFetchingNextPage}
           fetchNextPage={fetchNextPage}
+          selection={selection.grid}
         />
       )}
       {isFetchNextPageError && (
@@ -72,7 +101,108 @@ function Gallery() {
           Loading more photos…
         </p>
       )}
+      {selection.active &&
+        (addTo ? (
+          <AddToBar albumId={addTo} photoIds={selection.ids} />
+        ) : (
+          <SelectionActions
+            photoIds={selection.ids}
+            onCancel={selection.stop}
+            onAdded={(message) => {
+              setStatus(message);
+              selection.stop();
+            }}
+          />
+        ))}
     </main>
+  );
+}
+
+const photosText = (count: number) => (count === 1 ? "1 photo" : `${count} photos`);
+
+/** Select mode in the gallery (8.11): add the picked photos to an album (FR-ALB-2). */
+function SelectionActions({
+  photoIds,
+  onCancel,
+  onAdded,
+}: {
+  photoIds: string[];
+  onCancel: () => void;
+  onAdded: (message: ReactNode) => void;
+}) {
+  const [choosing, setChoosing] = useState(false);
+  return (
+    <SelectionBar count={photoIds.length} onCancel={onCancel}>
+      <Button disabled={photoIds.length === 0} onClick={() => setChoosing(true)}>
+        Add to album
+      </Button>
+      <AddToAlbumDialog
+        photoIds={photoIds}
+        open={choosing}
+        onOpenChange={setChoosing}
+        onAdded={(album) =>
+          onAdded(
+            <>
+              Added {photosText(photoIds.length)} to{" "}
+              <Link
+                to="/albums/$albumId"
+                params={{ albumId: album.albumId }}
+                className="font-medium text-foreground underline underline-offset-4"
+              >
+                {album.name}
+              </Link>
+              .
+            </>,
+          )
+        }
+      />
+    </SelectionBar>
+  );
+}
+
+function AddToHeader({ albumId }: { albumId: string }) {
+  const { api } = Route.useRouteContext();
+  const { data: albums } = useQuery(albumsQuery(api));
+  const name = albums?.items.find((a) => a.albumId === albumId)?.name;
+  return (
+    <header className="space-y-1">
+      <h1 className="text-2xl font-semibold tracking-tight">
+        {name ? `Add to ${name}` : "Add to album"}
+      </h1>
+      <p className="text-sm text-muted-foreground">Select the photos to add.</p>
+    </header>
+  );
+}
+
+/**
+ * Picking photos for an album, opened from its "Add photos" (`?addTo=`): adds them and returns to
+ * the album; Cancel just returns.
+ */
+function AddToBar({ albumId, photoIds }: { albumId: string; photoIds: string[] }) {
+  const router = useRouter();
+  const add = useAddToAlbum();
+  const back = () => {
+    if (router.history.canGoBack()) router.history.back();
+    else void router.navigate({ to: "/albums/$albumId", params: { albumId }, replace: true });
+  };
+  return (
+    <SelectionBar count={photoIds.length} onCancel={back}>
+      {add.isError && (
+        <span role="alert" className="text-sm text-destructive">
+          {errorMessage(add.error)}
+        </span>
+      )}
+      <Button
+        disabled={photoIds.length === 0 || add.isPending}
+        onClick={() => add.mutate({ albumId, photoIds }, { onSuccess: back })}
+      >
+        {add.isPending
+          ? "Adding…"
+          : photoIds.length === 0
+            ? "Add"
+            : `Add ${photosText(photoIds.length)}`}
+      </Button>
+    </SelectionBar>
   );
 }
 

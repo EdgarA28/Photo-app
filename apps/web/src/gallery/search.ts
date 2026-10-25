@@ -7,4 +7,8 @@ import { z } from "zod";
 export const gallerySearchSchema = z.object({
   album: z.string().regex(ULID_REGEX).optional().catch(undefined),
   sort: photoSortSchema.default("taken-desc").catch("taken-desc"),
+  /** Picking photos to add to this album (8.11, from the album's "Add photos"). */
+  addTo: z.string().regex(ULID_REGEX).optional().catch(undefined),
 });
+
+export type GallerySearch = z.infer<typeof gallerySearchSchema>;
