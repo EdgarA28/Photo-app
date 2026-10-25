@@ -46,6 +46,8 @@ export interface UploadQueueDeps {
   /** Tells the other tabs about changes. Absent → single tab. */
   createChannel?: (() => BroadcastChannel) | undefined;
   isOnline?: () => boolean;
+  /** Whether this tab / app window is on screen: only a visible one takes over (see below). */
+  isVisible?: () => boolean;
   /** Asks the browser not to evict the queued files (iOS evicts storage of unused sites). */
   requestPersistence?: () => unknown;
   now?: () => number;
@@ -65,8 +67,17 @@ const LOCK_NAME = "photo-app-uploads";
 export const UPLOAD_CHANNEL_NAME = "photo-app-uploads";
 /** Progress messages to other tabs at most this often. */
 const PROGRESS_BROADCAST_MS = 250;
+/** The uploading tab tells the others it's alive this often. */
+export const HEARTBEAT_MS = 3000;
+/**
+ * A visible tab with waiting uploads takes the lock over after this long without a word from the
+ * uploading tab. A background tab is throttled or frozen (on Android as soon as another app
+ * window, e.g. the installed PWA, is in front) and would otherwise keep everyone waiting.
+ */
+export const TAKEOVER_AFTER_MS = 10_000;
 
-type Message = { type: "changed" } | { type: "progress"; id: string; progress: number };
+type Message =
+  { type: "changed" } | { type: "progress"; id: string; progress: number } | { type: "alive" };
 
 class FileMissingError extends Error {
   constructor() {
@@ -95,6 +106,7 @@ export function createUploadQueue({
   locks,
   createChannel,
   isOnline = () => navigator.onLine,
+  isVisible = () => document.visibilityState === "visible",
   requestPersistence,
   now = Date.now,
   newId = () => crypto.randomUUID(),
@@ -107,6 +119,10 @@ export function createUploadQueue({
   let lockRequest: AbortController | undefined;
   let channel: BroadcastChannel | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  /** Leader: the heartbeat. Others: the check whether the leader went quiet. */
+  let ticker: ReturnType<typeof setInterval> | undefined;
+  /** When the uploading tab was last heard from (heartbeat or progress). */
+  let lastAlive = 0;
   let persistenceRequested = false;
 
   const items = new Map<string, UploadItem>();
@@ -160,7 +176,10 @@ export function createUploadQueue({
 
   function onMessage(event: MessageEvent<Message>) {
     const message = event.data;
-    if (message.type === "progress") {
+    if (message.type === "alive") {
+      lastAlive = now();
+    } else if (message.type === "progress") {
+      lastAlive = now();
       if (!items.has(message.id)) return;
       progress.set(message.id, message.progress);
       emit();
@@ -177,6 +196,9 @@ export function createUploadQueue({
   /** This tab got the lock: take over what a closed tab left half-done, then start uploading. */
   async function lead(forSession: number) {
     leader = true;
+    clearInterval(ticker);
+    broadcast({ type: "alive" });
+    ticker = setInterval(() => broadcast({ type: "alive" }), HEARTBEAT_MS);
     await reload();
     if (forSession !== session) return;
     for (const item of [...items.values()]) {
@@ -299,9 +321,73 @@ export function createUploadQueue({
     broadcast({ type: "changed" });
   }
 
+  /**
+   * Asks for the lock; while waiting, a visible tab with uploads to do takes it over from a leader
+   * that went quiet. `steal` releases the other tab's lock at once (its uploads stop there and
+   * restart here; a re-signed upload that already reached S3 ends as done via 409).
+   */
+  function requestLock(forSession: number, steal = false) {
+    lockRequest?.abort();
+    const request = new AbortController();
+    lockRequest = request;
+    let granted = false;
+    // Before the request: a lock granted at once starts the heartbeat inside it.
+    clearInterval(ticker);
+    ticker = undefined;
+    // A steal is granted at once (then lead() starts the heartbeat); checking again meanwhile
+    // would steal from itself. Waiting: give the leader a full period before calling it quiet.
+    if (!steal) {
+      lastAlive = now();
+      ticker = setInterval(checkTakeover, HEARTBEAT_MS);
+    }
+    locks!
+      .request(LOCK_NAME, steal ? { steal: true } : { signal: request.signal }, () => {
+        if (forSession !== session) return undefined;
+        granted = true;
+        lockRequest = undefined;
+        // Held until stop() (or the tab closes, which hands it to the next tab).
+        return new Promise<void>((resolve) => {
+          releaseLock = resolve;
+          void lead(forSession);
+        });
+      })
+      .catch((error: unknown) => {
+        if (!isAbort(error)) throw error;
+        // Aborted while waiting (stop, or replaced by a takeover request): nothing to undo.
+        if (granted && forSession === session) lostLock(forSession);
+      });
+  }
+
+  function checkTakeover() {
+    if (leader || !userId || !isVisible()) return;
+    const waiting = [...items.values()].some(
+      (item) => item.status === "queued" || item.status === "uploading",
+    );
+    if (waiting && now() - lastAlive >= TAKEOVER_AFTER_MS) requestLock(session, true);
+  }
+
+  /** Another tab took the lock over: stop uploading here and wait for it again. */
+  function lostLock(forSession: number) {
+    leader = false;
+    releaseLock = undefined;
+    clearTimeout(timer);
+    for (const controller of active.values()) controller.abort();
+    active.clear();
+    progress.clear();
+    void reload();
+    requestLock(forSession);
+  }
+
+  function onVisibilityChange() {
+    if (isVisible()) checkTakeover();
+  }
+
   function stop() {
     session++;
     clearTimeout(timer);
+    clearInterval(ticker);
+    ticker = undefined;
+    document.removeEventListener("visibilitychange", onVisibilityChange);
     for (const controller of active.values()) controller.abort();
     active.clear();
     progress.clear();
@@ -331,21 +417,8 @@ export function createUploadQueue({
       if (forSession !== session) return;
 
       if (!locks) return lead(forSession);
-      const request = new AbortController();
-      lockRequest = request;
-      locks
-        .request(LOCK_NAME, { signal: request.signal }, () => {
-          if (forSession !== session) return undefined;
-          lockRequest = undefined;
-          // Held until stop() (or the tab closes, which hands it to the next tab).
-          return new Promise<void>((resolve) => {
-            releaseLock = resolve;
-            void lead(forSession);
-          });
-        })
-        .catch((error: unknown) => {
-          if (!isAbort(error)) throw error;
-        });
+      document.addEventListener("visibilitychange", onVisibilityChange);
+      requestLock(forSession);
     },
 
     stop,
