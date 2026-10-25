@@ -3,6 +3,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, loadEnv } from "vite";
+import { VitePWA } from "vite-plugin-pwa";
 
 // The API has no CORS (§9): in production the browser reaches it on the app's own origin via
 // CloudFront `/api/*` (Phase 7). Locally Vite proxies `/api` to a deployed API instead; the target
@@ -25,6 +26,27 @@ export default defineConfig(({ mode }) => {
       tanstackRouter({ target: "react", autoCodeSplitting: true }),
       react(),
       tailwindcss(),
+      // Installable app (9.1, FR-PWA-1, §12.5). The service worker is still built but not
+      // registered (`injectRegister: false`) until its caching (9.2) and the update prompt
+      // (`registerType: 'prompt'`, 9.4) exist.
+      VitePWA({
+        injectRegister: false,
+        // Icons from pwa-assets.config.ts; their <link> tags and the manifest `icons` are added
+        // by the plugin. Theme colour metas are written in index.html, one per colour scheme.
+        pwaAssets: { config: true, injectThemeColor: false },
+        manifest: {
+          id: "/",
+          name: "Photo App",
+          short_name: "Photos",
+          description: "Your photos, backed up and shared.",
+          start_url: "/gallery",
+          scope: "/",
+          display: "standalone",
+          // Light theme `--background` (index.css); the manifest has no per-scheme colours.
+          theme_color: "#ffffff",
+          background_color: "#ffffff",
+        },
+      }),
     ],
     resolve: {
       alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },

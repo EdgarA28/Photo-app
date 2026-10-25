@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- App icon (9.1, FR-PWA-1): the viewfinder motif of the nav (8.5) in the dark theme colours.
+       Full-bleed background and everything inside the maskable safe zone (centre circle, r = 40 %),
+       so one source serves the plain, maskable and Apple icons. -->
+  <rect width="512" height="512" fill="#0a0a0a" />
+  <g fill="none" stroke="#f59740" stroke-width="28" stroke-linecap="square">
+    <path d="M150 212V150h62" />
+    <path d="M300 150h62v62" />
+    <path d="M362 300v62h-62" />
+    <path d="M212 362h-62v-62" />
+  </g>
+  <circle cx="256" cy="256" r="34" fill="#f59740" />
+</svg>
