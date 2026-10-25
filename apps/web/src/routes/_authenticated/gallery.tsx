@@ -4,6 +4,16 @@ import { createFileRoute, Link, useRouter, type ErrorComponentProps } from "@tan
 import { useMemo, useState, type ReactNode } from "react";
 import { AddToAlbumDialog } from "@/albums/AddToAlbumDialog";
 import { errorMessage } from "@/api/errors";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -17,7 +27,7 @@ import { gallerySearchSchema } from "@/gallery/search";
 import { SelectionBar } from "@/gallery/SelectionBar";
 import { useSelection } from "@/gallery/useSelection";
 import { albumsQuery, useAddToAlbum } from "@/queries/albums";
-import { galleryQuery } from "@/queries/photos";
+import { galleryQuery, useDeletePhotos } from "@/queries/photos";
 import { GalleryUploads } from "@/upload/GalleryUploads";
 import { useUploads } from "@/upload/useUploads";
 
@@ -47,6 +57,9 @@ function Gallery() {
 
   const selection = useSelection({ forced: addTo !== undefined });
   const [status, setStatus] = useState<ReactNode>(null);
+  // In an album that isn't in my list (shared with me) the photos belong to someone else.
+  const { data: albums } = useQuery({ ...albumsQuery(api), enabled: album !== undefined });
+  const own = album === undefined || !!albums?.items.some((a) => a.albumId === album);
 
   return (
     <main className="space-y-5">
@@ -107,8 +120,10 @@ function Gallery() {
         ) : (
           <SelectionActions
             photoIds={selection.ids}
+            own={own}
             onCancel={selection.stop}
-            onAdded={(message) => {
+            onDeleted={selection.drop}
+            onDone={(message) => {
               setStatus(message);
               selection.stop();
             }}
@@ -120,19 +135,28 @@ function Gallery() {
 
 const photosText = (count: number) => (count === 1 ? "1 photo" : `${count} photos`);
 
-/** Select mode in the gallery (8.11): add the picked photos to an album (FR-ALB-2). */
+/**
+ * Select mode in the gallery (8.11): add the picked photos to an album (FR-ALB-2), or delete them
+ * (FR-DEL-1/2, own photos only).
+ */
 function SelectionActions({
   photoIds,
+  own,
   onCancel,
-  onAdded,
+  onDeleted,
+  onDone,
 }: {
   photoIds: string[];
+  own: boolean;
   onCancel: () => void;
-  onAdded: (message: ReactNode) => void;
+  /** Some photos were deleted, others failed: those stay picked for another try. */
+  onDeleted: (photoIds: string[]) => void;
+  onDone: (message: ReactNode) => void;
 }) {
   const [choosing, setChoosing] = useState(false);
   return (
     <SelectionBar count={photoIds.length} onCancel={onCancel}>
+      {own && <DeleteSelected photoIds={photoIds} onDeleted={onDeleted} onDone={onDone} />}
       <Button disabled={photoIds.length === 0} onClick={() => setChoosing(true)}>
         Add to album
       </Button>
@@ -141,7 +165,7 @@ function SelectionActions({
         open={choosing}
         onOpenChange={setChoosing}
         onAdded={(album) =>
-          onAdded(
+          onDone(
             <>
               Added {photosText(photoIds.length)} to{" "}
               <Link
@@ -157,6 +181,87 @@ function SelectionActions({
         }
       />
     </SelectionBar>
+  );
+}
+
+/** Deletes the picked photos after a confirmation (FR-DEL-2); failed ones stay picked. */
+function DeleteSelected({
+  photoIds,
+  onDeleted,
+  onDone,
+}: {
+  photoIds: string[];
+  onDeleted: (photoIds: string[]) => void;
+  onDone: (message: ReactNode) => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  // Across tries, for the final message.
+  const [deletedBefore, setDeletedBefore] = useState(0);
+  const remove = useDeletePhotos();
+  const count = photosText(photoIds.length);
+  const partial = remove.data && remove.data.failed.length > 0 ? remove.data : undefined;
+
+  return (
+    <AlertDialog
+      open={confirming}
+      onOpenChange={(open) => {
+        if (remove.isPending) return;
+        setConfirming(open);
+        if (!open) {
+          remove.reset();
+          setDeletedBefore(0);
+        }
+      }}
+    >
+      <Button
+        variant="destructive"
+        disabled={photoIds.length === 0}
+        onClick={() => setConfirming(true)}
+      >
+        Delete
+      </Button>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>
+            {photoIds.length === 1 ? "Delete this photo?" : `Delete ${count}?`}
+          </AlertDialogTitle>
+          <AlertDialogDescription>
+            {photoIds.length === 1 ? "It" : "They"} will be removed from your library and from all
+            albums. This can't be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {(remove.isError || partial) && (
+          <p role="alert" className="text-sm text-destructive">
+            {partial
+              ? `${photosText(partial.failed.length)} couldn't be deleted: ${errorMessage(partial.error)}`
+              : errorMessage(remove.error)}
+          </p>
+        )}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={remove.isPending}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={remove.isPending || photoIds.length === 0}
+            onClick={(event) => {
+              event.preventDefault(); // stay open until the API answers
+              remove.mutate(photoIds, {
+                onSuccess: ({ deleted, failed }) => {
+                  if (failed.length > 0) {
+                    setDeletedBefore((n) => n + deleted.length);
+                    onDeleted(deleted);
+                    return;
+                  }
+                  setConfirming(false);
+                  onDone(`Deleted ${photosText(deletedBefore + deleted.length)}.`);
+                },
+              });
+            }}
+          >
+            {remove.isPending ? "Deleting…" : partial ? "Try again" : "Delete"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 

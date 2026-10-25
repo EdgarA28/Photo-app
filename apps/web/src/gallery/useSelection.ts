@@ -18,6 +18,15 @@ export function useSelection({ forced = false }: { forced?: boolean } = {}) {
     });
   }, []);
 
+  /** Unpicks photos, e.g. the ones just deleted. */
+  const drop = useCallback((photoIds: readonly string[]) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const photoId of photoIds) next.delete(photoId);
+      return next;
+    });
+  }, []);
+
   const stop = useCallback(() => {
     setOn(false);
     setSelected(new Set());
@@ -44,6 +53,7 @@ export function useSelection({ forced = false }: { forced?: boolean } = {}) {
     ids: useMemo(() => [...selected], [selected]),
     grid,
     start: useCallback(() => setOn(true), []),
+    drop,
     stop,
   };
 }

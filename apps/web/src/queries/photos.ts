@@ -2,10 +2,15 @@ import type { Photo, PhotoPage, PhotoSort } from "@photo-app/shared";
 import {
   infiniteQueryOptions,
   queryOptions,
+  useMutation,
+  useQueryClient,
   type InfiniteData,
   type QueryClient,
 } from "@tanstack/react-query";
+import { useRouteContext } from "@tanstack/react-router";
 import type { Api } from "@/api/api";
+import { ApiRequestError } from "@/api/errors";
+import { batches } from "./albums";
 import { signedUrlRefreshInterval } from "./signedUrls";
 
 export interface GalleryFilter {
@@ -100,4 +105,52 @@ export function removePhotoFromCache(queryClient: QueryClient, photoId: string) 
         }
       : data,
   );
+}
+
+export interface DeletePhotosResult {
+  /** Deleted now, or already gone (404). */
+  deleted: string[];
+  /** Still there, with the first error to show. */
+  failed: string[];
+  error?: unknown;
+}
+
+/**
+ * Deletes several own photos (FR-DEL-1) from the gallery's select mode. No batch route: one
+ * `DELETE /photos/{id}` per photo, a few at a time. A failed photo doesn't stop the others; the
+ * result says which ones are left, so they can be tried again.
+ */
+export function useDeletePhotos() {
+  const api = useRouteContext({ from: "__root__", select: (context) => context.api });
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (photoIds: string[]): Promise<DeletePhotosResult> => {
+      const result: DeletePhotosResult = { deleted: [], failed: [] };
+      for (const batch of batches(photoIds, 5)) {
+        const settled = await Promise.allSettled(batch.map((id) => api.photos.delete(id)));
+        settled.forEach((outcome, i) => {
+          const photoId = batch[i]!;
+          const gone =
+            outcome.status === "fulfilled" ||
+            (outcome.reason instanceof ApiRequestError && outcome.reason.code === "NOT_FOUND");
+          if (gone) {
+            result.deleted.push(photoId);
+          } else {
+            result.failed.push(photoId);
+            result.error ??= outcome.reason;
+          }
+        });
+      }
+      return result;
+    },
+    onSuccess: ({ deleted }) => {
+      for (const photoId of deleted) removePhotoFromCache(queryClient, photoId);
+    },
+    onSettled: () =>
+      Promise.all(
+        [["photos"], ["albums"], ["me"]].map((queryKey) =>
+          queryClient.invalidateQueries({ queryKey }),
+        ),
+      ),
+  });
 }

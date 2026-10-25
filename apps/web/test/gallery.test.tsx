@@ -241,6 +241,94 @@ describe("gallery filters in the URL (FR-GAL-3)", () => {
   });
 });
 
+describe("deleting selected photos (FR-DEL-1/2)", () => {
+  const deletes = (request: ReturnType<typeof fakeApi>["request"]) =>
+    request.mock.calls.filter(([method]) => method === "DELETE").map(([, path]) => path);
+  const tile = (name: string) => screen.findByRole("button", { name });
+
+  async function selectAndConfirm(names: string[], title: string) {
+    fireEvent.click(await screen.findByRole("button", { name: "Select" }));
+    for (const name of names) fireEvent.click(await tile(name));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    return screen.findByRole("alertdialog", { name: title });
+  }
+
+  it("asks for confirmation and does nothing when cancelled", async () => {
+    const { api, request } = setup({ "GET /photos": testPhotoPage(0, 3) });
+    await renderAt("/gallery", { api });
+    const dialog = await selectAndConfirm(["IMG_0.jpg", "IMG_2.jpg"], "Delete 2 photos?");
+    expect(dialog.textContent).toContain("They will be removed from your library");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(deletes(request)).toEqual([]);
+    expect(screen.getByRole("toolbar").textContent).toContain("2 selected");
+  });
+
+  it("deletes every selected photo and leaves select mode", async () => {
+    const gone = new Set<string>();
+    const { api, request } = setup({
+      "GET /photos": () => ({
+        items: testPhotoPage(0, 3).items.filter((p) => !gone.has(p.photoId)),
+        nextCursor: null,
+      }),
+      [`DELETE /photos/${testId(0)}`]: () => void gone.add(testId(0)),
+      [`DELETE /photos/${testId(2)}`]: () => void gone.add(testId(2)),
+    });
+    await renderAt("/gallery", { api });
+    const dialog = await selectAndConfirm(["IMG_0.jpg", "IMG_2.jpg"], "Delete 2 photos?");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+
+    expect((await screen.findByRole("status")).textContent).toBe("Deleted 2 photos.");
+    expect(deletes(request)).toEqual([`/photos/${testId(0)}`, `/photos/${testId(2)}`]);
+    expect(screen.queryByRole("toolbar")).toBeNull();
+    expect(tiles().map((t) => t.getAttribute("aria-label"))).toEqual(["IMG_1.jpg"]);
+  });
+
+  it("keeps the failed photos selected and retries only those", async () => {
+    let fail = true;
+    const { api, request } = setup({
+      "GET /photos": testPhotoPage(0, 3),
+      [`DELETE /photos/${testId(0)}`]: undefined,
+      [`DELETE /photos/${testId(1)}`]: () => {
+        if (fail) throw new ApiRequestError("INTERNAL_ERROR", "x", 500);
+      },
+      // Already deleted elsewhere: counts as done.
+      [`DELETE /photos/${testId(2)}`]: new ApiRequestError("NOT_FOUND", "x", 404),
+    });
+    await renderAt("/gallery", { api });
+    const dialog = await selectAndConfirm(
+      ["IMG_0.jpg", "IMG_1.jpg", "IMG_2.jpg"],
+      "Delete 3 photos?",
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+
+    expect((await within(dialog).findByRole("alert")).textContent).toBe(
+      "1 photo couldn't be deleted: Something went wrong on our side. Try again later.",
+    );
+    expect(within(dialog).getByRole("heading").textContent).toBe("Delete this photo?");
+
+    fail = false;
+    fireEvent.click(within(dialog).getByRole("button", { name: "Try again" }));
+    expect((await screen.findByRole("status")).textContent).toBe("Deleted 3 photos.");
+    expect(deletes(request)).toEqual([
+      `/photos/${testId(0)}`,
+      `/photos/${testId(1)}`,
+      `/photos/${testId(2)}`,
+      `/photos/${testId(1)}`,
+    ]);
+  });
+
+  it("offers no delete in an album shared with me", async () => {
+    const shared = testId(901);
+    const { api } = setup({ [`GET /albums/${shared}/photos`]: testPhotoPage(0, 2) });
+    await renderAt(`/gallery?album=${shared}`, { api });
+    fireEvent.click(await screen.findByRole("button", { name: "Select" }));
+    await screen.findByRole("toolbar");
+    expect(screen.getByRole("button", { name: "Add to album" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+  });
+});
+
 /** Opens the Radix select labelled `label` and picks `option`. */
 async function chooseOption(label: string, option: string) {
   const trigger = await screen.findByRole("combobox", { name: label });
