@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-query";
 import { useRouteContext } from "@tanstack/react-router";
 import type { Api } from "@/api/api";
+import { signedUrlRefreshInterval } from "./signedUrls";
 
 /** GET /albums/{id}/shares: who an own album is shared with (FR-SHR-1/2, owner only). */
 export const sharesQuery = (api: Api, albumId: string) =>
@@ -22,6 +23,11 @@ export const sharedAlbumsQuery = (api: Api) =>
     queryFn: ({ pageParam, signal }) => api.sharedAlbums.list({ cursor: pageParam }, { signal }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
+    // Covers are signed URLs (7.4).
+    refetchInterval: ({ state: { data } }) =>
+      signedUrlRefreshInterval(
+        data?.pages.flatMap((page) => page.items.map((a) => a.coverThumbUrl)) ?? [],
+      ),
   });
 
 function useApi() {

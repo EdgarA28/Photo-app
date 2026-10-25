@@ -1,6 +1,7 @@
 import { GetParameterCommand, type SSMClient } from "@aws-sdk/client-ssm";
-import { getSignedCookies } from "@aws-sdk/cloudfront-signer";
-import { MEDIA_COOKIE_TTL_SECONDS } from "@photo-app/shared";
+import { getSignedCookies, getSignedUrl } from "@aws-sdk/cloudfront-signer";
+import { MEDIA_COOKIE_TTL_SECONDS, SHARED_IMAGE_URL_TTL_SECONDS } from "@photo-app/shared";
+import { createPrivateKey, type KeyObject } from "node:crypto";
 
 /**
  * Every cookie CloudFront reads for a custom-policy signature with SHA-256 (§9 media cookie).
@@ -19,9 +20,15 @@ export interface MediaCookies {
   expiresAt: Date;
 }
 
-/** Signs CloudFront access to the user's own images (FR-AUTH-5 cookie, 7.3). Faked in tests. */
+/** Signs CloudFront access to images: cookies for own ones (7.3), URLs for shared ones (7.4). */
 export interface MediaSigner {
   signCookies(userId: string, now: Date): Promise<MediaCookies>;
+  /**
+   * One image seen through an album shared with the caller (7.4, §9): `path` (`/users/…`) with a
+   * canned-policy signature for exactly that URL, valid 15 min. Relative, like own image paths,
+   * so it works on CloudFront and through the dev proxy.
+   */
+  signUrl(path: string, now: Date): Promise<string>;
 }
 
 export interface MediaSignerOptions {
@@ -37,6 +44,16 @@ export function cloudFrontMediaSigner({
   keyPairId,
   loadPrivateKey,
 }: MediaSignerOptions): MediaSigner {
+  // Parsed once: decoding the PEM on every signature nearly doubled its cost, and a shared album
+  // page signs two URLs per photo (7.4). The signer passes the key straight to node:crypto's
+  // sign(), which takes a KeyObject; its types only say string | Buffer.
+  let parsed: { pem: string; key: KeyObject } | undefined;
+  async function privateKey(): Promise<string> {
+    const pem = await loadPrivateKey();
+    if (parsed?.pem !== pem) parsed = { pem, key: createPrivateKey(pem) };
+    return parsed.key as unknown as string;
+  }
+
   return {
     async signCookies(userId, now) {
       // Whole seconds: the policy's epoch time and the reported expiresAt must be the same instant.
@@ -53,8 +70,8 @@ export function cloudFrontMediaSigner({
       });
       const signed = getSignedCookies({
         keyPairId,
-        privateKey: await loadPrivateKey(),
         policy,
+        privateKey: await privateKey(),
         algorithm: "SHA256",
       });
       const cookies = Object.fromEntries(
@@ -65,6 +82,19 @@ export function cloudFrontMediaSigner({
         }),
       ) as MediaCookies["cookies"];
       return { cookies, expiresAt: new Date(expiresEpoch * 1000) };
+    },
+
+    async signUrl(path, now) {
+      const signed = getSignedUrl({
+        url: `${origin}${path}`,
+        keyPairId,
+        privateKey: await privateKey(),
+        dateLessThan: new Date(
+          (Math.floor(now.getTime() / 1000) + SHARED_IMAGE_URL_TTL_SECONDS) * 1000,
+        ),
+        algorithm: "SHA256",
+      });
+      return signed.slice(origin.length);
     },
   };
 }

@@ -62,7 +62,8 @@ run "function_and_config" {
       aws_lambda_function.api.function_name == "photo-app-test-api" &&
       aws_lambda_function.api.runtime == "nodejs22.x" &&
       aws_lambda_function.api.architectures == tolist(["arm64"]) &&
-      aws_lambda_function.api.handler == "index.handler"
+      aws_lambda_function.api.handler == "index.handler" &&
+      aws_lambda_function.api.memory_size == 1769
     )
     error_message = "Node.js 22 on arm64, dist/index.mjs (spec §4)."
   }

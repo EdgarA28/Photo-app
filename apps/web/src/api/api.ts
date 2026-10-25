@@ -38,8 +38,13 @@ export function createApi(request: Request) {
     photos: {
       list: (query: Page & { sort?: PhotoSort } = {}, o?: Opts) =>
         request("GET", "/photos", { schema: photoPageSchema, query, ...o }),
-      get: (photoId: string, o?: Opts) =>
-        request("GET", `/photos/${enc(photoId)}`, { schema: photoSchema, ...o }),
+      /** With `albumId`: a photo of an album shared with me, with signed image URLs (7.4). */
+      get: (photoId: string, albumId?: string, o?: Opts) =>
+        request("GET", `/photos/${enc(photoId)}`, {
+          schema: photoSchema,
+          query: { albumId },
+          ...o,
+        }),
       /** Also re-signs a pending upload when `photoId` is set (5.6a). */
       uploadUrl: (body: UploadUrlRequest) =>
         request("POST", "/photos/upload-url", { schema: uploadUrlResponseSchema, body }),

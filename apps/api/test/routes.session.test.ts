@@ -3,6 +3,7 @@ import { GetParameterCommand, type SSMClient } from "@aws-sdk/client-ssm";
 import { handle } from "@hono/aws-lambda";
 import {
   MEDIA_COOKIE_TTL_SECONDS,
+  SHARED_IMAGE_URL_TTL_SECONDS,
   apiErrorSchema,
   mediaCookieResponseSchema,
 } from "@photo-app/shared";
@@ -12,7 +13,7 @@ import { createApp } from "../src/app";
 import { cloudFrontMediaSigner, ssmPrivateKeyLoader, type MediaSigner } from "../src/lib/media";
 import type { Deps } from "../src/routes";
 import { sessionRoutes } from "../src/routes/session";
-import { TEST_MEDIA, newUserId, testMediaSigner } from "./helpers";
+import { TEST_MEDIA, newUserId, testMediaSigner, verifySignedUrl } from "./helpers";
 
 const NAMES = [
   "CloudFront-Policy",
@@ -179,6 +180,18 @@ describe("DELETE /session/media-cookie", () => {
       asUser(null),
     );
     expect(res.status).toBe(401);
+  });
+});
+
+describe("signUrl (7.4)", () => {
+  test("a relative URL signed for exactly that file, valid 15 min", async () => {
+    const path = `/users/${newUserId()}/previews/01JB2Z3M4N5P6Q7R8S9T000001.jpg`;
+    const now = new Date("2026-10-25T12:00:00.400Z");
+    const url = await testMediaSigner().signUrl(path, now);
+    // Whole seconds from `now`, like the cookies.
+    expect(verifySignedUrl(url, path)).toBe(
+      Math.floor(now.getTime() / 1000) + SHARED_IMAGE_URL_TTL_SECONDS,
+    );
   });
 });
 

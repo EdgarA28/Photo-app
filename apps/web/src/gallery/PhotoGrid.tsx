@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { useWindowVirtualizer } from "@tanstack/react-virtual";
 import { Check, ImageOff, LoaderCircle } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useImageFailed } from "@/components/useImageFailed";
 import { cn } from "@/lib/utils";
 import { justifyRows } from "./justify";
 import type { GallerySearch } from "./search";
@@ -177,8 +178,8 @@ function PhotoTile({
 }
 
 function TileContent({ photo }: { photo: Photo }) {
-  // Until Phase 7 (CloudFront + media cookie) thumbnails don't load: keep the placeholder.
-  const [broken, setBroken] = useState(false);
+  // A thumbnail that can't load keeps the placeholder (until a refetch brings a new URL).
+  const [broken, onError] = useImageFailed(photo.thumbUrl);
   return (
     <>
       {/* FR-GAL-5: processing → spinner placeholder, failed → error state. */}
@@ -198,7 +199,7 @@ function TileContent({ photo }: { photo: Photo }) {
           loading="lazy"
           decoding="async"
           draggable={false}
-          onError={() => setBroken(true)}
+          onError={onError}
           className="size-full object-cover"
         />
       )}

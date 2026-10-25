@@ -65,6 +65,13 @@ export type UploadUrlResponse = z.infer<typeof uploadUrlResponseSchema>;
 export const downloadUrlQuerySchema = z.object({ albumId: idSchema.optional() });
 export type DownloadUrlQuery = z.infer<typeof downloadUrlQuerySchema>;
 
+/**
+ * GET /photos/{photoId} query, the same rule: with `albumId`, a photo of an album shared with the
+ * caller. That is how the viewer gets a shared photo's signed preview URL (7.4).
+ */
+export const getPhotoQuerySchema = downloadUrlQuerySchema;
+export type GetPhotoQuery = z.infer<typeof getPhotoQuerySchema>;
+
 /** GET /photos/{photoId}/download-url (FR-DL-1, FR-DL-2) */
 export const downloadUrlResponseSchema = z.object({
   url: z.url(),

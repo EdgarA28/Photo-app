@@ -118,7 +118,9 @@ resource "aws_lambda_function" "api" {
   runtime       = "nodejs22.x"
   architectures = ["arm64"]
   handler       = "index.handler"
-  memory_size   = 512
+  # CPU scales with memory; 1769 MB is one full vCPU, all a single Node thread can use. Signing
+  # shared-album image URLs is RSA work (7.4: ~13 ms per signature measured at 512 MB).
+  memory_size = 1769
   # Every route is a few DynamoDB/S3/Cognito calls; API Gateway itself allows at most 30 s.
   timeout = 10
 

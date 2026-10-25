@@ -125,6 +125,60 @@ describe("photo viewer (FR-GAL-4)", () => {
     await waitFor(() => expect(heading()).toBe("IMG_3.jpg"));
   });
 
+  describe("a shared album's photos (7.4)", () => {
+    // Album pages carry signed thumbnails only; the preview comes with the photo on its own.
+    const signed = (kind: string, n: number) =>
+      `/users/owner/${kind}/${testId(n)}.jpg?Expires=1&Signature=s&Key-Pair-Id=K&Hash-Algorithm=SHA256`;
+    const listed = (n: number) => testPhoto(n, { thumbUrl: signed("thumbs", n), previewUrl: null });
+    const shared = (from: number, count: number) => {
+      const fetched: string[] = [];
+      const responses = {
+        [`GET /albums/${album}/photos`]: {
+          items: Array.from({ length: count }, (_, i) => listed(from + i)),
+          nextCursor: null,
+        },
+      } as Record<string, unknown>;
+      for (let n = from; n < from + count; n++) {
+        responses[`GET /photos/${testId(n)}`] = (query: { albumId?: string }) => {
+          fetched.push(`${testId(n)}?albumId=${query?.albumId}`);
+          return testPhoto(n, { thumbUrl: signed("thumbs", n), previewUrl: signed("previews", n) });
+        };
+      }
+      return { ...setup(responses), fetched };
+    };
+
+    it("fetches the photo through the album for its signed preview, and the neighbours' too", async () => {
+      const { api, fetched } = shared(50, 3);
+      await renderAt(`/photos/${testId(51)}?album=${album}`, { api });
+      await screen.findByRole("heading", { name: "IMG_51.jpg" });
+
+      await waitFor(() => expect(preview().getAttribute("src")).toBe(signed("previews", 51)));
+      await waitFor(() =>
+        expect(fetched.sort()).toEqual(
+          [50, 51, 52].map((n) => `${testId(n)}?albumId=${album}`).sort(),
+        ),
+      );
+    });
+
+    it("shows the thumbnail while the preview URL is on its way", async () => {
+      const { api, request } = shared(50, 1);
+      const respond = request.getMockImplementation()!;
+      request.mockImplementation(async (method, path, options) =>
+        path === `/photos/${testId(50)}` ? new Promise(() => {}) : respond(method, path, options),
+      );
+      await renderAt(`/photos/${testId(50)}?album=${album}`, { api });
+      await screen.findByRole("heading", { name: "IMG_50.jpg" });
+      expect(preview().getAttribute("src")).toBe(signed("thumbs", 50));
+    });
+
+    it("own photos don't fetch anything extra", async () => {
+      const { api, request } = setup();
+      await renderAt(`/photos/${testId(1)}`, { api });
+      await screen.findByRole("heading", { name: "IMG_1.jpg" });
+      expect(request.mock.calls.map(([, path]) => path)).not.toContain(`/photos/${testId(1)}`);
+    });
+  });
+
   it("shows a photo outside the loaded pages on its own, without prev/next", async () => {
     const { api } = setup({ [`GET /photos/${testId(77)}`]: testPhoto(77) });
     await renderAt(`/photos/${testId(77)}`, { api });

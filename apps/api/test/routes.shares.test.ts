@@ -7,15 +7,24 @@ import {
   sharedAlbumPageSchema,
 } from "@photo-app/shared";
 import { beforeAll, describe, expect, test } from "vitest";
-import type { Repositories } from "../src/repo";
-import { createPending, createTestApi, newPhoto, newUserId, nextIso } from "./helpers";
+import type { Db, Repositories } from "../src/repo";
+import {
+  createPending,
+  createTestApi,
+  markReady,
+  newPhoto,
+  newUserId,
+  nextIso,
+  verifySignedUrl,
+} from "./helpers";
 
 type TestApi = Awaited<ReturnType<typeof createTestApi>>;
+let db: Db;
 let repos: Repositories;
 let api: TestApi["api"];
 let profiles: TestApi["profiles"];
 beforeAll(async () => {
-  ({ repos, api, profiles } = await createTestApi());
+  ({ db, repos, api, profiles } = await createTestApi());
 });
 
 function errorCode(body: unknown) {
@@ -273,10 +282,33 @@ describe("GET /shared-albums (FR-SHR-3)", () => {
       ownerId: alice.userId,
       photoCount: 1,
       coverPhotoId: photo.photoId,
-      // The owner's thumb path is useless to the recipient; signed URLs come with 7.4.
+      // The cover is still processing: recipients only ever see ready photos.
       coverThumbUrl: null,
     });
     expect(shared.sharedAt).toBe((await repos.shares.get(a.albumId, me.userId))!.sharedAt);
+  });
+
+  test("a ready cover gets a signed URL for the owner's thumbnail (7.4)", async () => {
+    const [alice, bob, me] = [register("Alice"), register("Bob"), register("Me")];
+    const a = await album(alice.userId, "Alice's");
+    const b = await album(bob.userId, "Bob's, no cover");
+    const photo = await createPending(repos, newPhoto(alice.userId));
+    await markReady(db, alice.userId, photo.photoId, 1000, "2025-06-01T12:00:00.000Z");
+    await repos.albums.addPhotos(alice.userId, a.albumId, [photo.photoId], nextIso());
+    await repos.albums.update(alice.userId, a.albumId, { coverPhotoId: photo.photoId });
+    for (const [owner, x] of [
+      [alice, a],
+      [bob, b],
+    ] as const) {
+      await api(owner.userId, "POST", `/albums/${x.albumId}/shares`, { email: me.email });
+    }
+
+    const { items } = sharedAlbumPageSchema.parse(
+      (await api(me.userId, "GET", "/shared-albums")).body,
+    );
+    const cover = items.find((x) => x.albumId === a.albumId)!.coverThumbUrl!;
+    verifySignedUrl(cover, `/users/${alice.userId}/thumbs/${photo.photoId}.jpg`);
+    expect(items.find((x) => x.albumId === b.albumId)!.coverThumbUrl).toBeNull();
   });
 
   test("shared albums stay out of my own album list, and I can't modify them (FR-SHR-4)", async () => {

@@ -29,6 +29,7 @@ import {
   type PointerEvent,
   type ReactNode,
 } from "react";
+import { useImageFailed } from "@/components/useImageFailed";
 import { errorMessage } from "@/api/errors";
 import {
   AlertDialog,
@@ -52,7 +53,7 @@ import {
 import { gallerySearchSchema } from "@/gallery/search";
 import { startDownload } from "@/lib/download";
 import { albumsQuery, useRemoveFromAlbum, useUpdateAlbum } from "@/queries/albums";
-import { galleryQuery, photoQuery, removePhotoFromCache } from "@/queries/photos";
+import { galleryQuery, needsOwnFetch, photoQuery, removePhotoFromCache } from "@/queries/photos";
 import { sharedAlbumsQuery } from "@/queries/shares";
 
 /** Horizontal travel that counts as a swipe; it must also be mostly sideways. */
@@ -75,7 +76,7 @@ export const Route = createFileRoute("/_authenticated/photos/$photoId")({
       staleTime: "static",
     });
     if (!list.pages.some((page) => page.items.some((p) => p.photoId === photoId))) {
-      await queryClient.query({ ...photoQuery(api, photoId), staleTime: "static" });
+      await queryClient.query({ ...photoQuery(api, photoId, deps.album), staleTime: "static" });
     }
   },
   component: Viewer,
@@ -94,8 +95,14 @@ function Viewer() {
   );
   const photos = useMemo(() => data.pages.flatMap((page) => page.items), [data]);
   const index = photos.findIndex((p) => p.photoId === photoId);
-  const single = useQuery({ ...photoQuery(api, photoId), enabled: index < 0 });
-  const photo = index >= 0 ? photos[index] : single.data;
+  const listed = index >= 0 ? photos[index] : undefined;
+  // Outside the loaded pages, or a shared album's photo (listed without its preview, 7.4).
+  const single = useQuery({
+    ...photoQuery(api, photoId, album),
+    enabled: index < 0 || needsOwnFetch(listed),
+  });
+  const photo = index < 0 || needsOwnFetch(listed) ? (single.data ?? listed) : listed;
+  const loadingPreview = needsOwnFetch(listed) && single.isPending;
   const prev = index > 0 ? photos[index - 1] : undefined;
   const next = index >= 0 ? photos[index + 1] : undefined;
 
@@ -137,7 +144,16 @@ function Viewer() {
     return () => window.removeEventListener("keydown", onKey);
   }, [confirming, overlay, show, close, prev, next]);
 
-  usePreload(prev?.previewUrl, next?.previewUrl);
+  const prevPhoto = useQuery({
+    ...photoQuery(api, prev?.photoId ?? "", album),
+    enabled: needsOwnFetch(prev),
+  }).data;
+  const nextPhoto = useQuery({
+    ...photoQuery(api, next?.photoId ?? "", album),
+    enabled: needsOwnFetch(next),
+  }).data;
+  // Shared neighbours: their photo is fetched now, so prev/next show at once.
+  usePreload((prevPhoto ?? prev)?.previewUrl, (nextPhoto ?? next)?.previewUrl);
   const swipe = useSwipe({ onLeft: () => void show(next), onRight: () => void show(prev) });
 
   // After a delete: the neighbour takes its place, or the gallery if it was the only photo.
@@ -183,7 +199,7 @@ function Viewer() {
         className="relative flex min-h-0 flex-1 touch-pan-y items-center justify-center select-none"
         {...swipe}
       >
-        <PhotoView key={photo.photoId} photo={photo} />
+        <PhotoView key={photo.photoId} photo={photo} loadingPreview={loadingPreview} />
         <NavButton label="Previous photo" target={prev} side="left" />
         <NavButton label="Next photo" target={next} side="right" />
       </div>
@@ -410,9 +426,12 @@ function AlbumActions({
   );
 }
 
-/** Preview, or a state for photos without one (FR-GAL-5) or whose preview can't load (Phase 7). */
-function PhotoView({ photo }: { photo: Photo }) {
-  const [broken, setBroken] = useState(false);
+/**
+ * Preview, or a state for photos without one (FR-GAL-5) or whose preview can't load. While a
+ * shared photo's preview URL is on its way (7.4), its thumbnail stands in.
+ */
+function PhotoView({ photo, loadingPreview }: { photo: Photo; loadingPreview: boolean }) {
+  const [broken, onError] = useImageFailed(photo.previewUrl);
   if (photo.status === "pending") {
     return (
       <Message icon={<LoaderCircle className="size-8 motion-safe:animate-spin" />}>
@@ -427,6 +446,16 @@ function PhotoView({ photo }: { photo: Photo }) {
       </Message>
     );
   }
+  if (loadingPreview && photo.thumbUrl) {
+    return (
+      <img
+        src={photo.thumbUrl}
+        alt={photo.fileName}
+        draggable={false}
+        className="size-full object-contain"
+      />
+    );
+  }
   if (!photo.previewUrl || broken) {
     return <Message icon={<ImageOff className="size-8" />}>The preview can't be shown.</Message>;
   }
@@ -437,7 +466,7 @@ function PhotoView({ photo }: { photo: Photo }) {
       width={photo.width ?? undefined}
       height={photo.height ?? undefined}
       draggable={false}
-      onError={() => setBroken(true)}
+      onError={onError}
       className="size-full object-contain"
     />
   );

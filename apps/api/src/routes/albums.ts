@@ -28,7 +28,7 @@ const albumPhotoParam = z.object({ albumId: idSchema, photoId: idSchema });
  * can't modify them (FR-SHR-4). The one route recipients may read is `GET /albums/{id}/photos`
  * (5.13). Shares themselves are in shares.ts.
  */
-export function albumRoutes(app: Hono<AppEnv>, { repos }: Deps): void {
+export function albumRoutes(app: Hono<AppEnv>, { repos, media }: Deps): void {
   app.get("/albums", async (c) => {
     const userId = c.get("userId");
     const albums = await repos.albums.list(userId);
@@ -100,14 +100,20 @@ export function albumRoutes(app: Hono<AppEnv>, { repos }: Deps): void {
         page.items.map((membership) => membership.photoId),
       );
       const byId = new Map(photos.map((photo) => [photo.photoId, photo]));
+      // A photo being deleted can briefly outlive its membership; skip it.
+      const records = page.items.flatMap((membership) => {
+        const photo = byId.get(membership.photoId);
+        if (!photo) return [];
+        if (!shared) return [photo];
+        return isVisibleToRecipient(photo) ? [photo] : [];
+      });
+      const now = new Date();
       const body: PhotoPage = {
-        // A photo being deleted can briefly outlive its membership; skip it.
-        items: page.items.flatMap((membership) => {
-          const photo = byId.get(membership.photoId);
-          if (!photo) return [];
-          if (!shared) return [toPhoto(photo)];
-          return isVisibleToRecipient(photo) ? [toSharedPhoto(photo)] : [];
-        }),
+        items: shared
+          ? await Promise.all(
+              records.map((photo) => toSharedPhoto(photo, media, now, { preview: false })),
+            )
+          : records.map(toPhoto),
         nextCursor: page.nextCursor,
       };
       return c.json(body);

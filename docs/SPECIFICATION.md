@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.8 |
+| **Version** | 0.9 |
 | **Date** | 2026-10-25 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -386,7 +386,7 @@ Access patterns:
 | `PUT` | `/me/username` | Set or change own username `{username}`; `409 USERNAME_TAKEN` if someone else has it |
 | `POST` | `/photos/upload-url` | Body `{fileName, contentType, sizeBytes}` → `{photoId, upload: {url, fields}}`; creates `pending` item, checks quota |
 | `GET` | `/photos` | List own photos `?cursor&limit&sort` |
-| `GET` | `/photos/{photoId}` | Photo metadata |
+| `GET` | `/photos/{photoId}` | Photo metadata; with `?albumId=` a photo of an album shared with the caller, with signed image URLs |
 | `GET` | `/photos/{photoId}/download-url` | 5-min pre-signed GET with `attachment` disposition |
 | `DELETE` | `/photos/{photoId}` | Delete files + metadata + memberships; update usage |
 | `GET` | `/albums` | List own albums |
@@ -710,6 +710,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 
 | Version | Date | Changes |
 |---|---|---|
+| 0.9 | 2026-10-25 | Shared-album photos: album pages carry signed thumbnails, `GET /photos/{id}?albumId=` the signed preview (§9) |
 | 0.8 | 2026-10-25 | Media cookies signed with SHA-256: four cookies incl. `CloudFront-Hash-Algorithm` (§9) |
 | 0.7 | 2026-10-25 | SPA fallback via a CloudFront Function on the site behavior instead of distribution-wide error responses (§13.1) |
 | 0.6 | 2026-10-24 | Token storage clarified (§11.4): access/ID tokens in memory, refresh token in `localStorage` (FR-AUTH-4); D-2 decided: `oidc-client-ts` |

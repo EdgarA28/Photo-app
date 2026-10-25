@@ -12,8 +12,9 @@ import { z } from "zod";
 import type { AppEnv } from "../env";
 import { AppError, notFound, orNotFound, validationError } from "../lib/errors";
 import { validate } from "../lib/validation";
-import type { ShareRecord } from "../repo";
+import type { AlbumRecord, PhotoRecord, Repositories, ShareRecord } from "../repo";
 import type { Deps } from ".";
+import { isVisibleToRecipient } from "./access";
 import { toSharedAlbum } from "./present";
 
 const albumParam = z.object({ albumId: idSchema });
@@ -32,7 +33,7 @@ const toShare = (share: ShareRecord, usernames: Map<string, string>): AlbumShare
  * `/albums/{id}/shares` route first looks the album up under the caller's partition, so
  * recipients and everyone else get 404 and can't re-share or revoke (FR-SHR-4, NFR-SEC-2).
  */
-export function shareRoutes(app: Hono<AppEnv>, { repos, users }: Deps): void {
+export function shareRoutes(app: Hono<AppEnv>, { repos, users, media }: Deps): void {
   /** Who the album is shared with, oldest share first. */
   app.get("/albums/:albumId/shares", validate("param", albumParam), async (c) => {
     const { albumId } = c.req.valid("param");
@@ -110,15 +111,53 @@ export function shareRoutes(app: Hono<AppEnv>, { repos, users }: Deps): void {
       repos.usernames.getMany(page.items.map((share) => share.ownerId)),
     ]);
     const byKey = new Map(albums.map((album) => [`${album.ownerId}/${album.albumId}`, album]));
+    const covers = await sharedCovers(repos, albums);
+    const now = new Date();
+    // An album being deleted removes its shares only after reading them, so a share can
+    // briefly outlive its album; skip it.
+    const listed = page.items.flatMap((share) => {
+      const album = byKey.get(`${share.ownerId}/${share.albumId}`);
+      return album ? [{ share, album }] : [];
+    });
     const body: SharedAlbumPage = {
-      // An album being deleted removes its shares only after reading them, so a share can
-      // briefly outlive its album; skip it.
-      items: page.items.flatMap((share) => {
-        const album = byKey.get(`${share.ownerId}/${share.albumId}`);
-        return album ? [toSharedAlbum(album, share, ownerNames.get(share.ownerId) ?? null)] : [];
-      }),
+      items: await Promise.all(
+        listed.map(({ share, album }) =>
+          toSharedAlbum(
+            album,
+            share,
+            ownerNames.get(share.ownerId) ?? null,
+            covers.get(`${album.ownerId}/${album.coverPhotoId}`),
+            media,
+            now,
+          ),
+        ),
+      ),
       nextCursor: page.nextCursor,
     };
     return c.json(body);
   });
+}
+
+/**
+ * Cover photos of albums shared with the caller, by `ownerId/photoId`: one batch read per owner
+ * (photos live in their owner's partition). Only covers recipients may see (ready).
+ */
+async function sharedCovers(
+  repos: Repositories,
+  albums: AlbumRecord[],
+): Promise<Map<string, PhotoRecord>> {
+  const idsByOwner = new Map<string, string[]>();
+  for (const album of albums) {
+    if (!album.coverPhotoId) continue;
+    idsByOwner.set(album.ownerId, [...(idsByOwner.get(album.ownerId) ?? []), album.coverPhotoId]);
+  }
+  const photos = await Promise.all(
+    [...idsByOwner].map(([ownerId, ids]) => repos.photos.getMany(ownerId, ids)),
+  );
+  return new Map(
+    photos
+      .flat()
+      .filter(isVisibleToRecipient)
+      .map((photo) => [`${photo.userId}/${photo.photoId}`, photo]),
+  );
 }

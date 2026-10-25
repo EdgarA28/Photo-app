@@ -1,8 +1,8 @@
 import { CreateTableCommand, DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { GetCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { newId } from "@photo-app/shared";
-import { generateKeyPairSync, randomUUID } from "node:crypto";
-import { inject } from "vitest";
+import { createVerify, generateKeyPairSync, randomUUID } from "node:crypto";
+import { expect, inject } from "vitest";
 import { createApp } from "../src/app";
 import { cloudFrontMediaSigner } from "../src/lib/media";
 import type { DownloadTarget, PhotoStorage, UploadTarget } from "../src/lib/storage";
@@ -166,6 +166,39 @@ export const testMediaSigner = () =>
     keyPairId: TEST_MEDIA.keyPairId,
     loadPrivateKey: async () => TEST_MEDIA.privateKey,
   });
+
+/**
+ * Checks a shared-image URL (7.4) the way CloudFront does: relative `path` + canned-policy query
+ * (Expires, Signature, Key-Pair-Id, Hash-Algorithm), signature over the canned policy for the
+ * full URL. Returns the expiry (epoch seconds).
+ */
+export function verifySignedUrl(url: string, path: string): number {
+  const parsed = new URL(url, TEST_MEDIA.origin);
+  expect(url.startsWith(`${path}?`)).toBe(true);
+  expect([...parsed.searchParams.keys()].sort()).toEqual(
+    ["Expires", "Hash-Algorithm", "Key-Pair-Id", "Signature"].sort(),
+  );
+  expect(parsed.searchParams.get("Key-Pair-Id")).toBe(TEST_MEDIA.keyPairId);
+  expect(parsed.searchParams.get("Hash-Algorithm")).toBe("SHA256");
+  const expires = Number(parsed.searchParams.get("Expires"));
+  const policy = JSON.stringify({
+    Statement: [
+      {
+        Resource: `${TEST_MEDIA.origin}${path}`,
+        Condition: { DateLessThan: { "AWS:EpochTime": expires } },
+      },
+    ],
+  });
+  // CloudFront's URL-safe base64: + → -, = → _, / → ~.
+  const signature = Buffer.from(
+    parsed.searchParams.get("Signature")!.replace(/-/g, "+").replace(/_/g, "=").replace(/~/g, "/"),
+    "base64",
+  );
+  expect(createVerify("RSA-SHA256").update(policy).verify(TEST_MEDIA.publicKey, signature)).toBe(
+    true,
+  );
+  return expires;
+}
 
 export const TEST_UPLOAD_URL = "https://photos.test.example/";
 export const TEST_DOWNLOAD_URL = "https://photos.test.example/download";

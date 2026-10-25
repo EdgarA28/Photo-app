@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-router";
 import { BookImage, Plus } from "lucide-react";
 import { useState } from "react";
+import { useImageFailed } from "@/components/useImageFailed";
 import { CreateAlbumDialog } from "@/albums/AlbumDialogs";
 import { sharedBy } from "@/albums/sharedBy";
 import { errorMessage } from "@/api/errors";
@@ -118,8 +119,7 @@ function SharedWithMe() {
 }
 
 function AlbumCard({ album, subtitle }: { album: Album; subtitle?: string }) {
-  // Until Phase 7 the cover's thumbnail path doesn't load: keep the placeholder.
-  const [broken, setBroken] = useState(false);
+  const [broken, onError] = useImageFailed(album.coverThumbUrl);
   return (
     <Link
       to="/albums/$albumId"
@@ -132,7 +132,7 @@ function AlbumCard({ album, subtitle }: { album: Album; subtitle?: string }) {
             src={album.coverThumbUrl}
             alt=""
             loading="lazy"
-            onError={() => setBroken(true)}
+            onError={onError}
             className="size-full object-cover transition-transform group-hover:scale-[1.02]"
           />
         ) : (

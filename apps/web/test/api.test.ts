@@ -15,6 +15,7 @@ describe("api routes (ARCHITECTURE §9)", () => {
     ["me.setUsername", () => api.me.setUsername("ana"), "PUT", "/me/username"],
     ["photos.list", () => api.photos.list({ sort: "taken-asc" }), "GET", "/photos"],
     ["photos.get", () => api.photos.get(P), "GET", `/photos/${P}`],
+    ["photos.get (shared, 7.4)", () => api.photos.get(P, A), "GET", `/photos/${P}`],
     [
       "photos.uploadUrl",
       () => api.photos.uploadUrl({ fileName: "a.jpg", contentType: "image/jpeg", sizeBytes: 1 }),
@@ -59,6 +60,15 @@ describe("api routes (ARCHITECTURE §9)", () => {
     expect(request).toHaveBeenLastCalledWith(
       "GET",
       `/photos/${P}/download-url`,
+      expect.objectContaining({ query: { albumId: A } }),
+    );
+  });
+
+  it("passes the shared album to the single photo (7.4)", async () => {
+    await api.photos.get(P, A);
+    expect(request).toHaveBeenLastCalledWith(
+      "GET",
+      `/photos/${P}`,
       expect.objectContaining({ query: { albumId: A } }),
     );
   });

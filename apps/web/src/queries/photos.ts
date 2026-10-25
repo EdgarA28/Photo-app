@@ -6,6 +6,7 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import type { Api } from "@/api/api";
+import { signedUrlRefreshInterval } from "./signedUrls";
 
 export interface GalleryFilter {
   album?: string | undefined;
@@ -46,18 +47,34 @@ export const galleryQuery = (api: Api, { album, sort }: GalleryFilter) =>
         : api.photos.list({ sort, cursor: pageParam }, { signal }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
-    // Refetches every loaded page, so a finished photo gets its size, thumbnail and date position.
-    refetchInterval: (query) => processingPollInterval(query.state.data),
+    // Refetches every loaded page, so a finished photo gets its size, thumbnail and date position,
+    // and a shared album's signed URLs are renewed before they expire.
+    refetchInterval: ({ state: { data } }) =>
+      processingPollInterval(data) ||
+      signedUrlRefreshInterval(
+        data?.pages.flatMap((page) => page.items.flatMap((p) => [p.thumbUrl, p.previewUrl])) ?? [],
+      ),
   });
 
 const photoKey = (photoId: string) => ["photos", "one", photoId] as const;
 
-/** One own photo (`GET /photos/{id}`), for a viewer opened on a photo outside the loaded pages. */
-export const photoQuery = (api: Api, photoId: string) =>
+/**
+ * One photo (`GET /photos/{id}`): for a viewer opened outside the loaded pages, and for a shared
+ * album's photo, whose preview URL the album pages leave out (7.4). `album` is needed for photos
+ * of albums shared with me and ignored for own ones.
+ */
+export const photoQuery = (api: Api, photoId: string, album?: string) =>
   queryOptions({
-    queryKey: photoKey(photoId),
-    queryFn: ({ signal }) => api.photos.get(photoId, { signal }),
+    queryKey: [...photoKey(photoId), { album }],
+    queryFn: ({ signal }) => api.photos.get(photoId, album, { signal }),
+    // A shared photo's URLs are signed for 15 min.
+    refetchInterval: ({ state: { data } }) =>
+      signedUrlRefreshInterval([data?.thumbUrl ?? null, data?.previewUrl ?? null]),
   });
+
+/** A ready photo listed without a preview URL: a shared album's, to be fetched on its own (7.4). */
+export const needsOwnFetch = (photo: Photo | undefined) =>
+  photo?.status === "ready" && !photo.previewUrl;
 
 /**
  * After an upload reached S3 (8.10): the photo now exists as `pending`, so the gallery shows it as

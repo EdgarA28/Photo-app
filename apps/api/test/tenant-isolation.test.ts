@@ -133,6 +133,18 @@ const cases: Case[] = [
     missing: () => ({ as: w.bob, method: "GET", path: `/photos/${id()}` }),
   },
   {
+    route: "GET /api/photos/:photoId",
+    name: "stranger reads a photo through an album that isn't shared with her",
+    foreign: () => ({ as: w.mallory, method: "GET", path: `/photos/${w.p1}?albumId=${w.albumA}` }),
+    missing: () => ({ as: w.mallory, method: "GET", path: `/photos/${id()}?albumId=${id()}` }),
+  },
+  {
+    route: "GET /api/photos/:photoId",
+    name: "recipient reads a private photo through the shared album",
+    foreign: () => ({ as: w.bob, method: "GET", path: `/photos/${w.p2}?albumId=${w.albumA}` }),
+    missing: () => ({ as: w.bob, method: "GET", path: `/photos/${id()}?albumId=${w.albumA}` }),
+  },
+  {
     route: "GET /api/photos/:photoId/download-url",
     name: "stranger downloads a photo",
     foreign: () => ({ as: w.mallory, method: "GET", path: `/photos/${w.p1}/download-url` }),

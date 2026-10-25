@@ -1,6 +1,7 @@
 import {
   DOWNLOAD_URL_TTL_SECONDS,
   downloadUrlQuerySchema,
+  getPhotoQuerySchema,
   extensionFor,
   idSchema,
   listPhotosQuerySchema,
@@ -21,11 +22,11 @@ import { AppError, orNotFound } from "../lib/errors";
 import { validate } from "../lib/validation";
 import type { Deps } from ".";
 import { sharedPhoto } from "./access";
-import { toPhoto } from "./present";
+import { toPhoto, toSharedPhoto } from "./present";
 
 const photoParam = z.object({ photoId: idSchema });
 
-export function photoRoutes(app: Hono<AppEnv>, { repos, storage, config }: Deps): void {
+export function photoRoutes(app: Hono<AppEnv>, { repos, storage, media, config }: Deps): void {
   /**
    * Starts an upload (FR-UP-3/4/7, NFR-SEC-6): quota check, `pending` item, pre-signed POST for
    * `users/{sub}/originals/{photoId}.{ext}`. The bytes go straight to S3; the thumbnail Lambda
@@ -97,13 +98,26 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, config }: Deps)
     return c.json(body);
   });
 
-  /** One own photo. Other users' photos are 404 (NFR-SEC-2). */
-  app.get("/photos/:photoId", validate("param", photoParam), async (c) => {
-    const { photoId } = c.req.valid("param");
-    const record = orNotFound(await repos.photos.get(c.get("userId"), photoId), "Photo not found");
-    const body: Photo = toPhoto(record);
-    return c.json(body);
-  });
+  /**
+   * One own photo, or with `?albumId=` a photo of that album if it is shared with the caller
+   * (5.13 rule), with signed thumb and preview URLs (7.4). Anything else is 404 (NFR-SEC-2).
+   */
+  app.get(
+    "/photos/:photoId",
+    validate("param", photoParam),
+    validate("query", getPhotoQuerySchema),
+    async (c) => {
+      const userId = c.get("userId");
+      const { photoId } = c.req.valid("param");
+      const { albumId } = c.req.valid("query");
+      const own = await repos.photos.get(userId, photoId);
+      if (own) return c.json(toPhoto(own) satisfies Photo);
+      const shared = albumId ? await sharedPhoto(repos, userId, albumId, photoId) : null;
+      const record = orNotFound(shared, "Photo not found");
+      const body: Photo = await toSharedPhoto(record, media, new Date(), { preview: true });
+      return c.json(body);
+    },
+  );
 
   /**
    * Download of an original under its file name (FR-DL-1/2): 5-min pre-signed GET with
