@@ -175,6 +175,43 @@ describe("settings: logout (FR-AUTH-5)", () => {
     );
   });
 
+  it("deletes the service worker's thumbnail cache before ending the session (9.2)", async () => {
+    const { api } = setup();
+    const auth = fakeAuth({ signedIn: true });
+    const del = vi.fn(async () => true);
+    vi.stubGlobal("caches", { delete: del });
+    try {
+      await renderAt("/settings", { api, auth });
+      await screen.findByRole("meter");
+
+      fireEvent.click(screen.getByRole("button", { name: "Log out" }));
+      await waitFor(() => expect(auth.logout).toHaveBeenCalledOnce());
+      expect(del).toHaveBeenCalledExactlyOnceWith("thumbnails");
+      expect(del.mock.invocationCallOrder[0]!).toBeLessThan(
+        auth.logout.mock.invocationCallOrder[0]!,
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("still ends the session when deleting the thumbnail cache fails", async () => {
+    const { api } = setup();
+    const auth = fakeAuth({ signedIn: true });
+    vi.stubGlobal("caches", { delete: vi.fn(async () => Promise.reject(new Error("denied"))) });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await renderAt("/settings", { api, auth });
+      await screen.findByRole("meter");
+
+      fireEvent.click(screen.getByRole("button", { name: "Log out" }));
+      await waitFor(() => expect(auth.logout).toHaveBeenCalledOnce());
+    } finally {
+      vi.unstubAllGlobals();
+      warn.mockRestore();
+    }
+  });
+
   it("still ends the session when expiring the media cookies fails", async () => {
     const { api } = setup();
     const auth = fakeAuth({ signedIn: true });
