@@ -2,7 +2,7 @@ import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { ErrorResponse } from "oidc-client-ts";
 import { afterEach, describe, expect, it } from "vitest";
 import { ApiRequestError } from "../src/api/errors";
-import { fakeApi, fakeAuth, testConfig, testMe, testUser } from "./fakes";
+import { fakeApi, fakeAuth, testConfig, testUser } from "./fakes";
 import { defaultResponses, renderAt } from "./render";
 
 afterEach(cleanup);
@@ -160,13 +160,7 @@ describe("/auth/callback", () => {
 });
 
 describe("settings", () => {
-  it("shows the account from GET /me and logs out", async () => {
-    const { auth } = await renderAt("/settings");
-    expect(within(await screen.findByRole("main")).getByText(testMe.email)).toBeTruthy();
-    expect(screen.getByText("1.5 MB of 2.0 GB used · 3 photos")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Log out" }));
-    expect(auth.logout).toHaveBeenCalledOnce();
-  });
+  // The settings page itself (usage, username, logout): test/settings.test.tsx.
 
   it("shows API errors with a readable message", async () => {
     const api = fakeApi({
