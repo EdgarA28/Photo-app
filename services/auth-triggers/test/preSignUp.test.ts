@@ -207,6 +207,8 @@ describe("allowlist", () => {
     ["email/password", signUp("stranger@example.com")],
     ["Google", event({}, { email: "stranger@example.com" })],
     ["no email", event({}, { email: undefined })],
+    ["Google (listed but unverified)", event({}, { email_verified: "false" })],
+    ["Google (listed, verification missing)", event({}, { email_verified: undefined })],
   ])("refuses a %s sign-up for an email that isn't listed", async (_, input) => {
     const { directory, handler } = allowed([nativeUser()]);
 

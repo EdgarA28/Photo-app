@@ -44,8 +44,8 @@ export function parseAllowedEmails(value: string | undefined): ReadonlySet<strin
  * Pre sign-up trigger (spec §11.3): keeps one account per verified email.
  *
  * - With an allowlist, email/password and Google sign-ups for any other email are refused
- *   first. Email/password sign-ups still need the emailed code, so an allowed address can't be
- *   claimed by someone else.
+ *   first, and so are Google sign-ups whose email Google hasn't verified. Email/password
+ *   sign-ups still need the emailed code, so an allowed address can't be claimed by someone else.
  * - Google sign-up (`PreSignUp_ExternalProvider`) whose verified email belongs to exactly one
  *   confirmed native user: link the Google identity to that user (`AdminLinkProviderForUser`),
  *   so both sign-in methods give the same `sub` and the same photos (FR-AUTH-3).
@@ -61,8 +61,14 @@ export function createPreSignUpHandler(
 ) {
   return async function handler(event: PreSignUpEvent): Promise<PreSignUpEvent> {
     if (allowedEmails && SELF_SIGN_UPS.includes(event.triggerSource)) {
-      const email = normaliseEmail(event.request.userAttributes.email);
-      if (!email || !allowedEmails.has(email)) {
+      const attributes = event.request.userAttributes;
+      const email = normaliseEmail(attributes.email);
+      // A Google sign-up is never confirmed by our own code, so only an address Google verified
+      // proves it belongs to the person (email/password sign-ups still need the emailed code).
+      const unverifiedExternal =
+        event.triggerSource === "PreSignUp_ExternalProvider" &&
+        attributes.email_verified !== "true";
+      if (!email || !allowedEmails.has(email) || unverifiedExternal) {
         log("INFO", "Refused sign-up: email not on the allowlist", {
           triggerSource: event.triggerSource,
         });
