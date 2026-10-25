@@ -94,10 +94,17 @@ function LogoutButton() {
   const pending = useUploads().filter(isActive).length;
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
 
+  // auth.logout ends with a redirect; if even that fails, let the user try again.
   const run = () => {
     setBusy(true);
-    void logout({ auth, queryClient, uploads });
+    setFailed(false);
+    logout({ auth, queryClient, uploads }).catch(() => {
+      setBusy(false);
+      setFailed(true);
+      setConfirming(false);
+    });
   };
 
   return (
@@ -110,6 +117,11 @@ function LogoutButton() {
         <LogOut aria-hidden />
         {busy ? "Logging out…" : "Log out"}
       </Button>
+      {failed && (
+        <p role="alert" className="text-sm text-destructive">
+          Logging out didn't finish. Check your connection and try again.
+        </p>
+      )}
       <AlertDialog open={confirming} onOpenChange={(open) => !busy && setConfirming(open)}>
         <AlertDialogContent>
           <AlertDialogHeader>

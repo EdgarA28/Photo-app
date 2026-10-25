@@ -159,6 +159,37 @@ describe("settings: logout (FR-AUTH-5)", () => {
     expect(queryClient.getQueryData(["albums"])).toBeUndefined();
   });
 
+  it("still ends the session when clearing the device's data fails", async () => {
+    const { api } = setup();
+    const auth = fakeAuth({ signedIn: true });
+    const { queue } = testUploadQueue(api);
+    vi.spyOn(queue, "clear").mockRejectedValue(new DOMException("blocked", "UnknownError"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { router } = await renderAt("/settings", { api, auth, uploads: queue });
+    await screen.findByRole("meter");
+    const { queryClient } = router.options.context;
+    queryClient.setQueryData(["albums"], { items: [] });
+
+    fireEvent.click(screen.getByRole("button", { name: "Log out" }));
+    await waitFor(() => expect(auth.logout).toHaveBeenCalledOnce());
+    expect(queryClient.getQueryData(["albums"])).toBeUndefined();
+    warn.mockRestore();
+  });
+
+  it("lets the user try again if logging out fails", async () => {
+    const { api } = setup();
+    const auth = fakeAuth({ signedIn: true });
+    auth.logout.mockRejectedValueOnce(new Error("offline"));
+    await renderAt("/settings", { api, auth });
+    await screen.findByRole("meter");
+    fireEvent.click(screen.getByRole("button", { name: "Log out" }));
+    expect((await screen.findByRole("alert")).textContent).toMatch(/didn't finish/);
+    const button = screen.getByRole("button", { name: "Log out" });
+    expect(button).toHaveProperty("disabled", false);
+    fireEvent.click(button);
+    await waitFor(() => expect(auth.logout).toHaveBeenCalledTimes(2));
+  });
+
   it("asks first when uploads haven't finished, and Keep uploading keeps them", async () => {
     const { api } = setup({
       "POST /photos/upload-url": {
