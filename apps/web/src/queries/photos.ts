@@ -46,10 +46,12 @@ export function processingPollInterval(
 export const galleryQuery = (api: Api, { album, sort }: GalleryFilter) =>
   infiniteQueryOptions({
     queryKey: album ? ["photos", { album }] : ["photos", { sort }],
+    // `?? undefined`: a list restored from the saved cache (9.3) has `null` for the first page,
+    // since JSON can't store `undefined`; sent as `?cursor=null`, the API answers 400.
     queryFn: ({ pageParam, signal }) =>
       album
-        ? api.albums.photos(album, { cursor: pageParam }, { signal })
-        : api.photos.list({ sort, cursor: pageParam }, { signal }),
+        ? api.albums.photos(album, { cursor: pageParam ?? undefined }, { signal })
+        : api.photos.list({ sort, cursor: pageParam ?? undefined }, { signal }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
     // Refetches every loaded page, so a finished photo gets its size, thumbnail and date position,

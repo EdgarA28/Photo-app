@@ -20,7 +20,9 @@ export const sharesQuery = (api: Api, albumId: string) =>
 export const sharedAlbumsQuery = (api: Api) =>
   infiniteQueryOptions({
     queryKey: ["shared-albums"],
-    queryFn: ({ pageParam, signal }) => api.sharedAlbums.list({ cursor: pageParam }, { signal }),
+    // `?? undefined`: restored from the saved cache (9.3) the first page's param is `null`.
+    queryFn: ({ pageParam, signal }) =>
+      api.sharedAlbums.list({ cursor: pageParam ?? undefined }, { signal }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
     // Covers are signed URLs (7.4).

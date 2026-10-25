@@ -163,6 +163,33 @@ describe("offline start (9.3, FR-PWA-2)", () => {
     expect(request.mock.calls.filter(([, path]) => path === "/photos")).toEqual([]);
   });
 
+  it("refetches a restored list from the first page, without a cursor", async () => {
+    const storage = createIdbKeyValue(new IDBFactory());
+    const persisted = (queryClient: QueryClient) =>
+      createPersistedQueryCache(queryClient, { storage, throttleTime: 0 });
+    await renderAt("/gallery", {
+      api: fakeApi({ ...defaultResponses, "GET /photos": testPhotoPage(0, 2) }).api,
+      persistedCache: persisted,
+    });
+    await screen.findByRole("link", { name: "IMG_1.jpg" });
+    await vi.waitFor(async () => expect(await storage.getItem("query-client")).toBeTruthy());
+    cleanup();
+
+    // Restart after the saved list went stale (staleTime 10 min), so it refetches. The first
+    // page's param is `undefined`, which JSON stores as `null`: sent as `?cursor=null` → 400.
+    const later = Date.now() + 11 * 60 * 1000;
+    vi.spyOn(Date, "now").mockReturnValue(later);
+    const { api, request } = fakeApi({ ...defaultResponses, "GET /photos": testPhotoPage(0, 2) });
+    await renderAt("/gallery", { api, persistedCache: persisted });
+    await vi.waitFor(() =>
+      expect(request.mock.calls.filter(([, path]) => path === "/photos").length).toBeGreaterThan(0),
+    );
+    for (const [, path, options] of request.mock.calls) {
+      if (path === "/photos") expect(options?.query?.cursor).toBeUndefined();
+    }
+    vi.restoreAllMocks();
+  });
+
   it("shows the error page when offline without a stored session", async () => {
     const auth = fakeAuth();
     auth.getUser.mockRejectedValue(offline());
