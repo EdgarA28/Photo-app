@@ -45,3 +45,15 @@ output "api_endpoint" {
 output "api_function_name" {
   value = module.api.function_name
 }
+
+output "app_url" {
+  value = module.frontend.url
+}
+
+output "cloudfront_distribution_id" {
+  value = module.frontend.distribution_id
+}
+
+output "site_bucket_name" {
+  value = module.frontend.site_bucket_name
+}

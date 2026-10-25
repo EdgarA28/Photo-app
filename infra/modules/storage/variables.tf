@@ -25,3 +25,9 @@ variable "force_destroy" {
   type        = bool
   default     = false
 }
+
+variable "cloudfront_distribution_arn" {
+  description = "CloudFront distribution allowed to read thumbs/ and previews/ through OAC (frontend module). null = none."
+  type        = string
+  default     = null
+}

@@ -1,5 +1,9 @@
 locals {
   environment = "dev"
+
+  # The CloudFront origin (7.5) is added to the configured ones (localhost in dev): Cognito callback
+  # and sign-out URLs, S3 CORS for direct uploads. Configured origins stay first (login_url output).
+  app_origins = concat(var.app_origins, [module.frontend.url])
 }
 
 # Disposable environment: no deletion protection, bucket can be destroyed with contents.
@@ -15,16 +19,19 @@ module "storage" {
   source = "../../modules/storage"
 
   environment          = local.environment
-  cors_allowed_origins = var.app_origins
+  cors_allowed_origins = local.app_origins
   versioning           = false
   force_destroy        = true
+
+  # OAC read access to thumbs/ and previews/ (7.1).
+  cloudfront_distribution_arn = module.frontend.distribution_arn
 }
 
 module "auth" {
   source = "../../modules/auth"
 
   environment         = local.environment
-  app_origins         = var.app_origins
+  app_origins         = local.app_origins
   deletion_protection = false
 
   google_client_id     = var.google_client_id
@@ -64,4 +71,13 @@ module "api" {
 
   # FR-ACC-2, spec §13.2: 2 GB in dev.
   default_quota_bytes = 2 * 1024 * 1024 * 1024
+}
+
+module "frontend" {
+  source = "../../modules/frontend"
+
+  environment                       = local.environment
+  photo_bucket_regional_domain_name = module.storage.bucket_regional_domain_name
+  api_endpoint                      = module.api.api_endpoint
+  force_destroy                     = true
 }

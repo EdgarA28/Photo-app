@@ -9,7 +9,7 @@
 
 | | |
 |---|---|
-| **Last updated** | 2026-10-19 |
+| **Last updated** | 2026-10-25 |
 | **Reflects** | Phase 0 (repo), Phase 1 (AWS bootstrap: dev + management), Phase 2 (`packages/shared`), Phase 3 (database + storage, deployed in dev), Phase 5.1–5.3 (API skeleton, not deployed), Phase 6.1–6.7 (thumbnail code, not deployed) |
 
 ---
@@ -49,7 +49,7 @@
 | Infra module: auth | `infra/modules/auth` | ✅ (dev) | User pool, prefix domain (managed login), PKCE web client (4.1), optional Google IdP (4.4), optional pre sign-up trigger Lambda (4.6) + 11 offline test runs; **deployed in dev** (with Google + trigger) |
 | Infra module: thumbnails | `infra/modules/thumbnails` | ✅ (dev) | Lambda, IAM, S3 notification, retries + SQS DLQ, logs (6.9) + 4 offline test runs; **deployed in dev** |
 | Infra module: api | `infra/modules/api` | ✅ (dev) | HTTP API, Cognito JWT authorizer, API Lambda, IAM, throttling, access + Lambda logs (5.4) + 5 offline test runs; **deployed in dev** |
-| Infra module: frontend | `infra/modules/frontend` | 📋 | |
+| Infra module: frontend | `infra/modules/frontend` | 🚧 (dev) | 7.1: site bucket, CloudFront (OAC, `/api/*`, `/users/*`, SPA rewrite function) + 5 offline test runs + function unit tests; **deployed in dev**. Signed cookies on `/users/*` (7.2/7.3) not yet: thumbs/previews are readable by URL until then |
 | API Lambda | `apps/api` | 🚧 | Skeleton (5.1–5.3) + routes `GET /me`, `POST /photos/upload-url` (incl. retry), `GET /photos`, `GET /photos/{id}`, `GET /photos/{id}/download-url`, `DELETE /photos/{id}`, album CRUD, album photos, sharing, recipient read access and usernames (5.5, 5.6, 5.6a/b, 5.7–5.13, 5.15); 223 tests (incl. DynamoDB Local). Media cookies and signed URLs (Phase 7) not yet; **deployed in dev** behind API Gateway (5.4), checked with a real access token |
 | Thumbnail Lambda | `services/thumbnails` | 🚧 | Handler, image pipeline, S3-key mirror, orphan cleanup + 76 pytest tests (6.1–6.7, 6.12); arm64 package `build.sh` → `dist/` (6.8); not deployed yet (6.9–6.10) |
 | Auth trigger Lambda | `services/auth-triggers` | ✅ (dev) | Pre sign-up handler (Google → native account linking, refuses duplicate email sign-ups) + 24 tests (4.5); **deployed in dev** (4.6), linking verified manually |
@@ -71,7 +71,7 @@ flowchart LR
   end
 
   subgraph Edge
-    CF["📋 CloudFront"]
+    CF["🚧 CloudFront (dev)<br/>signed cookies 📋"]
   end
 
   subgraph AWS["AWS us-east-1 (per environment account)"]
@@ -80,7 +80,7 @@ flowchart LR
     APIGW["✅ API Gateway HTTP API (dev)<br/>JWT authorizer"]
     API["✅ API Lambda (Hono, dev)<br/>apps/api"]
     DDB[("✅ DynamoDB<br/>single table (dev)")]
-    WEB[("📋 S3 site bucket")]
+    WEB[("✅ S3 site bucket (dev)")]
     S3[("✅ S3 photo bucket (dev)")]
     THUMB["✅ Thumbnail Lambda (dev)<br/>services/thumbnails"]
     DLQ[["✅ SQS DLQ (dev)"]]
@@ -321,7 +321,7 @@ Photo-app/
 │       ├── auth/                ✅ Cognito user pool, domain, web client, Google IdP, pre sign-up trigger (+ tests/)
 │       ├── thumbnails/          ✅ thumbnail Lambda, IAM, S3 notification, DLQ (+ tests/)
 │       ├── api/                 ✅ HTTP API, JWT authorizer, API Lambda, IAM, throttling (+ tests/)
-│       └── frontend/            📋
+│       └── frontend/            🚧 site bucket, CloudFront, SPA rewrite function (functions/ + tests/)
 │
 └── .github/workflows/           📋 ci.yml, deploy.yml
 ```
@@ -710,10 +710,10 @@ Failure paths: corrupt/unsupported → `status: failed`, no retry; transient →
 | Measured locally | 12 MP JPEG 0.3 s, WebP 0.5 s, PNG 0.6 s, HEIC 1.0 s (x86 laptop) |
 | Measured on Lambda (6.10, dev, arm64 1536 MB) | Real pre-signed POST upload, 12 MP test photos with noise (harder to compress than camera output): JPEG 9.7 MB, cold start: init 0.44 s + processing 1.48 s, **ready 3.3 s after the upload finished**; HEIC 13.7 MB, warm: processing 2.74 s, **ready 3.8 s**. Peak memory ~350 MB. The rest (~1 s) is S3 → Lambda event delivery (+ 100 ms polling). Two samples, not a p95. HEIC is the slow path (~2.7× slower than on the laptop): a cold-start HEIC lands near 4.3 s, and larger HEICs (e.g. 48 MP) would exceed 5 s; levers if needed: more memory (= CPU), or preview-first. Thumb ~8 KB, preview ~510 KB; both `image/jpeg`, immutable cache header, `STANDARD`. Usage after both: `bytesUsed` = `bytesReserved` = sum of originals, `photoCount` 2 |
 
-### 10.3 Viewing 🚧 (API ✅, CloudFront 📋)
+### 10.3 Viewing 🚧 (API ✅, CloudFront 🚧 dev, media cookie 📋)
 
 1. ✅ `GET /api/photos?cursor&limit&sort` returns `Photo` metadata (with `width`/`height` so tiles reserve space) and own image paths once `ready`.
-2. 📋 Own images load from CloudFront `/users/{sub}/thumbs|previews/{photoId}.jpg`, authorised by the media cookie, cached at the edge and by the service worker (thumbs only).
+2. 🚧 Own images load from CloudFront `/users/{sub}/thumbs|previews/{photoId}.jpg` (✅ behavior + OAC in dev, 7.1), authorised by the media cookie (📋 7.2/7.3; until then readable by URL), cached at the edge and by the service worker (thumbs only).
 3. Images from albums shared with me come back as per-image CloudFront signed URLs (15 min).
 
 ### 10.4 Download ✅ (API, not deployed)
@@ -761,7 +761,7 @@ Bootstrap uses local state per workspace instead of S3.
 | Tenant isolation (NFR-SEC-1/2) | ✅ code | ✅ `requireUser` takes the user ID only from the authorizer's JWT `sub` (must be a lowercase UUID, else 401); ✅ repositories key every user-owned lookup by that ID, so foreign items read as missing and `orNotFound` → 404; ✅ pagination cursors are bound to the caller's partition; ✅ route tests show other users' photos and albums give the same 404 as missing ones on every implemented route (`/photos/{id}`, its download URL and delete, uploads only ever under the caller's own prefix and quota, all album routes, foreign photos in add-to-album, share management by recipients and strangers, recipients outside their shared albums and after revocation) and foreign cursors are rejected. ✅ **Suite** `test/tenant-isolation.test.ts` (5.14): 28 cases over all 12 routes that take resource IDs (the other 7 are exempt: no IDs, caller-only data), for a stranger and for a share recipient outside his read-only access; each foreign request must return the **identical** status and body as the same request with non-existent IDs (no existence oracle); list routes return only the caller's data; foreign cursors → 400 on all three paginated routes; a final snapshot proves nothing changed and no S3 object was signed or deleted. The suite fails when a registered route has neither a case nor an explicit exemption (checked against `app.routes`). Verified by reintroducing two bugs (missing owner check on revoke; the old cover-membership oracle): both caught |
 | Private photo bucket (NFR-SEC-3/4) | ✅ (dev) | Public access block, ACLs off, SSE-S3, TLS-only policy, CORS limited to app origins |
 | Data deletion guard | ✅ code (prod settings) | Table deletion protection + no `force_destroy` by default; only dev opts out |
-| CloudFront OAC / signed URLs (NFR-SEC-3) | 📋 | Phase 7 |
+| CloudFront OAC / signed URLs (NFR-SEC-3) | 🚧 (dev) | ✅ Both buckets private, read only by this distribution via OAC (`AWS:SourceArn`); photo bucket grants thumbs/previews only. 📋 Signed cookies/URLs (7.2–7.4): until then `/users/*` derived images are readable by anyone who knows the URL (dev only, test data) |
 | Web login (§11) | ✅ code | Authorization code + PKCE S256, no client secret; `state` per login in sessionStorage (no forged or replayed callbacks); post-login redirect limited to app paths (no open redirect); refresh token is the only token in localStorage, access/ID tokens in memory (spec §11.4 option A); refresh token revoked on logout. XSS on our origin could still read the refresh token: React escaping now, CSP on CloudFront in Phase 7 |
 | Metadata stripping on derived images (NFR-SEC-5) | ✅ code | Output JPEGs carry pixels only (no EXIF/GPS/XMP/ICC); tested for JPEG, PNG, WebP and HEIF sources |
 | Decompression-bomb / size limits | ✅ code | Thumbnail Lambda rejects sources > 50 MB or > 100 MP as permanent failures |
@@ -805,9 +805,9 @@ Tags on everything: `Project=photo-app`, `Environment=<ws>`, `ManagedBy=opentofu
 |---|---|
 | `versions.tf` | OpenTofu ≥ 1.10, AWS `~> 6.0`, S3 backend: bucket `photo-app-tfstate-<acct>`, key `<env>/terraform.tfstate`, `use_lockfile = true`, `encrypt = true` |
 | `providers.tf` | region var (default `us-east-1`), `allowed_account_ids`, default tags (`Project`, `Environment`, `ManagedBy`); credentials from `AWS_PROFILE` locally / OIDC in CI |
-| `variables.tf` | `region`; `app_origins` (web app origins → S3 CORS, Cognito callback + sign-out URLs); `google_client_id` (in `env.tfvars`); `google_client_secret` (sensitive, `TF_VAR_google_client_secret`; locally `source ~/.config/photo-app/dev.env`) |
-| `main.tf` | `module "database"`, `module "storage"`, `module "auth"` with per-env settings (below); `auth` gets `pre_sign_up_source_dir = services/auth-triggers/dist`, so run `pnpm build` before planning |
-| `outputs.tf` | `table_name`, `photo_bucket_name`, `user_pool_id`, `web_client_id`, `cognito_domain_url`, `google_redirect_uri`, `login_url`, `pre_sign_up_function_name`, `thumbnails_function_name`, `thumbnails_dlq_url`, `api_endpoint`, `api_function_name` |
+| `variables.tf` | `region`; `app_origins` (configured web app origins; `main.tf` appends the CloudFront URL as `local.app_origins` → S3 CORS, Cognito callback + sign-out URLs, 7.5); `google_client_id` (in `env.tfvars`); `google_client_secret` (sensitive, `TF_VAR_google_client_secret`; locally `source ~/.config/photo-app/dev.env`) |
+| `main.tf` | `module "database"`, `module "storage"`, `module "auth"`, `module "thumbnails"`, `module "api"`, `module "frontend"` (its `distribution_arn` feeds `storage.cloudfront_distribution_arn`) with per-env settings (below); `auth` gets `pre_sign_up_source_dir = services/auth-triggers/dist`, so run `pnpm build` before planning |
+| `outputs.tf` | `table_name`, `photo_bucket_name`, `user_pool_id`, `web_client_id`, `cognito_domain_url`, `google_redirect_uri`, `login_url`, `pre_sign_up_function_name`, `thumbnails_function_name`, `thumbnails_dlq_url`, `api_endpoint`, `api_function_name`, `app_url`, `cloudfront_distribution_id`, `site_bucket_name` |
 | `env.tfvars` | Non-secret settings, committed. Run with `-var-file=env.tfvars` |
 
 | Setting | dev | prod |
@@ -818,15 +818,16 @@ Tags on everything: `Project=photo-app`, `Environment=<ws>`, `ManagedBy=opentofu
 | Photo bucket | `photo-app-photos-dev-063359189013` | `photo-app-photos-prod-968632140314` |
 | Bucket versioning | off (`Suspended`) | on, previous versions expire after 30 d |
 | `force_destroy` | on (disposable) | off |
-| `app_origins` | `http://localhost:5173` | placeholder until the domain is chosen (D-4) |
+| `app_origins` | `http://localhost:5173` + CloudFront `https://dopqu53s0gzhf.cloudfront.net` (automatic) | placeholder until the domain is chosen (D-4) |
 | User pool | `photo-app-dev`, deletion protection off | `photo-app-prod`, deletion protection on |
 | Cognito domain | `photo-app-dev-063359189013` | `photo-app-prod-968632140314` |
 | Google sign-in | on: client `1093239771558-h98qa…apps.googleusercontent.com` (testing mode) | off until 11.3 |
 | Pre sign-up trigger | `photo-app-dev-pre-sign-up` | `photo-app-prod-pre-sign-up` (not applied) |
 | Thumbnail Lambda + DLQ | `photo-app-dev-thumbnails`, `photo-app-dev-thumbnails-dlq` | `photo-app-prod-thumbnails` (not applied) |
 | API | `photo-app-dev-api`, endpoint `https://tnl6uhgwkg.execute-api.us-east-1.amazonaws.com`, quota 2 GB | `photo-app-prod-api`, quota 10 GB (not applied) |
+| Frontend | site bucket `photo-app-site-dev-063359189013`, distribution `E1TPVGEAUNF8HT` → `https://dopqu53s0gzhf.cloudfront.net`, `force_destroy` on | `photo-app-site-prod-968632140314`, `force_destroy` off (not applied) |
 
-dev: **deployed 2026-10-19** (9 resources) + auth **2026-10-23** (4 resources: pool `us-east-1_vYJcHEj4G`, client `jkfonk4j32kup18bl98jqkr67`, domain `https://photo-app-dev-063359189013.auth.us-east-1.amazoncognito.com`) + pre sign-up trigger **2026-10-24** (5 resources, pool updated in place) + thumbnails **2026-10-24** (8 resources) + api **2026-10-24** (12 resources); test resources, destroyed when testing is done. prod: validated with `-backend=false` only.
+dev: **deployed 2026-10-19** (9 resources) + auth **2026-10-23** (4 resources: pool `us-east-1_vYJcHEj4G`, client `jkfonk4j32kup18bl98jqkr67`, domain `https://photo-app-dev-063359189013.auth.us-east-1.amazoncognito.com`) + pre sign-up trigger **2026-10-24** (5 resources, pool updated in place) + thumbnails **2026-10-24** (8 resources) + api **2026-10-24** (12 resources) + frontend **2026-10-25** (8 resources, photo bucket policy updated in place); test resources, destroyed when testing is done. prod: validated with `-backend=false` only.
 
 ### 12.3 Modules — `infra/modules`
 
@@ -852,11 +853,11 @@ Tests: on-demand + key schema + GSI1; safe defaults; PITR when requested.
 | `aws_s3_bucket_versioning.photos` | `Enabled` or `Suspended` |
 | `aws_s3_bucket_lifecycle_configuration.photos` | abort incomplete multipart after 2 d; with versioning: expire noncurrent versions after N days + clean expired delete markers |
 | `aws_s3_bucket_cors_configuration.photos` | origins = `cors_allowed_origins`; methods POST/GET/HEAD; headers `*`; expose `ETag`; max age 1 h |
-| `aws_s3_bucket_policy.photos` | deny non-TLS (CloudFront OAC statement added in Phase 7) |
+| `aws_s3_bucket_policy.photos` | deny non-TLS; with `cloudfront_distribution_arn`: `s3:GetObject` for `cloudfront.amazonaws.com` on `users/*/thumbs/*` and `users/*/previews/*` only, `AWS:SourceArn` = that distribution (originals never through CloudFront, FR-DL-1) |
 
-Inputs: `environment`, `cors_allowed_origins`, `versioning` (false), `noncurrent_version_expiration_days` (30), `force_destroy` (false). Outputs: `bucket_name`, `bucket_arn`, `bucket_regional_domain_name`.
-Tests: name format, private + encrypted, `force_destroy` default, CORS origins/methods, versioning off/on with matching lifecycle rules.
-Not here by design: the S3 → Lambda event notification (one per bucket; `thumbnails` module) and CloudFront read access (Phase 7).
+Inputs: `environment`, `cors_allowed_origins`, `versioning` (false), `noncurrent_version_expiration_days` (30), `force_destroy` (false), `cloudfront_distribution_arn` (null = no CloudFront access). Outputs: `bucket_name`, `bucket_arn`, `bucket_regional_domain_name`.
+Tests: name format, private + encrypted, `force_destroy` default, CORS origins/methods, versioning off/on with matching lifecycle rules, no CloudFront statement by default, CloudFront grant limited to thumbs/previews + `GetObject` + source ARN.
+Not here by design: the S3 → Lambda event notification (one per bucket; `thumbnails` module).
 
 **`auth` ✅** (4.1, 4.4, 4.6; deployed in dev)
 
@@ -918,11 +919,21 @@ Inputs: `environment`, `source_dir`, `table_name`/`table_arn`, `bucket_name`/`bu
 Tests: runtime/arch/handler, every env var `config.ts` needs, log retention + JSON, authorizer issuer/audience, protected proxy route with `openid` scope, public health route only, invoke permission scope, throttling, IAM per statement (no `Scan`/table actions, originals-only signing, delete scope, `ListUsers` on the pool), quota validation.
 Verified in dev (2026-10-24) with a real access token from the hosted login (code exchanged at `/oauth2/token`): `GET /api/health` 200; no / garbage / forged token 401; ID token 403; `GET /api/me` 200 (profile + usage, 2 GB quota); `POST /api/photos/upload-url` 201 → S3 POST 204 → `ready` 3.2 s later (thumb/preview paths in the response); download URL 200 with the identical bytes and `Content-Disposition: attachment`; download of a `pending` photo 409; `DELETE` 204 → 404, Usage back to 0, no objects left. Lambda 5–200 ms per request, 146 MB.
 
-**Planned 📋**
+**`frontend` 🚧** (7.1; deployed in dev)
 
-| Module | Will contain |
+| Resource | Detail |
 |---|---|
-| `frontend` | Site bucket, CloudFront (OAC, behaviors, SPA fallback), key group, ACM, optional WAF |
+| `aws_s3_bucket.site` | `photo-app-site-{env}-{account-id}`, the built web app; `force_destroy` from input (default false); no versioning (build output) |
+| `aws_s3_bucket_ownership_controls.site` / `_public_access_block.site` / `_server_side_encryption_configuration.site` | ACLs off, all four blocks, AES256 (NFR-SEC-3/4) |
+| `aws_s3_bucket_policy.site` | deny non-TLS; `s3:GetObject` for `cloudfront.amazonaws.com` with `AWS:SourceArn` = this distribution |
+| `aws_cloudfront_origin_access_control.s3` | `photo-app-{env}-s3`, S3, SigV4, always sign; shared by both bucket origins |
+| `aws_cloudfront_function.spa_rewrite` | `photo-app-{env}-spa-rewrite`, `cloudfront-js-2.0`, code `functions/spa-rewrite.js`: viewer request, last path segment without a dot → `/index.html` (query string kept) |
+| `aws_cloudfront_distribution.main` | Origins `site` (OAC), `photos` (OAC), `api` (execute-api host, HTTPS only, TLS 1.2). Behaviors in order: `/api/*` → api, all 7 methods, `Managed-CachingDisabled` + `Managed-AllViewerExceptHostHeader` (API Gateway needs its own Host); `/users/*` → photos, GET/HEAD, `Managed-CachingOptimized` (URL path = S3 key); default → site, GET/HEAD, `Managed-CachingOptimized`, SPA rewrite on viewer request. All: redirect to HTTPS, compression, `Managed-SecurityHeadersPolicy`. `index.html` root object, HTTP/2+3, IPv6, `PriceClass_100` (input), default `*.cloudfront.net` cert. **No custom error responses** (see §15) |
+
+Inputs: `environment`, `photo_bucket_regional_domain_name`, `api_endpoint`, `price_class` (`PriceClass_100`), `force_destroy` (false). Outputs: `distribution_id`, `distribution_arn` (→ `storage.cloudfront_distribution_arn`), `domain_name`, `url`, `site_bucket_name`.
+Tests: site bucket name/private/encrypted/`force_destroy` default; exactly the three origins (API host without scheme, HTTPS only); behavior order, API uncached with all methods, `/users/*` read-only, HTTPS everywhere; rewrite only on the default behavior and no distribution-wide error responses; site bucket trusts only this distribution. `functions/spa-rewrite.test.mjs` (`node --test`, part of `pnpm test:infra`): app routes → `/index.html`, files unchanged, rest of the request kept.
+Verified in dev (2026-10-25, web build uploaded by hand with §14.2 `Cache-Control`): `/`, `/gallery`, `/photos/…?album=&sort=`, `/auth/callback?code=` → 200 `index.html`; `/assets/index-….js` 200; missing asset 403 (XML, not HTML); `/api/health` 200; `/api/photos` without token 401 JSON; `http://` → 301; HSTS/nosniff/`X-Frame-Options` present. `/users/{sub}/thumbs|previews/…` → **200 without any credentials** (expected until 7.2); `/users/{sub}/originals/…` → 403. 7.5 (2026-10-25): Cognito redirects the CloudFront callback to login, other origins get `redirect_mismatch`; S3 upload preflight from the CloudFront origin 200.
+Still to come: key group + `trusted_key_groups` on `/users/*` (7.2), ACM cert + custom domain (11.1), WAF (11.2), CSP header.
 
 ---
 
@@ -985,6 +996,7 @@ Target design: spec §12 (TanStack Router file routes with an authenticated layo
 | Budget | $5 and $20 alerts | One org-wide $5/month budget | Owner's decision |
 | TypeScript | latest | Pinned `~6.0` | typescript-eslint 8.x doesn't support TS 7 yet |
 | `ci-deploy` permissions | "deploy permissions" | `AdministratorAccess` for now | Resource set not known yet; task 12.6 |
+| SPA fallback (§13.1) | Custom error responses 403/404 → `/index.html`, 200 | CloudFront Function on the default behavior rewrites extension-less paths to `/index.html` | Error responses apply to the whole distribution: API 404s (NFR-SEC-2) and image 403s would become 200 + HTML. User's choice (2026-10-25) |
 | Account linking (§11.3) | Link Google to an existing native user | Also refuses an email/password sign-up whose email a Google user already has | The reverse link is impossible (the native user doesn't exist yet in pre sign-up); a second account would split photos and break sharing by that email (5.12 never guesses) |
 
 ---
@@ -1039,3 +1051,5 @@ Target design: spec §12 (TanStack Router file routes with an authenticated layo
 | 2026-10-24 | 6.9: `thumbnails` module (Lambda, IAM, S3 notification, async retries + SQS DLQ destination, logs) + tests; wired into both envs; deployed to dev, arm64 smoke invoke OK (§1, §2, §5, §10.2, §12.2, §12.3). |
 | 2026-10-24 | 6.8: thumbnail packaging `services/thumbnails/build.sh` (aarch64 wheels → `dist/`), root `build:py`; §5 tree, §6 Python row + commands, §10.2 package row. |
 | 2026-10-24 | 4.6: pre sign-up trigger in the `auth` module (`pre-sign-up.tf`: zip, Lambda, role/policy on the exact pool ARN, log group, permission; pool `lambda_config`), `archive` provider, env wiring + output; deployed to dev and linking verified (§10.1, §12.2, §12.3). Trigger `log.ts` now logs objects for the Lambda JSON log format. |
+| 2026-10-25 | 7.1: `frontend` module (site bucket, OAC, SPA rewrite CloudFront Function, distribution with `/api/*`, `/users/*`, default behaviors) + tests; `storage` OAC statement for thumbs/previews; dev wiring + outputs; `test:infra` runs function tests; deployed to dev and smoke-tested (§1, §2.1, §5, §10.3, §11, §12.2, §12.3, §15). |
+| 2026-10-25 | 7.5: envs append `module.frontend.url` to the app origins (Cognito callback/sign-out URLs, photo bucket CORS); applied to dev (§12.2, §12.3). |

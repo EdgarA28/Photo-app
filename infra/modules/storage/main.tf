@@ -5,7 +5,6 @@
 #
 # Owned elsewhere (one resource per bucket, so not here):
 #   - S3 event notification → thumbnails module (Phase 6)
-#   - CloudFront OAC read access → added to this bucket policy in Phase 7
 
 data "aws_caller_identity" "current" {}
 
@@ -121,6 +120,32 @@ data "aws_iam_policy_document" "photos" {
       test     = "Bool"
       variable = "aws:SecureTransport"
       values   = ["false"]
+    }
+  }
+
+  # CloudFront OAC (frontend module, 7.1) may read derived images only. Originals stay reachable
+  # only through 5-minute pre-signed download URLs (FR-DL-1), even though /users/* routes here.
+  dynamic "statement" {
+    for_each = var.cloudfront_distribution_arn == null ? [] : [var.cloudfront_distribution_arn]
+
+    content {
+      sid     = "CloudFrontReadDerivedImages"
+      actions = ["s3:GetObject"]
+      resources = [
+        "${aws_s3_bucket.photos.arn}/users/*/thumbs/*",
+        "${aws_s3_bucket.photos.arn}/users/*/previews/*",
+      ]
+
+      principals {
+        type        = "Service"
+        identifiers = ["cloudfront.amazonaws.com"]
+      }
+
+      condition {
+        test     = "StringEquals"
+        variable = "AWS:SourceArn"
+        values   = [statement.value]
+      }
     }
   }
 }

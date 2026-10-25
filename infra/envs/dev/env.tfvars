@@ -1,4 +1,4 @@
-# Non-secret settings for dev. Add the CloudFront origin in Phase 7.
+# Non-secret settings for dev. The CloudFront origin is added automatically (main.tf, 7.5).
 app_origins = ["http://localhost:5173"]
 
 # Google OAuth client "photo-app-dev (Cognito)" (4.3). The secret comes from TF_VAR_google_client_secret.

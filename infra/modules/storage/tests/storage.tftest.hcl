@@ -92,3 +92,38 @@ run "versioning_in_prod" {
     error_message = "With versioning, noncurrent versions must expire."
   }
 }
+
+run "no_cloudfront_access_by_default" {
+  command = plan
+
+  assert {
+    condition     = length(data.aws_iam_policy_document.photos.statement) == 1
+    error_message = "Without a distribution only the TLS deny applies."
+  }
+}
+
+run "cloudfront_reads_derived_images_only" {
+  command = plan
+
+  variables {
+    cloudfront_distribution_arn = "arn:aws:cloudfront::123456789012:distribution/EXAMPLE"
+  }
+
+  assert {
+    condition = toset(data.aws_iam_policy_document.photos.statement[1].resources) == toset([
+      "${aws_s3_bucket.photos.arn}/users/*/thumbs/*",
+      "${aws_s3_bucket.photos.arn}/users/*/previews/*",
+    ])
+    error_message = "CloudFront may read thumbs/ and previews/ only, never originals (FR-DL-1)."
+  }
+
+  assert {
+    condition     = data.aws_iam_policy_document.photos.statement[1].actions == toset(["s3:GetObject"])
+    error_message = "CloudFront needs GetObject only."
+  }
+
+  assert {
+    condition     = one(one(data.aws_iam_policy_document.photos.statement[1].condition).values) == "arn:aws:cloudfront::123456789012:distribution/EXAMPLE"
+    error_message = "Access must be limited to this distribution (AWS:SourceArn)."
+  }
+}
