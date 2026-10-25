@@ -20,3 +20,18 @@ output "url" {
 output "site_bucket_name" {
   value = aws_s3_bucket.site.bucket
 }
+
+output "media_key_pair_id" {
+  description = "Public key ID: the CloudFront-Key-Pair-Id the API signs with (7.3)."
+  value       = aws_cloudfront_public_key.media.id
+}
+
+output "media_private_key_parameter_name" {
+  description = "SSM SecureString holding the signing key (7.3)."
+  value       = aws_ssm_parameter.media_private_key.name
+}
+
+output "media_private_key_parameter_arn" {
+  description = "For the API's ssm:GetParameter grant (7.3)."
+  value       = aws_ssm_parameter.media_private_key.arn
+}

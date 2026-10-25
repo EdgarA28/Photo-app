@@ -7,8 +7,8 @@
 #               thumbs/ and previews/, never originals)
 #   /*        → site bucket via OAC, SPA rewrite function for app routes
 #
-# Not here yet: signed cookies on /users/* (key group, 7.2), custom domain + ACM cert (11.1),
-# WAF (11.2). Until 7.2, anyone who knows a thumbnail/preview URL can load it.
+# /users/* requires a signature from the media key (media-keys.tf, 7.2).
+# Not here yet: custom domain + ACM cert (11.1), WAF (11.2).
 
 data "aws_caller_identity" "current" {}
 
@@ -183,10 +183,12 @@ resource "aws_cloudfront_distribution" "main" {
 
   # URL path == S3 key (packages/shared/src/s3Keys.ts). Derived images are immutable
   # (Cache-Control set by the thumbnail Lambda), so they cache at the edge (NFR-PERF-4).
-  # TODO (7.2): trusted_key_groups → signed cookies required.
+  # CloudFront checks the signed cookie/URL before the cache: no valid signature → 403. The
+  # cookies are not in the cache key, so every user's images still cache.
   ordered_cache_behavior {
     path_pattern               = "/users/*"
     target_origin_id           = "photos"
+    trusted_key_groups         = [aws_cloudfront_key_group.media.id]
     viewer_protocol_policy     = "redirect-to-https"
     allowed_methods            = ["GET", "HEAD"]
     cached_methods             = ["GET", "HEAD"]

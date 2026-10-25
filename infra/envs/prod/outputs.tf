@@ -57,3 +57,7 @@ output "cloudfront_distribution_id" {
 output "site_bucket_name" {
   value = module.frontend.site_bucket_name
 }
+
+output "media_key_pair_id" {
+  value = module.frontend.media_key_pair_id
+}

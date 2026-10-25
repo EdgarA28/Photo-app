@@ -18,6 +18,12 @@ mock_provider "aws" {
     }
   }
 
+  mock_resource "aws_cloudfront_key_group" {
+    defaults = {
+      id = "test-key-group-id"
+    }
+  }
+
   mock_resource "aws_cloudfront_distribution" {
     defaults = {
       arn = "arn:aws:cloudfront::123456789012:distribution/EXAMPLE"
@@ -138,5 +144,41 @@ run "site_bucket_trusts_only_this_distribution" {
   assert {
     condition     = one(one(data.aws_iam_policy_document.site.statement[1].condition).values) == "arn:aws:cloudfront::123456789012:distribution/EXAMPLE"
     error_message = "Only this distribution may read the site bucket (AWS:SourceArn)."
+  }
+}
+
+run "users_require_signed_media" {
+  command = plan
+
+  assert {
+    condition     = one(aws_cloudfront_distribution.main.ordered_cache_behavior[1].trusted_key_groups) == aws_cloudfront_key_group.media.id
+    error_message = "/users/* must only serve requests signed with the media key (7.2)."
+  }
+
+  assert {
+    condition = alltrue([
+      length(coalesce(aws_cloudfront_distribution.main.ordered_cache_behavior[0].trusted_key_groups, [])) == 0,
+      length(coalesce(one(aws_cloudfront_distribution.main.default_cache_behavior).trusted_key_groups, [])) == 0,
+    ])
+    error_message = "The API and the site must not require signed cookies."
+  }
+
+  assert {
+    condition     = tls_private_key.media.algorithm == "RSA" && tls_private_key.media.rsa_bits == 2048
+    error_message = "CloudFront signed cookies/URLs need an RSA 2048 key."
+  }
+}
+
+run "private_key_is_a_secure_string" {
+  command = plan
+
+  assert {
+    condition     = aws_ssm_parameter.media_private_key.type == "SecureString"
+    error_message = "The signing key must be encrypted (SecureString)."
+  }
+
+  assert {
+    condition     = aws_ssm_parameter.media_private_key.name == "/photo-app/test/cloudfront/media-private-key"
+    error_message = "The parameter lives under /photo-app/<env>/."
   }
 }
