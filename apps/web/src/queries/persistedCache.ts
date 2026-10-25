@@ -120,6 +120,9 @@ export function createPersistedQueryCache(
             buster,
             maxAge: PERSIST_MAX_AGE_MS,
           });
+          // Shown at once (loaders take cached data as is), but refetched as soon as a page uses
+          // it: it may have changed on another device since it was saved, however recently.
+          await queryClient.invalidateQueries({ refetchType: "none" });
         } catch (error) {
           // Can't read IndexedDB (blocked, private mode): the app works, just not offline.
           console.warn("Restoring the saved query cache failed", error);

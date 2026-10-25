@@ -18,6 +18,9 @@ export function createQueryClient(): QueryClient {
         staleTime: STALE_TIME_MS,
         // Unused data stays in memory, and so in the saved cache, for a day (9.3).
         gcTime: QUERY_GC_TIME_MS,
+        // Coming back to the app (another app or tab, a phone woken up) refreshes what's on
+        // screen, fresh or not: photos may have been deleted or added on another device.
+        refetchOnWindowFocus: "always",
         // Retrying a 404 or a validation error can't help; network, 429 and 5xx can.
         retry: (failures, error) =>
           failures < 2 && (!(error instanceof ApiRequestError) || error.retryable),

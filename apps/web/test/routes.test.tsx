@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 import { ErrorResponse } from "oidc-client-ts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "../src/api/errors";
-import type { QueryClient } from "@tanstack/react-query";
+import { focusManager, onlineManager, type QueryClient } from "@tanstack/react-query";
 import { IDBFactory } from "fake-indexeddb";
 import { createIdbKeyValue, createPersistedQueryCache } from "../src/queries/persistedCache";
 import { fakeApi, fakeAuth, testConfig, testPhotoPage, testUser } from "./fakes";
@@ -156,11 +156,17 @@ describe("offline start (9.3, FR-PWA-2)", () => {
     // Restart offline: the token refresh fails, and so would every API call.
     const auth = fakeAuth({ signedIn: true });
     auth.getUser.mockRejectedValue(offline());
-    const { api, request } = fakeApi({});
-    const { router } = await renderAt("/gallery", { auth, api, persistedCache: persisted });
-    expect(router.state.location.pathname).toBe("/gallery");
-    expect(await screen.findByRole("link", { name: "IMG_1.jpg" })).toBeTruthy();
-    expect(request.mock.calls.filter(([, path]) => path === "/photos")).toEqual([]);
+    // The browser knows it's offline: Query pauses the refresh of the restored list.
+    onlineManager.setOnline(false);
+    try {
+      const { api, request } = fakeApi({});
+      const { router } = await renderAt("/gallery", { auth, api, persistedCache: persisted });
+      expect(router.state.location.pathname).toBe("/gallery");
+      expect(await screen.findByRole("link", { name: "IMG_1.jpg" })).toBeTruthy();
+      expect(request.mock.calls.filter(([, path]) => path === "/photos")).toEqual([]);
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 
   it("refetches a restored list from the first page, without a cursor", async () => {
@@ -188,6 +194,25 @@ describe("offline start (9.3, FR-PWA-2)", () => {
       if (path === "/photos") expect(options?.query?.cursor).toBeUndefined();
     }
     vi.restoreAllMocks();
+  });
+
+  it("shows a restored list at once, then refreshes it even if it was saved moments ago", async () => {
+    const storage = createIdbKeyValue(new IDBFactory());
+    const persisted = (queryClient: QueryClient) =>
+      createPersistedQueryCache(queryClient, { storage, throttleTime: 0 });
+    await renderAt("/gallery", {
+      api: fakeApi({ ...defaultResponses, "GET /photos": testPhotoPage(0, 2) }).api,
+      persistedCache: persisted,
+    });
+    await screen.findByRole("link", { name: "IMG_1.jpg" });
+    await vi.waitFor(async () => expect(await storage.getItem("query-client")).toBeTruthy());
+    cleanup();
+
+    // Photo 1 was deleted on another device in the meantime.
+    const { api, request } = fakeApi({ ...defaultResponses, "GET /photos": testPhotoPage(0, 1) });
+    await renderAt("/gallery", { api, persistedCache: persisted });
+    await vi.waitFor(() => expect(screen.queryByRole("link", { name: "IMG_1.jpg" })).toBeNull());
+    expect(request.mock.calls.some(([, path]) => path === "/photos")).toBe(true);
   });
 
   it("shows the error page when offline without a stored session", async () => {
@@ -303,5 +328,21 @@ describe("session and connection messages (8.14)", () => {
     act(() => void window.dispatchEvent(new Event("online")));
     await waitFor(() => expect(screen.queryByText(/You're offline/)).toBeNull());
     onLine.mockRestore();
+  });
+});
+
+describe("coming back to the app", () => {
+  it("refreshes the gallery, even when its data is still fresh", async () => {
+    const pages = [testPhotoPage(0, 2), testPhotoPage(0, 1)];
+    const { api, request } = fakeApi({ ...defaultResponses, "GET /photos": () => pages.shift() });
+    await renderAt("/gallery", { api });
+    await screen.findByRole("link", { name: "IMG_1.jpg" });
+
+    // Away (another app, another tab) while a photo is deleted elsewhere; then back.
+    act(() => focusManager.setFocused(false));
+    act(() => focusManager.setFocused(true));
+    await vi.waitFor(() => expect(screen.queryByRole("link", { name: "IMG_1.jpg" })).toBeNull());
+    expect(request.mock.calls.filter(([, path]) => path === "/photos")).toHaveLength(2);
+    focusManager.setFocused(undefined);
   });
 });
