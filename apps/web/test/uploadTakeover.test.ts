@@ -124,23 +124,31 @@ async function twoWindows({ aHangs = false, bVisible = true } = {}) {
   const apiB = uploadApi();
   const postA = vi.fn<PostToS3>(async () => {});
   const postB = vi.fn<PostToS3>(async () => {});
+  let bIds = 0;
+  const uploadedA = vi.fn();
+  const uploadedB = vi.fn();
   const common = { store, locks: locks as unknown as LockManager, now: () => clock };
   const queueA = testUploadQueue(apiA.api, {
     ...common,
     createChannel: () => a.channel,
     isVisible: () => visible.a,
     post: postA,
+    onUploaded: uploadedA,
   }).queue;
   const queueB = testUploadQueue(apiB.api, {
     ...common,
     createChannel: () => b.channel,
     isVisible: () => visible.b,
     post: postB,
-    newId: () => "from-b",
+    onUploaded: uploadedB,
+    newId: () => `from-b-${++bIds}`,
   }).queue;
   await queueA.start(USER);
   await queueB.start(USER);
-  return { locks, store, a, b, visible, apiA, apiB, postA, postB, queueA, queueB };
+  return {
+    ...{ locks, store, a, b, visible, apiA, apiB, postA, postB, queueA, queueB },
+    ...{ uploadedA, uploadedB },
+  };
 }
 
 describe("upload queue across windows: takeover (§12.4, FR-UP-5)", () => {
@@ -239,5 +247,28 @@ describe("upload queue across windows: takeover (§12.4, FR-UP-5)", () => {
     await w.queueA.add([testFile("IMG_2.jpg")]);
     await vi.waitFor(() => expect(w.apiB.uploadUrl).toHaveBeenCalledTimes(2));
     expect(w.apiA.uploadUrl).toHaveBeenCalledOnce();
+  });
+});
+
+describe("upload queue across windows: refresh (§12.4)", () => {
+  it("a window that didn't upload refreshes its gallery when another one finishes", async () => {
+    const w = await twoWindows();
+    // Picked in B (the one on screen), uploaded by A (holding the lock, e.g. a background tab).
+    await w.queueB.add([testFile("IMG_1.jpg")]);
+    await vi.waitFor(() => expect(statuses(w.queueB)).toEqual(["done"]));
+    expect(w.apiA.uploadUrl).toHaveBeenCalledOnce();
+    expect(w.uploadedA).toHaveBeenCalledOnce();
+    expect(w.uploadedB).toHaveBeenCalledOnce();
+  });
+
+  it("doesn't refresh again for uploads it already knew were done", async () => {
+    const w = await twoWindows();
+    await w.queueB.add([testFile("IMG_1.jpg")]);
+    await vi.waitFor(() => expect(w.uploadedB).toHaveBeenCalledOnce());
+    // Unrelated changes (another file added and removed) reload the list again.
+    await w.queueB.add([testFile("IMG_2.jpg", 2000)]);
+    await vi.waitFor(() => expect(w.uploadedB).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(w.uploadedB).toHaveBeenCalledTimes(2);
   });
 });

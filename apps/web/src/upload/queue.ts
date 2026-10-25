@@ -172,6 +172,13 @@ export function createUploadQueue({
       items.set(item.id, (active.has(item.id) && known.get(item.id)) || item);
     }
     emit();
+    // Finished by another tab: refresh what shows it here too (its gallery would stay stale; the
+    // uploading tab already did its own before marking the item done).
+    const finishedElsewhere = stored.some(
+      (item) =>
+        item.status === "done" && known.has(item.id) && known.get(item.id)!.status !== "done",
+    );
+    if (finishedElsewhere) await onUploaded?.();
   }
 
   function onMessage(event: MessageEvent<Message>) {
