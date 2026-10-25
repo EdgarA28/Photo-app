@@ -13,13 +13,39 @@ export interface PreSignUpEvent {
 /** Identity providers that may be linked to a native user. Must match the IdP names in infra. */
 const LINKABLE_PROVIDERS = ["Google"];
 
+/** Sign-ups a user starts themselves; `PreSignUp_AdminCreateUser` is an admin's choice. */
+const SELF_SIGN_UPS = ["PreSignUp_SignUp", "PreSignUp_ExternalProvider"];
+
 /** Shown by the hosted sign-up page (Cognito prefixes "PreSignUp failed with error "). */
 export const EMAIL_TAKEN_MESSAGE =
   "An account with this email already exists. Sign in with Google instead.";
 
+/** Shown when the email isn't on the allowlist (hosted sign-up page, or the app's callback page). */
+export const NOT_INVITED_MESSAGE = "Sign-up is by invitation only.";
+
+export interface PreSignUpOptions {
+  /**
+   * Who may create an account (deviation from FR-AUTH-1 while the app isn't public, see
+   * ARCHITECTURE §15). Null = anyone. Admin-created users aren't checked.
+   */
+  allowedEmails?: ReadonlySet<string> | null;
+}
+
+/** `ALLOWED_EMAILS` ("a@x.com,b@y.com") → lowercase set; unset or blank = no allowlist. */
+export function parseAllowedEmails(value: string | undefined): ReadonlySet<string> | null {
+  const emails = (value ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+  return emails.length > 0 ? new Set(emails) : null;
+}
+
 /**
  * Pre sign-up trigger (spec §11.3): keeps one account per verified email.
  *
+ * - With an allowlist, email/password and Google sign-ups for any other email are refused
+ *   first. Email/password sign-ups still need the emailed code, so an allowed address can't be
+ *   claimed by someone else.
  * - Google sign-up (`PreSignUp_ExternalProvider`) whose verified email belongs to exactly one
  *   confirmed native user: link the Google identity to that user (`AdminLinkProviderForUser`),
  *   so both sign-in methods give the same `sub` and the same photos (FR-AUTH-3).
@@ -29,8 +55,20 @@ export const EMAIL_TAKEN_MESSAGE =
  *   split the user's photos and make the email unusable for sharing (5.12 never guesses).
  * - Anything else passes through.
  */
-export function createPreSignUpHandler(directory: PoolDirectory) {
+export function createPreSignUpHandler(
+  directory: PoolDirectory,
+  { allowedEmails = null }: PreSignUpOptions = {},
+) {
   return async function handler(event: PreSignUpEvent): Promise<PreSignUpEvent> {
+    if (allowedEmails && SELF_SIGN_UPS.includes(event.triggerSource)) {
+      const email = normaliseEmail(event.request.userAttributes.email);
+      if (!email || !allowedEmails.has(email)) {
+        log("INFO", "Refused sign-up: email not on the allowlist", {
+          triggerSource: event.triggerSource,
+        });
+        throw new Error(NOT_INVITED_MESSAGE);
+      }
+    }
     if (event.triggerSource === "PreSignUp_ExternalProvider") await linkToNativeUser(event);
     else if (event.triggerSource === "PreSignUp_SignUp") await refuseTakenEmail(event);
     return event;

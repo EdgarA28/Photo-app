@@ -652,7 +652,7 @@ sequenceDiagram
 
 Cognito's `/oauth2/token` and `/oauth2/revoke` answer CORS preflights for the registered origin (`access-control-allow-origin: http://localhost:5173`, checked 2026-10-24).
 
-**Pre sign-up trigger (`services/auth-triggers`, ✅ deployed in dev 2026-10-24).** Cognito calls it before creating any user; the pool ID comes from the event (no configuration). Keeps one account per verified email (FR-AUTH-3, spec §11.3):
+**Pre sign-up trigger (`services/auth-triggers`, ✅ deployed in dev 2026-10-24).** Cognito calls it before creating any user; the pool ID comes from the event. Optional `ALLOWED_EMAILS` env var (comma-separated; module variable `allowed_emails`, sensitive, from `TF_VAR_allowed_emails` in `~/.config/photo-app/dev.env`, not in git): when set, `PreSignUp_SignUp` and `PreSignUp_ExternalProvider` for an email not on the list (compared trimmed + lowercase; missing email too) are refused with `NOT_INVITED_MESSAGE` "Sign-up is by invitation only." before anything else; admin-created users and existing users (sign-in doesn't run the trigger) are unaffected; unset = open sign-up. Allowlist deployed in dev 2026-10-25 (direct invokes with an unlisted email refused for both sources). Keeps one account per verified email (FR-AUTH-3, spec §11.3):
 
 | `triggerSource` | Behaviour |
 |---|---|
@@ -806,7 +806,7 @@ Tags on everything: `Project=photo-app`, `Environment=<ws>`, `ManagedBy=opentofu
 |---|---|
 | `versions.tf` | OpenTofu ≥ 1.10, AWS `~> 6.0`, S3 backend: bucket `photo-app-tfstate-<acct>`, key `<env>/terraform.tfstate`, `use_lockfile = true`, `encrypt = true` |
 | `providers.tf` | region var (default `us-east-1`), `allowed_account_ids`, default tags (`Project`, `Environment`, `ManagedBy`); credentials from `AWS_PROFILE` locally / OIDC in CI |
-| `variables.tf` | `region`; `app_origins` (configured web app origins; `main.tf` appends the CloudFront URL as `local.app_origins` → S3 CORS, Cognito callback + sign-out URLs, 7.5); `google_client_id` (in `env.tfvars`); `google_client_secret` (sensitive, `TF_VAR_google_client_secret`; locally `source ~/.config/photo-app/dev.env`) |
+| `variables.tf` | `region`; `app_origins` (configured web app origins; `main.tf` appends the CloudFront URL as `local.app_origins` → S3 CORS, Cognito callback + sign-out URLs, 7.5); `google_client_id` (in `env.tfvars`); `google_client_secret` (sensitive, `TF_VAR_google_client_secret`; locally `source ~/.config/photo-app/dev.env`); `allowed_emails` (sensitive, `TF_VAR_allowed_emails` from the same file; null = open sign-up) |
 | `main.tf` | `module "database"`, `module "storage"`, `module "auth"`, `module "thumbnails"`, `module "api"`, `module "frontend"` (its `distribution_arn` feeds `storage.cloudfront_distribution_arn`) with per-env settings (below); `auth` gets `pre_sign_up_source_dir = services/auth-triggers/dist`, so run `pnpm build` before planning |
 | `outputs.tf` | `table_name`, `photo_bucket_name`, `user_pool_id`, `web_client_id`, `cognito_domain_url`, `google_redirect_uri`, `login_url`, `pre_sign_up_function_name`, `thumbnails_function_name`, `thumbnails_dlq_url`, `api_endpoint`, `api_function_name`, `app_url`, `cloudfront_distribution_id`, `site_bucket_name` |
 | `env.tfvars` | Non-secret settings, committed. Run with `-var-file=env.tfvars` |
@@ -1005,6 +1005,7 @@ Target design: spec §12 (TanStack Router file routes with an authenticated layo
 | `ci-deploy` permissions | "deploy permissions" | `AdministratorAccess` for now | Resource set not known yet; task 12.6 |
 | Media cookies (§9) | Three cookies, RSA-SHA1 implied | Four: `CloudFront-Hash-Algorithm=SHA256` added; POST answers `200 { expiresAt }` (the shared contract) | SHA-256 signatures supported by CloudFront since 2026-04 and verified against the dev distribution; stronger than SHA-1 |
 | SPA fallback (§13.1) | Custom error responses 403/404 → `/index.html`, 200 | CloudFront Function on the default behavior rewrites extension-less paths to `/index.html` | Error responses apply to the whole distribution: API 404s (NFR-SEC-2) and image 403s would become 200 + HTML. User's choice (2026-10-25) |
+| Sign-up allowlist (§11.3, v0.10) | Anyone can sign up (FR-AUTH-1/2) | Dev: only emails in `TF_VAR_allowed_emails` | App not public yet; Google's testing mode limited only Google sign-ups (owner's request 2026-10-25) |
 | Account linking (§11.3) | Link Google to an existing native user | Also refuses an email/password sign-up whose email a Google user already has | The reverse link is impossible (the native user doesn't exist yet in pre sign-up); a second account would split photos and break sharing by that email (5.12 never guesses) |
 
 ---
@@ -1065,3 +1066,4 @@ Target design: spec §12 (TanStack Router file routes with an authenticated layo
 | 2026-10-25 | 7.3: `POST`/`DELETE /session/media-cookie` (`routes/session.ts`, `lib/media.ts`: cloudfront-signer SHA-256 custom policy, SSM key loaded on first use), `api` module env + SSM grant, envs wired from `frontend`; web `mediaCookie.ts` (guard + `onTokens` + logout), `/users` dev proxy; tenant-isolation exemptions; deployed to dev (§2.1, §3.2, §9, §10.1, §10.3, §11, §12.3, §14.1, §15). |
 | 2026-10-25 | 7.4: shared-album signed URLs (`signUrl`, thumbs in album pages and covers, previews via `GET /photos/{id}?albumId=`), key parsed once, API Lambda 512 → 1769 MB after measuring; web: viewer fetches shared photos (+ neighbours, thumbnail stand-in), 10-min refetch of signed lists, `useImageFailed`. Phase 7 complete in dev (§9, §10.3, §10.6, §11, §12.3, §14.1). |
 | 2026-10-25 | Gallery select mode: delete several photos at once (`useDeletePhotos`, `useSelection.drop`, partial failures retried) (§1). |
+| 2026-10-25 | Pre sign-up trigger: optional email allowlist (`ALLOWED_EMAILS` / `allowed_emails`, from `TF_VAR_allowed_emails`) for email/password and Google sign-ups; deviation added to §15 (§10.1, §15). |

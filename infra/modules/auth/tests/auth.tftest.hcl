@@ -277,4 +277,33 @@ run "pre_sign_up_trigger" {
     condition     = toset(data.aws_iam_policy_document.pre_sign_up[0].statement[0].actions) == toset(["cognito-idp:ListUsers", "cognito-idp:AdminLinkProviderForUser"])
     error_message = "The trigger may only look up users and link identities (NFR-SEC-7)."
   }
+
+  assert {
+    condition     = !contains(keys(one(aws_lambda_function.pre_sign_up[0].environment).variables), "ALLOWED_EMAILS")
+    error_message = "Without an allowlist, sign-up stays open."
+  }
+}
+
+run "pre_sign_up_allowlist" {
+  command = plan
+
+  variables {
+    pre_sign_up_source_dir = "./tests/fixtures/trigger"
+    allowed_emails         = ["a@example.com", "b@example.com"]
+  }
+
+  assert {
+    condition     = nonsensitive(one(aws_lambda_function.pre_sign_up[0].environment).variables["ALLOWED_EMAILS"]) == "a@example.com,b@example.com"
+    error_message = "The allowlist reaches the trigger as ALLOWED_EMAILS."
+  }
+}
+
+run "rejects_malformed_allowlist" {
+  command = plan
+
+  variables {
+    allowed_emails = ["a@example.com, b@example.com"]
+  }
+
+  expect_failures = [var.allowed_emails]
 }

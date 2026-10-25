@@ -4,7 +4,9 @@ import { describe, expect, test, vi } from "vitest";
 import { cognitoPoolDirectory, type PoolDirectory, type PoolUser } from "../src/directory";
 import {
   EMAIL_TAKEN_MESSAGE,
+  NOT_INVITED_MESSAGE,
   createPreSignUpHandler,
+  parseAllowedEmails,
   parseExternalUserName,
   type PreSignUpEvent,
 } from "../src/preSignUp";
@@ -184,6 +186,66 @@ describe("email/password sign-up (PreSignUp_SignUp)", () => {
     const { run } = signUp([user]);
 
     await expect(run()).resolves.toBeDefined();
+  });
+});
+
+describe("allowlist", () => {
+  const allowed = (users: PoolUser[] = []) => {
+    const directory = {
+      findByEmail: vi.fn<PoolDirectory["findByEmail"]>(async () => users),
+      linkProvider: vi.fn<PoolDirectory["linkProvider"]>(async () => {}),
+    };
+    const handler = createPreSignUpHandler(directory, {
+      allowedEmails: parseAllowedEmails("edgar@example.com, Friend@Example.com"),
+    });
+    return { directory, handler };
+  };
+  const signUp = (email: string) =>
+    event({ triggerSource: "PreSignUp_SignUp", userName: NATIVE }, { email });
+
+  test.each([
+    ["email/password", signUp("stranger@example.com")],
+    ["Google", event({}, { email: "stranger@example.com" })],
+    ["no email", event({}, { email: undefined })],
+  ])("refuses a %s sign-up for an email that isn't listed", async (_, input) => {
+    const { directory, handler } = allowed([nativeUser()]);
+
+    await expect(handler(input)).rejects.toThrow(NOT_INVITED_MESSAGE);
+    expect(directory.findByEmail).not.toHaveBeenCalled();
+  });
+
+  test("lets listed emails sign up, ignoring case and spaces", async () => {
+    const { handler } = allowed();
+
+    await expect(handler(signUp(" FRIEND@example.com"))).resolves.toBeDefined();
+    await expect(handler(event())).resolves.toBeDefined();
+  });
+
+  test("still links a listed Google sign-up to the native user", async () => {
+    const { directory, handler } = allowed([nativeUser()]);
+
+    await handler(event());
+
+    expect(directory.linkProvider).toHaveBeenCalledWith(POOL, NATIVE, "Google", GOOGLE_ID);
+  });
+
+  test("doesn't check admin-created users", async () => {
+    const { handler } = allowed();
+
+    await expect(
+      handler(
+        event(
+          { triggerSource: "PreSignUp_AdminCreateUser", userName: NATIVE },
+          { email: "stranger@example.com" },
+        ),
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  test("parseAllowedEmails: unset or blank means anyone", () => {
+    expect(parseAllowedEmails(undefined)).toBeNull();
+    expect(parseAllowedEmails(" , ")).toBeNull();
+    expect([...parseAllowedEmails("A@x.com,b@y.com,")!]).toEqual(["a@x.com", "b@y.com"]);
   });
 });
 

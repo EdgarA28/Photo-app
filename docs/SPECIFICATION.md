@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.9 |
+| **Version** | 0.10 |
 | **Date** | 2026-10-25 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -462,7 +462,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 
 ### 11.3 Account linking
 
-`services/auth-triggers` — **pre sign-up** Lambda (TypeScript): when a federated Google sign-up arrives and a native user with the same **verified** email exists, call `AdminLinkProviderForUser` to link them (FR-AUTH-3).
+`services/auth-triggers` — **pre sign-up** Lambda (TypeScript): when a federated Google sign-up arrives and a native user with the same **verified** email exists, call `AdminLinkProviderForUser` to link them (FR-AUTH-3). Optional **sign-up allowlist** (`ALLOWED_EMAILS`, from `TF_VAR_allowed_emails`, kept out of git): when set, email/password and Google sign-ups for any other email are refused ("Sign-up is by invitation only."); admin-created users and existing accounts are unaffected. Used while the app isn't public.
 
 ### 11.4 Rules
 
@@ -710,6 +710,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 
 | Version | Date | Changes |
 |---|---|---|
+| 0.10 | 2026-10-25 | Optional sign-up allowlist in the pre sign-up trigger (§11.3), limiting FR-AUTH-1/2 to listed emails until launch |
 | 0.9 | 2026-10-25 | Shared-album photos: album pages carry signed thumbnails, `GET /photos/{id}?albumId=` the signed preview (§9) |
 | 0.8 | 2026-10-25 | Media cookies signed with SHA-256: four cookies incl. `CloudFront-Hash-Algorithm` (§9) |
 | 0.7 | 2026-10-25 | SPA fallback via a CloudFront Function on the site behavior instead of distribution-wide error responses (§13.1) |

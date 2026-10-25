@@ -85,9 +85,11 @@ resource "aws_lambda_function" "pre_sign_up" {
   timeout = 5
 
   environment {
-    variables = {
-      NODE_OPTIONS = "--enable-source-maps"
-    }
+    variables = merge(
+      { NODE_OPTIONS = "--enable-source-maps" },
+      # Read by services/auth-triggers (parseAllowedEmails); absent = open sign-up.
+      var.allowed_emails == null ? {} : { ALLOWED_EMAILS = join(",", var.allowed_emails) },
+    )
   }
 
   logging_config {

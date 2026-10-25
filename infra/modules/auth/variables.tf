@@ -37,3 +37,15 @@ variable "pre_sign_up_source_dir" {
   type        = string
   default     = null
 }
+
+variable "allowed_emails" {
+  description = "Only these emails may sign up (email/password or Google); null = anyone. Pass as TF_VAR_allowed_emails, not in git."
+  type        = list(string)
+  default     = null
+  sensitive   = true
+
+  validation {
+    condition     = var.allowed_emails == null ? true : alltrue([for e in var.allowed_emails : can(regex("^[^\\s,@]+@[^\\s,@]+$", e))])
+    error_message = "Each entry is one email address (no commas or spaces)."
+  }
+}

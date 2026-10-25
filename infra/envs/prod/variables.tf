@@ -21,3 +21,10 @@ variable "google_client_secret" {
   default     = null
   sensitive   = true
 }
+
+variable "allowed_emails" {
+  description = "Only these emails may sign up; null = anyone. Not in git: export TF_VAR_allowed_emails='[\"a@example.com\"]'."
+  type        = list(string)
+  default     = null
+  sensitive   = true
+}

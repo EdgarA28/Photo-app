@@ -36,6 +36,7 @@ module "auth" {
 
   google_client_id     = var.google_client_id
   google_client_secret = var.google_client_secret
+  allowed_emails       = var.allowed_emails
 
   # Built by `pnpm build` (services/auth-triggers); run it before planning.
   pre_sign_up_source_dir = "${path.root}/../../../services/auth-triggers/dist"
