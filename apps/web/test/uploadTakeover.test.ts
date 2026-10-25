@@ -1,7 +1,7 @@
 import type { UploadUrlRequest } from "@photo-app/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Api } from "../src/api/api";
-import { HEARTBEAT_MS, TAKEOVER_AFTER_MS, type UploadQueue } from "../src/upload/queue";
+import { TAKEOVER_CHECK_MS, TAKEOVER_AFTER_MS, type UploadQueue } from "../src/upload/queue";
 import type { PostToS3 } from "../src/upload/s3Post";
 import type { UploadItem } from "../src/upload/store";
 import { MemoryUploadStore, testFile, testId, testUploadQueue, testUser } from "./fakes";
@@ -52,16 +52,11 @@ class FakeLocks {
 function channelHub() {
   const members = new Set<{ frozen: boolean; listeners: Set<(e: MessageEvent) => void> }>();
   const create = () => {
-    const member = {
-      frozen: false,
-      /** Messages this window sends that never arrive (e.g. a throttled timer's heartbeat). */
-      drop: (_data: unknown) => false,
-      listeners: new Set<(e: MessageEvent) => void>(),
-    };
+    const member = { frozen: false, listeners: new Set<(e: MessageEvent) => void>() };
     members.add(member);
     const channel = {
       postMessage(data: unknown) {
-        if (member.frozen || member.drop(data)) return;
+        if (member.frozen) return;
         for (const other of members) {
           if (other === member || other.frozen) continue;
           for (const listener of other.listeners) {
@@ -99,11 +94,17 @@ function uploadApi({ hang = false } = {}) {
 const statuses = (queue: UploadQueue) =>
   queue.getSnapshot().map((entry: UploadItem) => entry.status);
 
+/** Longest a waiting window takes to act: the first check starts the grace, a later one ends it. */
+const TAKEOVER_WAIT = TAKEOVER_AFTER_MS + 2 * TAKEOVER_CHECK_MS;
+
 let clock = 0;
-/** Moves both the queue's clock and its intervals forward. */
+/** Moves both the queue's clock and its intervals forward, in step (each check sees its time). */
 async function wait(ms: number) {
-  clock += ms;
-  await vi.advanceTimersByTimeAsync(ms);
+  for (let left = ms; left > 0; left -= 500) {
+    const step = Math.min(500, left);
+    clock += step;
+    await vi.advanceTimersByTimeAsync(step);
+  }
 }
 
 beforeEach(() => {
@@ -160,22 +161,32 @@ describe("upload queue across windows: takeover (§12.4, FR-UP-5)", () => {
     w.a.member.frozen = true;
     expect(statuses(w.queueB)).toEqual(["uploading"]);
 
-    await wait(TAKEOVER_AFTER_MS + HEARTBEAT_MS);
+    await wait(TAKEOVER_WAIT);
     await vi.waitFor(() => expect(statuses(w.queueB)).toEqual(["done"]));
     expect(w.apiB.uploadUrl).toHaveBeenCalledOnce();
     // A lost the lock and waits for it again.
     expect(w.locks.waiting).toHaveLength(1);
   });
 
-  it("doesn't take over while the uploading window is alive", async () => {
+  it("takes over from a window that runs but doesn't get anywhere", async () => {
+    // Found on Android: the background Chrome tab kept its timers (and messages) going while its
+    // upload didn't start, so a heartbeat looked fine and the app in front waited for good.
     const w = await twoWindows({ aHangs: true });
     await w.queueB.add([testFile("IMG_1.jpg")]);
     await vi.waitFor(() => expect(w.apiA.uploadUrl).toHaveBeenCalled());
 
-    // A is slow but runs: its heartbeat reaches B.
-    for (let i = 0; i < 10; i++) await wait(HEARTBEAT_MS);
+    await wait(TAKEOVER_WAIT);
+    await vi.waitFor(() => expect(statuses(w.queueB)).toEqual(["done"]));
+    expect(w.apiB.uploadUrl).toHaveBeenCalledOnce();
+  });
+
+  it("gives the uploading window time to start on newly added work", async () => {
+    const w = await twoWindows({ aHangs: true });
+    // Long quiet before: nothing to upload, so nobody had progress to report.
+    await wait(TAKEOVER_AFTER_MS * 3);
+    await w.queueB.add([testFile("IMG_1.jpg")]);
+    await wait(TAKEOVER_AFTER_MS - TAKEOVER_CHECK_MS);
     expect(w.apiB.uploadUrl).not.toHaveBeenCalled();
-    expect(w.locks.waiting).toHaveLength(1); // B still waiting in line
   });
 
   it("a window in the background never takes over; it does once it's shown", async () => {
@@ -204,7 +215,7 @@ describe("upload queue across windows: takeover (§12.4, FR-UP-5)", () => {
     await w.queueB.add([testFile("IMG_1.jpg")]);
     await vi.waitFor(() => expect(w.apiA.uploadUrl).toHaveBeenCalled());
     w.a.member.frozen = true;
-    await wait(TAKEOVER_AFTER_MS + HEARTBEAT_MS);
+    await wait(TAKEOVER_WAIT);
     await vi.waitFor(() => expect(statuses(w.queueB)).toEqual(["done"]));
 
     // A thaws and its upload-url request finally answers: it must not post the file again.
@@ -218,18 +229,17 @@ describe("upload queue across windows: takeover (§12.4, FR-UP-5)", () => {
   it("counts upload progress as a sign of life", async () => {
     let progress: ((fraction: number) => void) | undefined;
     const w = await twoWindows();
-    // A uploads slowly and its heartbeat timer is throttled; only progress events get through.
+    // A uploads slowly but steadily (a background tab on a desktop): never interrupt that.
     w.postA.mockImplementation((_upload, _file, options) => {
       progress = options?.onProgress;
       return new Promise<void>(() => {});
     });
-    w.a.member.drop = (data) => (data as { type: string }).type === "alive";
     await w.queueB.add([testFile("IMG_1.jpg")]);
     await vi.waitFor(() => expect(progress).toBeDefined());
 
     for (let i = 1; i <= 10; i++) {
       progress!(i / 20);
-      await wait(HEARTBEAT_MS);
+      await wait(TAKEOVER_CHECK_MS);
     }
     expect(w.apiB.uploadUrl).not.toHaveBeenCalled();
   });
@@ -239,7 +249,7 @@ describe("upload queue across windows: takeover (§12.4, FR-UP-5)", () => {
     await w.queueB.add([testFile("IMG_1.jpg")]);
     await vi.waitFor(() => expect(w.apiA.uploadUrl).toHaveBeenCalled());
     w.a.member.frozen = true;
-    await wait(TAKEOVER_AFTER_MS + HEARTBEAT_MS);
+    await wait(TAKEOVER_WAIT);
     await vi.waitFor(() => expect(statuses(w.queueB)).toEqual(["done"]));
 
     // A thaws: as a follower it reloads the stored state and uploads nothing more.

@@ -67,17 +67,17 @@ const LOCK_NAME = "photo-app-uploads";
 export const UPLOAD_CHANNEL_NAME = "photo-app-uploads";
 /** Progress messages to other tabs at most this often. */
 const PROGRESS_BROADCAST_MS = 250;
-/** The uploading tab tells the others it's alive this often. */
-export const HEARTBEAT_MS = 3000;
+/** How often a waiting tab checks whether the uploading tab is getting anywhere. */
+export const TAKEOVER_CHECK_MS = 3000;
 /**
- * A visible tab with waiting uploads takes the lock over after this long without a word from the
- * uploading tab. A background tab is throttled or frozen (on Android as soon as another app
- * window, e.g. the installed PWA, is in front) and would otherwise keep everyone waiting.
+ * A visible tab with waiting uploads takes the lock over after this long without upload progress
+ * from the tab holding it. A background tab may be frozen, or (Android, with the installed PWA in
+ * front) keep running timers while its real work is held back, so "alive" isn't enough: only
+ * progress counts.
  */
 export const TAKEOVER_AFTER_MS = 10_000;
 
-type Message =
-  { type: "changed" } | { type: "progress"; id: string; progress: number } | { type: "alive" };
+type Message = { type: "changed" } | { type: "progress"; id: string; progress: number };
 
 class FileMissingError extends Error {
   constructor() {
@@ -119,10 +119,12 @@ export function createUploadQueue({
   let lockRequest: AbortController | undefined;
   let channel: BroadcastChannel | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  /** Leader: the heartbeat. Others: the check whether the leader went quiet. */
+  /** Not leading: the check whether the leader is getting anywhere. */
   let ticker: ReturnType<typeof setInterval> | undefined;
-  /** When the uploading tab was last heard from (heartbeat or progress). */
-  let lastAlive = 0;
+  /** When the uploading tab last reported progress. */
+  let lastProgress = 0;
+  /** Since when this tab has seen uploads waiting (null: none); the leader's grace starts then. */
+  let waitingSince: number | null = null;
   let persistenceRequested = false;
 
   const items = new Map<string, UploadItem>();
@@ -183,10 +185,8 @@ export function createUploadQueue({
 
   function onMessage(event: MessageEvent<Message>) {
     const message = event.data;
-    if (message.type === "alive") {
-      lastAlive = now();
-    } else if (message.type === "progress") {
-      lastAlive = now();
+    if (message.type === "progress") {
+      lastProgress = now();
       if (!items.has(message.id)) return;
       progress.set(message.id, message.progress);
       emit();
@@ -204,8 +204,7 @@ export function createUploadQueue({
   async function lead(forSession: number) {
     leader = true;
     clearInterval(ticker);
-    broadcast({ type: "alive" });
-    ticker = setInterval(() => broadcast({ type: "alive" }), HEARTBEAT_MS);
+    ticker = undefined;
     await reload();
     if (forSession !== session) return;
     for (const item of [...items.values()]) {
@@ -338,14 +337,13 @@ export function createUploadQueue({
     const request = new AbortController();
     lockRequest = request;
     let granted = false;
-    // Before the request: a lock granted at once starts the heartbeat inside it.
+    // Before the request: a lock granted at once stops the check inside it (lead()). A steal is
+    // granted at once; checking meanwhile would steal from itself.
     clearInterval(ticker);
     ticker = undefined;
-    // A steal is granted at once (then lead() starts the heartbeat); checking again meanwhile
-    // would steal from itself. Waiting: give the leader a full period before calling it quiet.
     if (!steal) {
-      lastAlive = now();
-      ticker = setInterval(checkTakeover, HEARTBEAT_MS);
+      waitingSince = null;
+      ticker = setInterval(checkTakeover, TAKEOVER_CHECK_MS);
     }
     locks!
       .request(LOCK_NAME, steal ? { steal: true } : { signal: request.signal }, () => {
@@ -366,11 +364,21 @@ export function createUploadQueue({
   }
 
   function checkTakeover() {
-    if (leader || !userId || !isVisible()) return;
+    if (leader || !userId) return;
     const waiting = [...items.values()].some(
       (item) => item.status === "queued" || item.status === "uploading",
     );
-    if (waiting && now() - lastAlive >= TAKEOVER_AFTER_MS) requestLock(session, true);
+    if (!waiting) {
+      waitingSince = null;
+      return;
+    }
+    // Counted in the background too, so a window brought back acts at once; only a visible one
+    // takes over (a hidden one would just be the next stalled uploader).
+    waitingSince ??= now();
+    if (!isVisible()) return;
+    // Quiet since the work appeared here, or since its last progress, whichever is later.
+    if (now() - Math.max(waitingSince, lastProgress) >= TAKEOVER_AFTER_MS)
+      requestLock(session, true);
   }
 
   /** Another tab took the lock over: stop uploading here and wait for it again. */
