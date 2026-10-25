@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "../src/api/errors";
-import { fakeApi, fakeAuth, testFile, testMe, testUploadQueue } from "./fakes";
+import { fakeApi, fakeAuth, fakeMedia, testFile, testMe, testUploadQueue } from "./fakes";
 import { defaultResponses, renderAt } from "./render";
 
 afterEach(cleanup);
@@ -158,6 +158,35 @@ describe("settings: logout (FR-AUTH-5)", () => {
       auth.logout.mock.invocationCallOrder[0]!,
     );
     expect(queryClient.getQueryData(["albums"])).toBeUndefined();
+  });
+
+  it("expires the media cookies before ending the session (7.3)", async () => {
+    const { api } = setup();
+    const auth = fakeAuth({ signedIn: true });
+    const { media } = await renderAt("/settings", { api, auth });
+    await screen.findByRole("meter");
+
+    fireEvent.click(screen.getByRole("button", { name: "Log out" }));
+    await waitFor(() => expect(auth.logout).toHaveBeenCalledOnce());
+    expect(media.clear).toHaveBeenCalledOnce();
+    // DELETE needs the token, so it must happen before revocation.
+    expect(vi.mocked(media.clear).mock.invocationCallOrder[0]!).toBeLessThan(
+      auth.logout.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("still ends the session when expiring the media cookies fails", async () => {
+    const { api } = setup();
+    const auth = fakeAuth({ signedIn: true });
+    const media = fakeMedia();
+    media.clear.mockRejectedValueOnce(new Error("offline"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await renderAt("/settings", { api, auth, media });
+    await screen.findByRole("meter");
+
+    fireEvent.click(screen.getByRole("button", { name: "Log out" }));
+    await waitFor(() => expect(auth.logout).toHaveBeenCalledOnce());
+    warn.mockRestore();
   });
 
   it("still ends the session when clearing the device's data fails", async () => {

@@ -232,6 +232,24 @@ describe("token storage (option A)", () => {
     expect(await openTab().getUser()).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+  // 7.3: the media cookies are renewed whenever tokens arrive.
+  it("tells listeners about new tokens after login and every refresh, until unsubscribed", async () => {
+    const auth = openTab();
+    const listener = vi.fn();
+    const unsubscribe = auth.onTokens(listener);
+
+    await signIn(auth);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    fetchMock.mockResolvedValueOnce(tokenResponse({ access_token: "access-2" }));
+    await auth.refreshAccessToken();
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    unsubscribe();
+    fetchMock.mockResolvedValueOnce(tokenResponse({ access_token: "access-3" }));
+    await auth.refreshAccessToken();
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("logout (FR-AUTH-5)", () => {

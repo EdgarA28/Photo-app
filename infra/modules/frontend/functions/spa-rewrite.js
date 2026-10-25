@@ -3,6 +3,7 @@
 // let TanStack Router handle them. Paths whose last segment has a dot (/assets/x.js, /sw.js) are
 // real files and pass through. /api/* and /users/* never reach this function, so their 403/404
 // stay real (deviation from spec §13.1 error responses, see ARCHITECTURE.md §15).
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- CloudFront calls the global handler
 function handler(event) {
   var request = event.request;
   var lastSegment = request.uri.substring(request.uri.lastIndexOf("/") + 1);

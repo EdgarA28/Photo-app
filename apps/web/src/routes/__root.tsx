@@ -8,6 +8,7 @@ import {
 import type { Api } from "@/api/api";
 import { errorMessage } from "@/api/errors";
 import type { Auth } from "@/auth/auth";
+import type { MediaCookies } from "@/auth/mediaCookie";
 import { Button } from "@/components/ui/button";
 import type { UploadQueue } from "@/upload/queue";
 
@@ -15,6 +16,8 @@ export interface RouterContext {
   queryClient: QueryClient;
   auth: Auth;
   api: Api;
+  /** CloudFront cookies for the user's own images (7.3). */
+  media: MediaCookies;
   /** App-wide, so uploads keep running while the user moves around (8.10). */
   uploads: UploadQueue;
 }

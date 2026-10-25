@@ -3,6 +3,7 @@ import type { Api } from "./api/api";
 import { ApiRequestError } from "./api/errors";
 import { createRouter, type RouterHistory } from "@tanstack/react-router";
 import type { Auth } from "./auth/auth";
+import type { MediaCookies } from "./auth/mediaCookie";
 import type { UploadQueue } from "./upload/queue";
 import { routeTree } from "./routeTree.gen";
 
@@ -26,16 +27,17 @@ export interface AppDeps {
   queryClient: QueryClient;
   auth: Auth;
   api: Api;
+  media: MediaCookies;
   uploads: UploadQueue;
 }
 
 export function createAppRouter(
-  { queryClient, auth, api, uploads }: AppDeps,
+  { queryClient, auth, api, media, uploads }: AppDeps,
   history?: RouterHistory,
 ) {
   return createRouter({
     routeTree,
-    context: { queryClient, auth, api, uploads },
+    context: { queryClient, auth, api, media, uploads },
     ...(history ? { history } : {}),
     defaultPreload: "intent",
     // Loaders read through the Query cache (ensureQueryData), which decides freshness.

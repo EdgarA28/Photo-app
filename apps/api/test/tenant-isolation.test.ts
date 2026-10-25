@@ -428,6 +428,8 @@ const exempt: Record<string, string> = {
   "GET /api/albums": "caller's albums",
   "POST /api/albums": "creates under the caller",
   "GET /api/shared-albums": "caller's shares; foreign cursor case below",
+  "POST /api/session/media-cookie": "caller's own prefix from the JWT sub (routes.session)",
+  "DELETE /api/session/media-cookie": "caller's own prefix from the JWT sub (routes.session)",
 };
 
 async function send(r: Request) {

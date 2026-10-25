@@ -7,6 +7,10 @@ export interface Config {
   userPoolId: string;
   /** Quota for users without a per-user override in their Usage item (FR-ACC-2). */
   defaultQuotaBytes: number;
+  /** Media cookies (7.3): CloudFront origin, public key ID, SSM parameter with the private key. */
+  mediaOrigin: string;
+  mediaKeyPairId: string;
+  mediaPrivateKeyParameter: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -15,6 +19,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     photoBucket: required(env, "PHOTO_BUCKET"),
     userPoolId: required(env, "USER_POOL_ID"),
     defaultQuotaBytes: positiveInteger(env, "DEFAULT_QUOTA_BYTES"),
+    mediaOrigin: origin(env, "MEDIA_ORIGIN"),
+    mediaKeyPairId: required(env, "MEDIA_KEY_PAIR_ID"),
+    mediaPrivateKeyParameter: required(env, "MEDIA_PRIVATE_KEY_PARAMETER"),
   };
 }
 
@@ -28,6 +35,15 @@ function positiveInteger(env: NodeJS.ProcessEnv, name: string): number {
   const value = Number(required(env, name));
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new Error(`Environment variable ${name} must be a positive integer`);
+  }
+  return value;
+}
+
+/** `https://host`, no path or trailing slash: it prefixes the signed policy's resource. */
+function origin(env: NodeJS.ProcessEnv, name: string): string {
+  const value = required(env, name);
+  if (!/^https:\/\/[^/]+$/.test(value)) {
+    throw new Error(`Environment variable ${name} must be an https origin without a path`);
   }
   return value;
 }

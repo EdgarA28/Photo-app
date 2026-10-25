@@ -35,6 +35,8 @@ export interface Auth {
   clearSession(): Promise<void>;
   /** Revokes the refresh token, forgets the session, ends the Cognito session (FR-AUTH-5). */
   logout(): Promise<void>;
+  /** Calls `listener` whenever new tokens arrive (login, refresh); returns an unsubscribe. */
+  onTokens(listener: () => void): () => void;
 }
 
 export interface AuthDeps {
@@ -150,6 +152,12 @@ export function createAuth(config: AppConfig, deps: AuthDeps = {}): Auth {
 
     async clearSession() {
       await manager.removeUser();
+    },
+
+    onTokens(listener) {
+      // Fired by signinRedirectCallback and by every signinSilent (refresh-token renewal).
+      manager.events.addUserLoaded(listener);
+      return () => manager.events.removeUserLoaded(listener);
     },
 
     async logout() {

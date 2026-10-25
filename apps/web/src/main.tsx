@@ -5,6 +5,7 @@ import { createApi } from "./api/api";
 import { createRequest } from "./api/client";
 import { App } from "./App";
 import { createAuth } from "./auth/auth";
+import { createMediaCookies } from "./auth/mediaCookie";
 import { loadConfig } from "./config";
 import { refreshAfterUpload } from "./queries/photos";
 import { createAppRouter, createQueryClient } from "./router";
@@ -28,6 +29,9 @@ const api = createApi(
     },
   }),
 );
+// Renewed with every token refresh, even while the user stays on one page (7.3).
+const media = createMediaCookies({ auth, api });
+auth.onTokens(() => void media.ensure());
 const uploads = createUploadQueue({
   api,
   store: createIdbStore(),
@@ -39,7 +43,7 @@ const uploads = createUploadQueue({
       : () => new BroadcastChannel(UPLOAD_CHANNEL_NAME),
   requestPersistence: () => navigator.storage?.persist?.(),
 });
-const router = createAppRouter({ queryClient, auth, api, uploads });
+const router = createAppRouter({ queryClient, auth, api, media, uploads });
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

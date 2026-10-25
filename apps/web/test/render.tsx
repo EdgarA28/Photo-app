@@ -1,12 +1,21 @@
 import { createMemoryHistory } from "@tanstack/react-router";
 import { render } from "@testing-library/react";
 import { App } from "../src/App";
+import type { MediaCookies } from "../src/auth/mediaCookie";
 import type { AppConfig } from "../src/config";
 import { createAppRouter, createQueryClient } from "../src/router";
 import type { QueryClient } from "@tanstack/react-query";
 import { refreshAfterUpload } from "../src/queries/photos";
 import type { UploadQueue } from "../src/upload/queue";
-import { emptyPage, fakeApi, fakeAuth, testConfig, testMe, testUploadQueue } from "./fakes";
+import {
+  emptyPage,
+  fakeApi,
+  fakeAuth,
+  fakeMedia,
+  testConfig,
+  testMe,
+  testUploadQueue,
+} from "./fakes";
 
 /** Default API responses for a signed-in user with no photos and no albums. */
 export const defaultResponses = {
@@ -23,6 +32,7 @@ export async function renderAt(
     auth = fakeAuth({ signedIn: true }),
     config = testConfig as AppConfig,
     api = fakeApi(defaultResponses).api,
+    media = fakeMedia() as MediaCookies,
     uploads = undefined as UploadQueue | ((queryClient: QueryClient) => UploadQueue) | undefined,
   } = {},
 ) {
@@ -33,10 +43,10 @@ export async function renderAt(
       : (uploads ??
         testUploadQueue(api, { onUploaded: () => refreshAfterUpload(queryClient) }).queue);
   const router = createAppRouter(
-    { queryClient, auth, api, uploads: queue },
+    { queryClient, auth, api, media, uploads: queue },
     createMemoryHistory({ initialEntries: [url] }),
   );
   render(<App config={config} queryClient={queryClient} router={router} />);
   await router.load();
-  return { router, auth };
+  return { router, auth, media };
 }

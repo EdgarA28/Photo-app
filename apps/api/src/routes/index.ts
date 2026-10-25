@@ -1,11 +1,13 @@
 import type { Hono } from "hono";
 import type { AppEnv } from "../env";
+import type { MediaSigner } from "../lib/media";
 import type { PhotoStorage } from "../lib/storage";
 import type { UserDirectory } from "../lib/users";
 import type { Repositories } from "../repo";
 import { albumRoutes } from "./albums";
 import { meRoutes } from "./me";
 import { photoRoutes } from "./photos";
+import { sessionRoutes } from "./session";
 import { shareRoutes } from "./shares";
 
 /** What route handlers may use. Built once per Lambda environment in index.ts; faked in tests. */
@@ -13,6 +15,7 @@ export interface Deps {
   repos: Repositories;
   users: UserDirectory;
   storage: PhotoStorage;
+  media: MediaSigner;
   config: { defaultQuotaBytes: number };
 }
 
@@ -23,5 +26,6 @@ export function registerRoutes(deps: Deps): (app: Hono<AppEnv>) => void {
     photoRoutes(app, deps);
     albumRoutes(app, deps);
     shareRoutes(app, deps);
+    sessionRoutes(app, deps);
   };
 }

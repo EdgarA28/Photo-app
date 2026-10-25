@@ -6,11 +6,13 @@ import { UsernamePrompt } from "@/settings/UsernamePrompt";
 import { useOnline } from "@/upload/useUploads";
 
 // Pathless layout for every signed-in page (§12.1, FR-AUTH-6): without a valid session (after a
-// refresh attempt) go to /login, remembering the page.
+// refresh attempt) go to /login, remembering the page. Pages render only once the media cookies
+// for this token are set (7.3), so the first images don't fail with 403; ensure() never throws.
 export const Route = createFileRoute("/_authenticated")({
   beforeLoad: async ({ context, location }) => {
     const user = await context.auth.getUser();
     if (!user) throw redirect({ to: "/login", search: { redirect: location.href } });
+    await context.media.ensure();
     return { user };
   },
   component: AuthenticatedLayout,

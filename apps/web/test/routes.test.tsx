@@ -71,6 +71,28 @@ describe("routes (§12.1)", () => {
     }
   });
 
+  // 7.3: the first images would fail with 403 without the cookies.
+  it("renders signed-in pages only after the media cookies are set", async () => {
+    let release!: () => void;
+    const media = {
+      ensure: vi.fn(() => new Promise<void>((resolve) => (release = resolve))),
+      clear: vi.fn(async () => {}),
+    };
+    const rendered = renderAt("/gallery", { media });
+    await waitFor(() => expect(media.ensure).toHaveBeenCalled());
+    expect(screen.queryByRole("heading", { name: "Gallery" })).toBeNull();
+
+    release();
+    await rendered;
+    expect(await screen.findByRole("heading", { name: "Gallery" })).toBeTruthy();
+  });
+
+  it("doesn't ask for media cookies without a session", async () => {
+    const media = { ensure: vi.fn(async () => {}), clear: vi.fn(async () => {}) };
+    await renderAt("/gallery", { auth: fakeAuth(), media });
+    expect(media.ensure).not.toHaveBeenCalled();
+  });
+
   it("shows the signed-in email in the side rail", async () => {
     await renderAt("/gallery");
     expect(await screen.findByText(testUser.email!)).toBeTruthy();

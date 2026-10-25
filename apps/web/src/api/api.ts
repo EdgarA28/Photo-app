@@ -4,6 +4,7 @@ import {
   albumShareListSchema,
   albumShareSchema,
   downloadUrlResponseSchema,
+  mediaCookieResponseSchema,
   meResponseSchema,
   photoPageSchema,
   photoSchema,
@@ -75,6 +76,13 @@ export function createApi(request: Request) {
     sharedAlbums: {
       list: (query: Page = {}, o?: Opts) =>
         request("GET", "/shared-albums", { schema: sharedAlbumPageSchema, query, ...o }),
+    },
+
+    /** CloudFront cookies for own images (7.3); set by the response's Set-Cookie headers. */
+    session: {
+      createMediaCookie: () =>
+        request("POST", "/session/media-cookie", { schema: mediaCookieResponseSchema }),
+      deleteMediaCookie: () => request("DELETE", "/session/media-cookie"),
     },
   };
 }

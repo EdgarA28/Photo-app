@@ -16,6 +16,9 @@ describe("loadConfig", () => {
     PHOTO_BUCKET: "photos",
     USER_POOL_ID: "us-east-1_abc",
     DEFAULT_QUOTA_BYTES: "2147483648",
+    MEDIA_ORIGIN: "https://d111.cloudfront.net",
+    MEDIA_KEY_PAIR_ID: "K2ABC",
+    MEDIA_PRIVATE_KEY_PARAMETER: "/photo-app/test/cloudfront/media-private-key",
   };
 
   test("reads all settings", () => {
@@ -24,18 +27,35 @@ describe("loadConfig", () => {
       photoBucket: "photos",
       userPoolId: "us-east-1_abc",
       defaultQuotaBytes: 2147483648,
+      mediaOrigin: "https://d111.cloudfront.net",
+      mediaKeyPairId: "K2ABC",
+      mediaPrivateKeyParameter: "/photo-app/test/cloudfront/media-private-key",
     });
   });
 
-  test.each(["TABLE_NAME", "PHOTO_BUCKET", "USER_POOL_ID", "DEFAULT_QUOTA_BYTES"])(
-    "requires %s",
-    (name) => {
-      expect(() => loadConfig({ ...env, [name]: "" })).toThrow(name);
-    },
-  );
+  test.each([
+    "TABLE_NAME",
+    "PHOTO_BUCKET",
+    "USER_POOL_ID",
+    "DEFAULT_QUOTA_BYTES",
+    "MEDIA_ORIGIN",
+    "MEDIA_KEY_PAIR_ID",
+    "MEDIA_PRIVATE_KEY_PARAMETER",
+  ])("requires %s", (name) => {
+    expect(() => loadConfig({ ...env, [name]: "" })).toThrow(name);
+  });
 
   test.each(["0", "-1", "1.5", "10GB"])("rejects quota %s", (value) => {
     expect(() => loadConfig({ ...env, DEFAULT_QUOTA_BYTES: value })).toThrow("positive integer");
+  });
+
+  // The origin prefixes the signed policy's resource, so a path or slash would break every image.
+  test.each([
+    "http://d111.cloudfront.net",
+    "https://d111.cloudfront.net/",
+    "https://d111.cloudfront.net/x",
+  ])("rejects media origin %s", (value) => {
+    expect(() => loadConfig({ ...env, MEDIA_ORIGIN: value })).toThrow("https origin");
   });
 });
 

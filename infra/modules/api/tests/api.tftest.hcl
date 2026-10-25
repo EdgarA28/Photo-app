@@ -47,6 +47,11 @@ variables {
   issuer_url          = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_test"
   audience            = ["webclient123"]
   default_quota_bytes = 2147483648
+
+  media_origin                     = "https://d111.cloudfront.net"
+  media_key_pair_id                = "K2TEST"
+  media_private_key_parameter_name = "/photo-app/test/cloudfront/media-private-key"
+  media_private_key_parameter_arn  = "arn:aws:ssm:us-east-1:123456789012:parameter/photo-app/test/cloudfront/media-private-key"
 }
 
 run "function_and_config" {
@@ -64,11 +69,14 @@ run "function_and_config" {
 
   assert {
     condition = aws_lambda_function.api.environment[0].variables == tomap({
-      TABLE_NAME          = "photo-app-test"
-      PHOTO_BUCKET        = "photo-app-photos-test-123456789012"
-      USER_POOL_ID        = "us-east-1_test"
-      DEFAULT_QUOTA_BYTES = "2147483648"
-      NODE_OPTIONS        = "--enable-source-maps"
+      TABLE_NAME                  = "photo-app-test"
+      PHOTO_BUCKET                = "photo-app-photos-test-123456789012"
+      USER_POOL_ID                = "us-east-1_test"
+      DEFAULT_QUOTA_BYTES         = "2147483648"
+      MEDIA_ORIGIN                = "https://d111.cloudfront.net"
+      MEDIA_KEY_PAIR_ID           = "K2TEST"
+      MEDIA_PRIVATE_KEY_PARAMETER = "/photo-app/test/cloudfront/media-private-key"
+      NODE_OPTIONS                = "--enable-source-maps"
     })
     error_message = "The Lambda gets every variable apps/api/src/lib/config.ts requires."
   }
@@ -157,6 +165,24 @@ run "least_privilege" {
     condition     = toset(data.aws_iam_policy_document.api.statement[3].actions) == toset(["cognito-idp:ListUsers"]) && toset(data.aws_iam_policy_document.api.statement[3].resources) == toset(["arn:aws:cognito-idp:us-east-1:123456789012:userpool/us-east-1_test"])
     error_message = "Cognito: ListUsers on this pool only."
   }
+
+  assert {
+    condition = (
+      toset(data.aws_iam_policy_document.api.statement[4].actions) == toset(["ssm:GetParameter"]) &&
+      toset(data.aws_iam_policy_document.api.statement[4].resources) == toset(["arn:aws:ssm:us-east-1:123456789012:parameter/photo-app/test/cloudfront/media-private-key"])
+    )
+    error_message = "SSM: read the media signing key parameter only (7.3)."
+  }
+}
+
+run "rejects_media_origin_with_path" {
+  command = plan
+
+  variables {
+    media_origin = "https://d111.cloudfront.net/"
+  }
+
+  expect_failures = [var.media_origin]
 }
 
 run "rejects_bad_quota" {

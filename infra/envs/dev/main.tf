@@ -71,6 +71,12 @@ module "api" {
 
   # FR-ACC-2, spec §13.2: 2 GB in dev.
   default_quota_bytes = 2 * 1024 * 1024 * 1024
+
+  # Media cookies (7.3): signed for the CloudFront origin with the frontend module's key.
+  media_origin                     = module.frontend.url
+  media_key_pair_id                = module.frontend.media_key_pair_id
+  media_private_key_parameter_name = module.frontend.media_private_key_parameter_name
+  media_private_key_parameter_arn  = module.frontend.media_private_key_parameter_arn
 }
 
 module "frontend" {

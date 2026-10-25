@@ -1,9 +1,10 @@
 import { CreateTableCommand, DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { GetCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { newId } from "@photo-app/shared";
-import { randomUUID } from "node:crypto";
+import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { inject } from "vitest";
 import { createApp } from "../src/app";
+import { cloudFrontMediaSigner } from "../src/lib/media";
 import type { DownloadTarget, PhotoStorage, UploadTarget } from "../src/lib/storage";
 import type { UserDirectory, UserProfile } from "../src/lib/users";
 import {
@@ -148,6 +149,24 @@ export async function markReady(
 
 export const TEST_DEFAULT_QUOTA = 2 * 1024 ** 3;
 
+/** A real RSA key pair, so tests can verify the media cookie signatures (7.3). */
+export const TEST_MEDIA = {
+  origin: "https://media.test.example",
+  keyPairId: "KTESTKEYPAIR",
+  ...generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: "spki", format: "pem" },
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+  }),
+};
+
+export const testMediaSigner = () =>
+  cloudFrontMediaSigner({
+    origin: TEST_MEDIA.origin,
+    keyPairId: TEST_MEDIA.keyPairId,
+    loadPrivateKey: async () => TEST_MEDIA.privateKey,
+  });
+
 export const TEST_UPLOAD_URL = "https://photos.test.example/";
 export const TEST_DOWNLOAD_URL = "https://photos.test.example/download";
 
@@ -196,6 +215,7 @@ export async function createTestApi() {
       repos,
       users,
       storage,
+      media: testMediaSigner(),
       config: { defaultQuotaBytes: TEST_DEFAULT_QUOTA },
     }),
   });

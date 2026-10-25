@@ -69,3 +69,28 @@ variable "throttling_burst_limit" {
   type        = number
   default     = 50
 }
+
+variable "media_origin" {
+  description = "MEDIA_ORIGIN: https://<CloudFront domain> (frontend module url); the media cookie policy's resource prefix."
+  type        = string
+
+  validation {
+    condition     = can(regex("^https://[^/]+$", var.media_origin))
+    error_message = "media_origin is https:// + host, without a path or trailing slash."
+  }
+}
+
+variable "media_key_pair_id" {
+  description = "MEDIA_KEY_PAIR_ID: CloudFront public key ID that signs media cookies (frontend module)."
+  type        = string
+}
+
+variable "media_private_key_parameter_name" {
+  description = "MEDIA_PRIVATE_KEY_PARAMETER: SSM SecureString with the signing key (frontend module)."
+  type        = string
+}
+
+variable "media_private_key_parameter_arn" {
+  description = "ARN of that parameter: the only one the API may read."
+  type        = string
+}

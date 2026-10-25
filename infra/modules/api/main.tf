@@ -80,6 +80,14 @@ data "aws_iam_policy_document" "api" {
     resources = [var.user_pool_arn]
   }
 
+  # Media cookie signing key (7.3), read once per execution environment. Decryption with the
+  # AWS-managed aws/ssm key is granted by that key's policy for calls through SSM.
+  statement {
+    sid       = "MediaSigningKey"
+    actions   = ["ssm:GetParameter"]
+    resources = [var.media_private_key_parameter_arn]
+  }
+
   statement {
     sid       = "Logs"
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
@@ -121,7 +129,11 @@ resource "aws_lambda_function" "api" {
       PHOTO_BUCKET        = var.bucket_name
       USER_POOL_ID        = var.user_pool_id
       DEFAULT_QUOTA_BYTES = tostring(var.default_quota_bytes)
-      NODE_OPTIONS        = "--enable-source-maps"
+      # Media cookies (7.3): values from the frontend module.
+      MEDIA_ORIGIN                = var.media_origin
+      MEDIA_KEY_PAIR_ID           = var.media_key_pair_id
+      MEDIA_PRIVATE_KEY_PARAMETER = var.media_private_key_parameter_name
+      NODE_OPTIONS                = "--enable-source-maps"
     }
   }
 

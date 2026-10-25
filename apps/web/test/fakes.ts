@@ -3,6 +3,7 @@ import { vi } from "vitest";
 import { createApi } from "../src/api/api";
 import type { Request, RequestOptions } from "../src/api/client";
 import type { Auth, SessionUser } from "../src/auth/auth";
+import type { MediaCookies } from "../src/auth/mediaCookie";
 import type { AppConfig } from "../src/config";
 import { createUploadQueue, type UploadQueueDeps } from "../src/upload/queue";
 import type { PostToS3 } from "../src/upload/s3Post";
@@ -42,8 +43,17 @@ export function fakeAuth(options: { signedIn?: boolean; callbackTarget?: string 
     logout: vi.fn(async () => {
       user = null;
     }),
+    onTokens: vi.fn(() => () => {}),
   } satisfies Auth;
   return auth;
+}
+
+/** Media cookies that are always "set"; tests of the real module use createMediaCookies. */
+export function fakeMedia() {
+  return {
+    ensure: vi.fn(async () => {}),
+    clear: vi.fn(async () => {}),
+  } satisfies MediaCookies;
 }
 
 /** Minimal Web Storage (a separate sessionStorage per simulated tab). */

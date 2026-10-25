@@ -27,8 +27,9 @@ VITE_COGNITO_USER_POOL_ID=$pool_id
 VITE_COGNITO_CLIENT_ID=$client_id
 VITE_COGNITO_DOMAIN=$(out cognito_domain_url)
 VITE_GOOGLE_LOGIN=$google
-# Read by vite.config.ts only (not exposed to the browser): /api proxy target.
+# Read by vite.config.ts only (not exposed to the browser): /api and /users proxy targets.
 API_PROXY_TARGET=$(out api_endpoint)
+MEDIA_PROXY_TARGET=$(out app_url)
 ENVFILE
 
 echo "wrote apps/web/.env.development.local for $ENV (Google login: $google)"

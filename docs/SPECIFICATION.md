@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.7 |
+| **Version** | 0.8 |
 | **Date** | 2026-10-25 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -414,7 +414,7 @@ URL / cookie lifetimes:
 | CloudFront signed URLs (shared photos) | 15 min |
 | CloudFront media cookie | 8 h, refreshed with tokens |
 
-Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`, served from the same CloudFront domain as the app (first-party). `DELETE /session/media-cookie` sends the same three cookie names with the same `Path` and `Max-Age=0`. Signed cookies cannot be revoked server-side: a copy taken before logout stays valid until its expiry (≤ 8 h), and only for that user's own prefix.
+Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`, served from the same CloudFront domain as the app (first-party). Signatures use SHA-256, so there are four cookies (`CloudFront-Policy`, `-Signature`, `-Key-Pair-Id`, `-Hash-Algorithm`). `DELETE /session/media-cookie` sends the same four cookie names with the same `Path` and `Max-Age=0`. Signed cookies cannot be revoked server-side: a copy taken before logout stays valid until its expiry (≤ 8 h), and only for that user's own prefix.
 
 ---
 
@@ -710,6 +710,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 
 | Version | Date | Changes |
 |---|---|---|
+| 0.8 | 2026-10-25 | Media cookies signed with SHA-256: four cookies incl. `CloudFront-Hash-Algorithm` (§9) |
 | 0.7 | 2026-10-25 | SPA fallback via a CloudFront Function on the site behavior instead of distribution-wide error responses (§13.1) |
 | 0.6 | 2026-10-24 | Token storage clarified (§11.4): access/ID tokens in memory, refresh token in `localStorage` (FR-AUTH-4); D-2 decided: `oidc-client-ts` |
 | 0.5 | 2026-10-24 | D-3 decided: Tailwind CSS + shadcn/ui (§4, §18) |
