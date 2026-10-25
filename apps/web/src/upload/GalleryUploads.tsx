@@ -29,10 +29,11 @@ const TILE_LABELS = {
 
 function UploadTile({ entry }: { entry: QueueEntry }) {
   const failed = entry.status === "failed";
+  const storageFull = failed && entry.errorCode === "QUOTA_EXCEEDED";
   return (
     <Link
       to="/upload"
-      aria-label={`${entry.fileName}, ${TILE_LABELS[entry.status]}`}
+      aria-label={`${entry.fileName}, ${storageFull ? "storage full" : TILE_LABELS[entry.status]}`}
       className="relative flex size-28 items-center justify-center overflow-hidden bg-muted text-muted-foreground outline-offset-2 focus-visible:outline-2 focus-visible:outline-ring sm:size-48"
     >
       {canPreview(entry) && (
@@ -42,7 +43,7 @@ function UploadTile({ entry }: { entry: QueueEntry }) {
         {failed ? (
           <span className="flex flex-col items-center gap-1 rounded-md bg-background/80 px-2 py-1 text-xs font-medium text-destructive">
             <ImageOff aria-hidden className="size-5" />
-            Failed
+            {storageFull ? "Storage full" : "Failed"}
           </span>
         ) : (
           <LoaderCircle aria-hidden className="size-5 motion-safe:animate-spin" />

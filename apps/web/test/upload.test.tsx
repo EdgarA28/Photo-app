@@ -3,7 +3,15 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ApiRequestError } from "../src/api/errors";
 import { refreshAfterUpload } from "../src/queries/photos";
 import type { UploadQueue } from "../src/upload/queue";
-import { controlledPost, fakeApi, testFile, testId, testUploadQueue, testUser } from "./fakes";
+import {
+  controlledPost,
+  fakeApi,
+  testFile,
+  testId,
+  testMe,
+  testUploadQueue,
+  testUser,
+} from "./fakes";
 import { defaultResponses, renderAt } from "./render";
 
 afterEach(cleanup);
@@ -77,18 +85,18 @@ describe("upload page (FR-UP-1/5/6)", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("shows a permanent failure with its reason, and retries it on request (FR-UP-7)", async () => {
-    let full = true;
+  it("shows a permanent failure with its reason, and retries it on request", async () => {
+    let refused = true;
     const { api, queue } = setup({
       "POST /photos/upload-url": () =>
-        full ? new ApiRequestError("QUOTA_EXCEEDED", "over", 413) : uploadUrl,
+        refused ? new ApiRequestError("UNSUPPORTED_MEDIA_TYPE", "no", 415) : uploadUrl,
     });
     await renderAt("/upload", { api, uploads: queue });
 
     pick([testFile("IMG_1.jpg")]);
-    expect(await screen.findByText(/Your storage is full/)).toBeTruthy();
+    expect(await screen.findByText(/This file type isn't supported/)).toBeTruthy();
 
-    full = false;
+    refused = false;
     fireEvent.click(screen.getByRole("button", { name: "Retry IMG_1.jpg" }));
     expect(await screen.findByText(/Uploading 0%/)).toBeTruthy();
   });
@@ -186,5 +194,94 @@ describe("uploads in the gallery and nav (FR-UP-6)", () => {
     await renderAt(`/gallery?album=${testId(900)}`, { api, uploads: queue });
     expect(await screen.findByText("This album has no photos yet.")).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Uploads" })).toBeNull();
+  });
+});
+
+/** The upload page loads the usage in the background; wait until it has it. */
+const usageLoaded = (router: Awaited<ReturnType<typeof renderAt>>["router"]) =>
+  waitFor(() => expect(router.options.context.queryClient.getQueryData(["me"])).toBeDefined());
+
+describe("storage full (FR-UP-7, 8.14)", () => {
+  const GiB = 1024 ** 3;
+  const usage = (bytesUsed: number) => ({
+    ...testMe,
+    usage: { bytesUsed, photoCount: 40, quotaBytes: 2 * GiB },
+  });
+
+  it("explains refused uploads once, with usage, a way to free space and Retry all", async () => {
+    let full = true;
+    const { api, queue } = setup({
+      "GET /me": usage(2 * GiB - 1000),
+      "POST /photos/upload-url": () =>
+        full ? new ApiRequestError("QUOTA_EXCEEDED", "over", 413) : uploadUrl,
+    });
+    await renderAt("/upload", { api, uploads: queue });
+    pick([testFile("IMG_1.jpg", 900), testFile("IMG_2.jpg", 900)]);
+
+    const banner = await screen.findByText(/Storage full: 2 photos couldn't be uploaded/);
+    const alert = banner.closest("[role=alert]") as HTMLElement;
+    expect(alert.textContent).toContain("2.0 GB of 2.0 GB used.");
+    expect(
+      within(alert)
+        .getByRole("link", { name: "Free up space in the Gallery" })
+        .getAttribute("href"),
+    ).toBe("/gallery");
+    // The rows only say why in short.
+    expect(screen.getAllByText(/Not enough storage/)).toHaveLength(2);
+
+    full = false;
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry all" }));
+    await waitFor(() => expect(screen.queryByText(/Storage full/)).toBeNull());
+    expect(screen.queryAllByText(/Not enough storage/)).toHaveLength(0);
+  });
+
+  it("warns when the picked files need more space than is left, but still queues them", async () => {
+    const { api, queue } = setup({ "GET /me": usage(2 * GiB - 1500) });
+    const { router } = await renderAt("/upload", { api, uploads: queue });
+    await usageLoaded(router);
+
+    pick([testFile("IMG_1.jpg", 1000), testFile("IMG_2.jpg", 1000)]);
+    const warning = await screen.findByText(/These photos need/);
+    expect(warning.textContent).toBe(
+      "These photos need 2.0 KB, but only 1.5 KB is left. Some won't upload until you free up space.",
+    );
+    await waitFor(() => expect(queue.getSnapshot()).toHaveLength(2));
+  });
+
+  it("doesn't warn when the files fit", async () => {
+    const { api, queue } = setup({ "GET /me": usage(GiB) });
+    const { router } = await renderAt("/upload", { api, uploads: queue });
+    await usageLoaded(router);
+    pick([testFile("IMG_1.jpg", 1000)]);
+    await waitFor(() => expect(queue.getSnapshot()).toHaveLength(1));
+    expect(screen.queryByText(/These photos need/)).toBeNull();
+  });
+
+  it("retries every failed upload from the list", async () => {
+    let refused = true;
+    const { api, queue } = setup({
+      "POST /photos/upload-url": () =>
+        refused ? new ApiRequestError("VALIDATION_ERROR", "bad", 400) : uploadUrl,
+    });
+    await renderAt("/upload", { api, uploads: queue });
+    pick([testFile("IMG_1.jpg"), testFile("IMG_2.jpg")]);
+    await waitFor(() =>
+      expect(queue.getSnapshot().map((e) => e.status)).toEqual(["failed", "failed"]),
+    );
+    refused = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry all failed" }));
+    await waitFor(() =>
+      expect(queue.getSnapshot().map((e) => e.status)).toEqual(["uploading", "uploading"]),
+    );
+  });
+
+  it("labels refused uploads in the gallery as storage full", async () => {
+    const { api, queue } = setup({
+      "POST /photos/upload-url": new ApiRequestError("QUOTA_EXCEEDED", "over", 413),
+    });
+    await renderAt("/gallery", { api, uploads: queue });
+    await queue.add([testFile("NEW_1.jpg")]);
+    const tile = await screen.findByRole("link", { name: "NEW_1.jpg, storage full" });
+    expect(tile.textContent).toContain("Storage full");
   });
 });

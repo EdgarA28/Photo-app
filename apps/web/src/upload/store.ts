@@ -1,6 +1,10 @@
 import type { AllowedContentType } from "@photo-app/shared";
+import type { ClientErrorCode } from "@/api/errors";
 
 export type UploadStatus = "queued" | "uploading" | "done" | "failed";
+
+/** Why an upload failed for good: an API error code, or what went wrong outside the API. */
+export type UploadErrorCode = ClientErrorCode | "S3_REJECTED" | "FILE_MISSING" | "UNKNOWN";
 
 /** One selected file in the upload queue (§12.4), as kept in IndexedDB. */
 export interface UploadItem {
@@ -22,6 +26,8 @@ export interface UploadItem {
   retryAt: number;
   /** User-facing reason of a permanent failure. */
   error: string | null;
+  /** Its code, so the UI can group failures (e.g. storage full, 8.14). */
+  errorCode: UploadErrorCode | null;
   addedAt: number;
 }
 
@@ -78,7 +84,10 @@ export function createIdbStore(factory: IDBFactory = indexedDB): UploadStore {
       const items = await promisify(
         tx.objectStore(STORE).index("userId").getAll(userId) as IDBRequest<UploadItem[]>,
       );
-      return items.sort((a, b) => a.addedAt - b.addedAt);
+      // Items stored before 8.14 have no errorCode.
+      return items
+        .map((item) => ({ ...item, errorCode: item.errorCode ?? null }))
+        .sort((a, b) => a.addedAt - b.addedAt);
     },
     put: (item) => write((store) => store.put(item)),
     delete: (id) => write((store) => store.delete(id)),

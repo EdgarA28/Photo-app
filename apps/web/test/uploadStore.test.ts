@@ -17,6 +17,7 @@ const item = (id: string, overrides: Partial<UploadItem> = {}): UploadItem => ({
   attempts: 0,
   retryAt: 0,
   error: null,
+  errorCode: null,
   addedAt: 0,
   ...overrides,
 });
@@ -32,6 +33,13 @@ describe("IndexedDB upload store (FR-UP-5)", () => {
     const reopened = createIdbStore(factory);
     expect((await reopened.list(testUser.sub)).map((i) => i.id)).toEqual(["a", "b"]);
     expect((await reopened.list("someone-else")).map((i) => i.id)).toEqual(["other"]);
+  });
+
+  it("reads items stored before error codes existed (8.14)", async () => {
+    const store = createIdbStore(new IDBFactory());
+    const { errorCode: _, ...old } = item("old", { status: "failed", error: "Failed" });
+    await store.put(old as UploadItem);
+    expect((await store.list(testUser.sub))[0]).toMatchObject({ error: "Failed", errorCode: null });
   });
 
   it("updates, deletes and clears", async () => {

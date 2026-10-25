@@ -45,6 +45,7 @@ function storedItem(overrides: Partial<UploadItem> = {}): UploadItem {
     attempts: 0,
     retryAt: 0,
     error: null,
+    errorCode: null,
     addedAt: 1,
     ...overrides,
   };
@@ -63,7 +64,7 @@ describe("upload queue (§12.4, FR-UP-1/5/6)", () => {
     await queue.start(USER);
 
     const file = testFile("IMG_1.jpg", 1234);
-    expect(await queue.add([file])).toEqual({ added: 1, rejected: [] });
+    expect(await queue.add([file])).toEqual({ added: 1, addedBytes: 1234, rejected: [] });
     // Persisted before anything is sent (FR-UP-5).
     expect([...store.items.values()][0]).toMatchObject({
       file,
@@ -198,14 +199,41 @@ describe("upload queue (§12.4, FR-UP-1/5/6)", () => {
     await queue.add([testFile("IMG_1.jpg")]);
 
     await vi.waitFor(() => expect(statuses(queue)).toEqual(["failed"]));
-    expect(queue.getSnapshot()[0]!.error).toBe(
-      "Your storage is full. Delete some photos to upload more.",
-    );
+    expect(queue.getSnapshot()[0]).toMatchObject({
+      error: "Your storage is full. Delete some photos to upload more.",
+      errorCode: "QUOTA_EXCEEDED",
+    });
 
     full = false;
     await queue.retry(queue.getSnapshot()[0]!.id);
     await vi.waitFor(() => expect(statuses(queue)).toEqual(["done"]));
-    expect(queue.getSnapshot()[0]!.error).toBeNull();
+    expect(queue.getSnapshot()[0]).toMatchObject({ error: null, errorCode: null });
+  });
+
+  it("retries every failed upload at once (8.14), leaving the others alone", async () => {
+    let full = true;
+    const { api } = uploadApi(() =>
+      full ? new ApiRequestError("QUOTA_EXCEEDED", "over quota", 413) : undefined,
+    );
+    const store = new MemoryUploadStore();
+    await store.put(storedItem({ id: "done", status: "done", file: null, addedAt: 0 }));
+    const { queue } = testUploadQueue(api, { store });
+    await queue.start(USER);
+    await queue.add([testFile("IMG_1.jpg"), testFile("IMG_2.jpg")]);
+    await vi.waitFor(() => expect(statuses(queue)).toEqual(["failed", "failed"]));
+
+    full = false;
+    await queue.retryAll();
+    await vi.waitFor(() => expect(statuses(queue)).toEqual(["done", "done"]));
+  });
+
+  it("marks a file that vanished from the device", async () => {
+    const store = new MemoryUploadStore();
+    await store.put(storedItem({ file: null }));
+    const { queue } = testUploadQueue(uploadApi().api, { store });
+    await queue.start(USER);
+    await vi.waitFor(() => expect(statuses(queue)).toEqual(["failed"]));
+    expect(queue.getSnapshot()[0]!.errorCode).toBe("FILE_MISSING");
   });
 
   it("fails for good when S3 rejects the request itself (400)", async () => {
@@ -214,7 +242,11 @@ describe("upload queue (§12.4, FR-UP-1/5/6)", () => {
     await queue.start(USER);
     await queue.add([testFile("IMG_1.jpg")]);
     await vi.waitFor(() => expect(statuses(queue)).toEqual(["failed"]));
-    expect(queue.getSnapshot()[0]!.error).toBe("The upload was rejected (HTTP 400).");
+    expect(queue.getSnapshot()[0]).toMatchObject({
+      error:
+        "This file couldn't be uploaded. It may have changed since you picked it. Remove it and add it again.",
+      errorCode: "S3_REJECTED",
+    });
   });
 
   it("starts afresh when the pending photo to re-sign is gone (404)", async () => {

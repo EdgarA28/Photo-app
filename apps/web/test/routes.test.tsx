@@ -1,6 +1,6 @@
-import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { ErrorResponse } from "oidc-client-ts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "../src/api/errors";
 import { fakeApi, fakeAuth, testConfig, testUser } from "./fakes";
 import { defaultResponses, renderAt } from "./render";
@@ -177,5 +177,33 @@ describe("settings", () => {
         },
       ),
     ).toBeTruthy();
+  });
+});
+
+describe("session and connection messages (8.14)", () => {
+  it("says why the login page appeared when the session was rejected", async () => {
+    await renderAt("/login?reason=expired", { auth: fakeAuth() });
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "Your session has ended. Please log in again.",
+    );
+  });
+
+  it("shows no message on a normal visit to the login page", async () => {
+    await renderAt("/login", { auth: fakeAuth() });
+    await screen.findByRole("button", { name: "Continue with email" });
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("shows an offline banner while the browser is offline", async () => {
+    const onLine = vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+    await renderAt("/gallery");
+    expect((await screen.findByText(/You're offline/)).textContent).toBe(
+      "You're offline. Some things won't load until you're back online.",
+    );
+
+    onLine.mockReturnValue(true);
+    act(() => void window.dispatchEvent(new Event("online")));
+    await waitFor(() => expect(screen.queryByText(/You're offline/)).toBeNull());
+    onLine.mockRestore();
   });
 });

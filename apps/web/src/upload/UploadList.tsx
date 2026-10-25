@@ -10,6 +10,7 @@ import { canPreview, useUploadQueue } from "./useUploads";
 export function UploadList({ entries }: { entries: readonly QueueEntry[] }) {
   const queue = useUploadQueue();
   const done = entries.filter((entry) => entry.status === "done").length;
+  const failed = entries.filter((entry) => entry.status === "failed").length;
 
   return (
     <section aria-labelledby="upload-queue" className="space-y-3">
@@ -17,11 +18,19 @@ export function UploadList({ entries }: { entries: readonly QueueEntry[] }) {
         <h2 id="upload-queue" className="font-medium">
           {done} of {entries.length} uploaded
         </h2>
-        {done > 0 && (
-          <Button variant="ghost" size="sm" onClick={() => void queue.clearFinished()}>
-            Clear finished
-          </Button>
-        )}
+        <div className="flex gap-1">
+          {failed > 0 && (
+            <Button variant="ghost" size="sm" onClick={() => void queue.retryAll()}>
+              <RotateCw aria-hidden />
+              Retry all failed
+            </Button>
+          )}
+          {done > 0 && (
+            <Button variant="ghost" size="sm" onClick={() => void queue.clearFinished()}>
+              Clear finished
+            </Button>
+          )}
+        </div>
       </header>
       <ul className="divide-y rounded-xl border">
         {entries.map((entry) => (
@@ -41,7 +50,10 @@ function statusText(entry: QueueEntry): string {
     case "done":
       return "Uploaded";
     case "failed":
-      return entry.error ?? "Failed";
+      // Explained once in the storage-full banner above the list (8.14).
+      return entry.errorCode === "QUOTA_EXCEEDED"
+        ? "Not enough storage"
+        : (entry.error ?? "Failed");
   }
 }
 

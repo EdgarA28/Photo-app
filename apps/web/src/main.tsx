@@ -19,11 +19,12 @@ const api = createApi(
     auth,
     // The API rejected even a fresh token: drop the session and log in again, coming back here.
     onUnauthorized: () => {
-      void auth
-        .clearSession()
-        .then(() =>
-          router.navigate({ to: "/login", search: { redirect: router.state.location.href } }),
-        );
+      void auth.clearSession().then(() =>
+        router.navigate({
+          to: "/login",
+          search: { redirect: router.state.location.href, reason: "expired" },
+        }),
+      );
     },
   }),
 );

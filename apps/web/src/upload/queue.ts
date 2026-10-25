@@ -9,6 +9,8 @@ export type QueueEntry = UploadItem & { progress: number };
 
 export interface AddResult {
   added: number;
+  /** Total size of the added files. */
+  addedBytes: number;
   rejected: { fileName: string; reason: string }[];
 }
 
@@ -20,6 +22,8 @@ export interface UploadQueue {
   add(files: Iterable<File>): Promise<AddResult>;
   /** Try a failed upload again. */
   retry(id: string): Promise<void>;
+  /** Try every failed upload again (e.g. after freeing up space). */
+  retryAll(): Promise<void>;
   /** Cancel and forget an upload (a running one is aborted). */
   remove(id: string): Promise<void>;
   /** Forget the finished uploads. */
@@ -63,6 +67,12 @@ export const UPLOAD_CHANNEL_NAME = "photo-app-uploads";
 const PROGRESS_BROADCAST_MS = 250;
 
 type Message = { type: "changed" } | { type: "progress"; id: string; progress: number };
+
+class FileMissingError extends Error {
+  constructor() {
+    super("The file is no longer available on this device. Add it again.");
+  }
+}
 
 const isAbort = (error: unknown) => error instanceof DOMException && error.name === "AbortError";
 
@@ -203,9 +213,9 @@ export function createUploadQueue({
     active.set(id, controller);
     progress.set(id, 0);
     try {
-      await update(id, { status: "uploading", error: null });
+      await update(id, { status: "uploading", error: null, errorCode: null });
       const item = items.get(id);
-      if (!item?.file) throw new Error("The file is no longer available on this device");
+      if (!item?.file) throw new FileMissingError();
       const { photoId, upload } = await api.photos.uploadUrl({
         fileName: item.fileName,
         contentType: item.contentType,
@@ -242,7 +252,7 @@ export function createUploadQueue({
   }
 
   const finish = (id: string) =>
-    update(id, { status: "done", file: null, retryAt: 0, error: null });
+    update(id, { status: "done", file: null, retryAt: 0, error: null, errorCode: null });
 
   async function fail(id: string, error: unknown) {
     const item = items.get(id);
@@ -264,14 +274,20 @@ export function createUploadQueue({
       }
       // The client already sent the user to /login; the upload continues after it.
       if (error.code === "UNAUTHORIZED" || error.retryable) return later();
+      return update(id, { status: "failed", error: errorMessage(error), errorCode: error.code });
     } else if (error instanceof S3UploadError) {
       if (error.retryable) return later();
+      // The signed POST pins the exact size: an edited file is the usual cause.
       return update(id, {
         status: "failed",
-        error: `The upload was rejected (HTTP ${error.status}).`,
+        error:
+          "This file couldn't be uploaded. It may have changed since you picked it. Remove it and add it again.",
+        errorCode: "S3_REJECTED",
       });
+    } else if (error instanceof FileMissingError) {
+      return update(id, { status: "failed", error: error.message, errorCode: "FILE_MISSING" });
     }
-    return update(id, { status: "failed", error: errorMessage(error) });
+    return update(id, { status: "failed", error: errorMessage(error), errorCode: "UNKNOWN" });
   }
 
   async function forget(id: string) {
@@ -335,7 +351,7 @@ export function createUploadQueue({
     stop,
 
     async add(files) {
-      const result: AddResult = { added: 0, rejected: [] };
+      const result: AddResult = { added: 0, addedBytes: 0, rejected: [] };
       if (!userId) return result;
       const owner = userId;
       for (const file of files) {
@@ -356,9 +372,11 @@ export function createUploadQueue({
           attempts: 0,
           retryAt: 0,
           error: null,
+          errorCode: null,
           addedAt: now(),
         });
         result.added++;
+        result.addedBytes += file.size;
       }
       if (result.added && !persistenceRequested) {
         persistenceRequested = true;
@@ -369,7 +387,21 @@ export function createUploadQueue({
     },
 
     async retry(id) {
-      await update(id, { status: "queued", attempts: 0, retryAt: 0, error: null });
+      await update(id, { status: "queued", attempts: 0, retryAt: 0, error: null, errorCode: null });
+      pump();
+    },
+
+    async retryAll() {
+      for (const item of [...items.values()]) {
+        if (item.status !== "failed") continue;
+        await update(item.id, {
+          status: "queued",
+          attempts: 0,
+          retryAt: 0,
+          error: null,
+          errorCode: null,
+        });
+      }
       pump();
     },
 
