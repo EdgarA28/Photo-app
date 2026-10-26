@@ -6,6 +6,8 @@ import type { UploadQueue } from "../src/upload/queue";
 import {
   controlledPost,
   fakeApi,
+  fakeAuth,
+  MemoryShareInbox,
   testFile,
   testId,
   testMe,
@@ -283,5 +285,71 @@ describe("storage full (FR-UP-7, 8.14)", () => {
     await queue.add([testFile("NEW_1.jpg")]);
     const tile = await screen.findByRole("link", { name: "NEW_1.jpg, storage full" });
     expect(tile.textContent).toContain("Storage full");
+  });
+});
+
+describe("photos shared from Android's share sheet (9.6, FR-PWA-4)", () => {
+  function inboxWith(...files: File[]) {
+    const shareInbox = new MemoryShareInbox();
+    shareInbox.files = files;
+    return shareInbox;
+  }
+
+  it("shows the shared photos and adds them only when the user confirms", async () => {
+    const { api, queue, store } = setup();
+    const shareInbox = inboxWith(testFile("IMG_1.jpg"), testFile("notes.txt", 10, "text/plain"));
+    const { router } = await renderAt("/upload?shared=received", {
+      api,
+      uploads: queue,
+      shareInbox,
+    });
+
+    const card = await screen.findByRole("region", { name: "2 photos shared to this app" });
+    await waitFor(() => expect(router.state.location.search).toEqual({}));
+    // Nothing queued without the user's go-ahead: any website can POST to the share target.
+    expect(store.items.size).toBe(0);
+
+    fireEvent.click(within(card).getByRole("button", { name: "Upload" }));
+    expect(await screen.findByText("IMG_1.jpg")).toBeTruthy();
+    // Not a photo: explained like a picked file.
+    expect(await screen.findByText(/1 file wasn't added/)).toBeTruthy();
+    expect(screen.queryByRole("region", { name: /shared to this app/ })).toBeNull();
+    expect(shareInbox.files).toEqual([]);
+    expect([...store.items.values()].map((item) => item.fileName)).toEqual(["IMG_1.jpg"]);
+  });
+
+  it("discards the shared photos", async () => {
+    const { api, queue, store } = setup();
+    const shareInbox = inboxWith(testFile("IMG_1.jpg"));
+    await renderAt("/upload", { api, uploads: queue, shareInbox });
+
+    const card = await screen.findByRole("region", { name: "1 photo shared to this app" });
+    fireEvent.click(within(card).getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: /shared/ })).toBeNull());
+    expect(shareInbox.files).toEqual([]);
+    expect(store.items.size).toBe(0);
+  });
+
+  it("keeps the shared photos through a login (signed out when sharing)", async () => {
+    const { api, queue } = setup();
+    const shareInbox = inboxWith(testFile("IMG_1.jpg"));
+    const auth = fakeAuth({ signedIn: false });
+    const { router } = await renderAt("/upload?shared=received", {
+      api,
+      auth,
+      uploads: queue,
+      shareInbox,
+    });
+    expect(router.state.location.pathname).toBe("/login");
+    expect(shareInbox.files).toHaveLength(1);
+    expect(router.state.location.search).toMatchObject({
+      redirect: "/upload?shared=received",
+    });
+  });
+
+  it("says so when the service worker couldn't receive them", async () => {
+    const { api, queue } = setup();
+    await renderAt("/upload?shared=failed", { api, uploads: queue });
+    expect(await screen.findByText(/shared photos couldn't be received/)).toBeTruthy();
   });
 });

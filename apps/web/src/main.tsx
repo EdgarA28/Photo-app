@@ -11,6 +11,7 @@ import { createPersistedQueryCache } from "./queries/persistedCache";
 import { refreshAfterUpload } from "./queries/photos";
 import { createAppRouter, createQueryClient } from "./router";
 import { createUploadQueue, SYNC_TAG, UPLOAD_CHANNEL_NAME } from "./upload/queue";
+import { createIdbShareInbox } from "./upload/shareInbox";
 import { createIdbStore } from "./upload/store";
 
 const config = loadConfig();
@@ -55,7 +56,16 @@ const uploads = createUploadQueue({
   requestPersistence: () => navigator.storage?.persist?.(),
 });
 const persistedCache = createPersistedQueryCache(queryClient);
-const router = createAppRouter({ queryClient, auth, api, media, uploads, persistedCache });
+const shareInbox = createIdbShareInbox();
+const router = createAppRouter({
+  queryClient,
+  auth,
+  api,
+  media,
+  uploads,
+  persistedCache,
+  shareInbox,
+});
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

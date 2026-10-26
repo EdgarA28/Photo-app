@@ -14,6 +14,7 @@ import {
   fakeAuth,
   fakeMedia,
   fakePersistedCache,
+  MemoryShareInbox,
   testConfig,
   testMe,
   testUploadQueue,
@@ -38,6 +39,7 @@ export async function renderAt(
     uploads = undefined as UploadQueue | ((queryClient: QueryClient) => UploadQueue) | undefined,
     persistedCache = undefined as
       PersistedQueryCache | ((queryClient: QueryClient) => PersistedQueryCache) | undefined,
+    shareInbox = new MemoryShareInbox(),
   } = {},
 ) {
   const queryClient = createQueryClient();
@@ -51,7 +53,7 @@ export async function renderAt(
       : (uploads ??
         testUploadQueue(api, { onUploaded: () => refreshAfterUpload(queryClient) }).queue);
   const router = createAppRouter(
-    { queryClient, auth, api, media, uploads: queue, persistedCache: cache },
+    { queryClient, auth, api, media, uploads: queue, persistedCache: cache, shareInbox },
     createMemoryHistory({ initialEntries: [url] }),
   );
   render(<App config={config} queryClient={queryClient} router={router} />);

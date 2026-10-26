@@ -9,6 +9,7 @@ import type { AppConfig } from "../src/config";
 import type { PersistedQueryCache } from "../src/queries/persistedCache";
 import { createUploadQueue, type UploadQueueDeps } from "../src/upload/queue";
 import type { PostToS3 } from "../src/upload/s3Post";
+import type { ShareInbox, SharedFile } from "../src/upload/shareInbox";
 import type { UploadItem, UploadStore } from "../src/upload/store";
 
 export const testConfig: AppConfig = {
@@ -153,6 +154,25 @@ export function channelHub() {
     return { channel: channel as unknown as BroadcastChannel, member };
   };
   return { create };
+}
+
+/** The share inbox (9.6) in memory. */
+export class MemoryShareInbox implements ShareInbox {
+  files: File[] = [];
+  async put(files: SharedFile[]) {
+    for (const { name, type, lastModified, blob } of files) {
+      this.files.push(new File([blob], name, { type, lastModified }));
+    }
+  }
+  async list() {
+    return [...this.files];
+  }
+  async take() {
+    return this.files.splice(0);
+  }
+  async clear() {
+    this.files = [];
+  }
 }
 
 /** The session database (9.5) in memory. */

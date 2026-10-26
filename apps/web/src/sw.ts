@@ -15,6 +15,7 @@ import { createRequest } from "./api/client";
 import { createIdbSessionDb, readStoredSession } from "./auth/sessionDb";
 import { loadConfig } from "./config";
 import { uploadInBackground } from "./pwa/backgroundUploads";
+import { receiveShare, SHARE_TARGET_PATH } from "./pwa/shareTarget";
 import {
   THUMBNAIL_CACHE,
   THUMBNAIL_CACHE_LIMITS,
@@ -25,6 +26,7 @@ import {
 import { createWorkerAuth } from "./pwa/workerAuth";
 import { SYNC_TAG, UPLOAD_CHANNEL_NAME } from "./upload/queue";
 import { postToS3WithFetch } from "./upload/s3Post";
+import { createIdbShareInbox } from "./upload/shareInbox";
 import { createIdbStore } from "./upload/store";
 
 declare const self: ServiceWorkerGlobalScope;
@@ -66,6 +68,14 @@ registerRoute(
       { cacheKeyWillBeUsed: thumbnailCacheKey, cacheWillUpdate: onlyImages },
     ],
   }),
+);
+
+// Photos shared from Android's share sheet (9.6, FR-PWA-4): the manifest's `share_target` POSTs
+// them here; stored for the upload page, then a redirect to it.
+registerRoute(
+  ({ url, sameOrigin }) => sameOrigin && url.pathname === SHARE_TARGET_PATH,
+  ({ request }) => receiveShare(request, createIdbShareInbox()),
+  "POST",
 );
 
 // Uploads the stored queue once online, even with the app closed (9.5, pwa/backgroundUploads.ts).

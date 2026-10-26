@@ -1,7 +1,15 @@
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "../src/api/errors";
-import { fakeApi, fakeAuth, fakeMedia, testFile, testMe, testUploadQueue } from "./fakes";
+import {
+  fakeApi,
+  fakeAuth,
+  fakeMedia,
+  MemoryShareInbox,
+  testFile,
+  testMe,
+  testUploadQueue,
+} from "./fakes";
 import { defaultResponses, renderAt } from "./render";
 
 afterEach(cleanup);
@@ -194,6 +202,19 @@ describe("settings: logout (FR-AUTH-5)", () => {
     expect(vi.mocked(persistedCache.clear).mock.invocationCallOrder[0]!).toBeLessThan(
       auth.logout.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it("deletes photos shared to the app but not yet added (9.6)", async () => {
+    const { api } = setup();
+    const auth = fakeAuth({ signedIn: true });
+    const shareInbox = new MemoryShareInbox();
+    shareInbox.files = [testFile("shared.jpg")];
+    await renderAt("/settings", { api, auth, shareInbox });
+    await screen.findByRole("meter");
+
+    fireEvent.click(screen.getByRole("button", { name: "Log out" }));
+    await waitFor(() => expect(auth.logout).toHaveBeenCalledOnce());
+    expect(shareInbox.files).toEqual([]);
   });
 
   it("deletes the service worker's thumbnail cache before ending the session (9.2)", async () => {

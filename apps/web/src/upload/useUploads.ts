@@ -16,9 +16,13 @@ export function useUploads(): readonly QueueEntry[] {
 export const isActive = (entry: QueueEntry) =>
   entry.status === "queued" || entry.status === "uploading";
 
-/** Whether the browser can show the file itself: most can't display HEIC. */
+/** Whether the browser can show an image of this type itself: most can't display HEIC. */
+export const canPreviewType = (type: string) =>
+  type.startsWith("image/") && type !== "image/heic" && type !== "image/heif";
+
+/** Whether the browser can show the queued file itself. */
 export const canPreview = (entry: QueueEntry): entry is QueueEntry & { file: Blob } =>
-  entry.file !== null && entry.contentType !== "image/heic" && entry.contentType !== "image/heif";
+  entry.file !== null && canPreviewType(entry.contentType);
 
 const subscribeOnline = (listener: () => void) => {
   window.addEventListener("online", listener);

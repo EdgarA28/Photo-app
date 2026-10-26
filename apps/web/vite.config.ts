@@ -68,6 +68,15 @@ export default defineConfig(({ mode }) => {
           // Light theme `--background` (index.css); the manifest has no per-scheme colours.
           theme_color: "#ffffff",
           background_color: "#ffffff",
+          // Android share sheet (9.6, FR-PWA-4): shared photos are POSTed to the service worker
+          // (src/pwa/shareTarget.ts, which has the path and field name). Any image: the upload
+          // page explains which types it can't take.
+          share_target: {
+            action: "/share-target",
+            method: "POST",
+            enctype: "multipart/form-data",
+            params: { files: [{ name: "photos", accept: ["image/*"] }] },
+          },
         },
       }),
     ],

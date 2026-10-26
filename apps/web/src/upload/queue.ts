@@ -15,7 +15,10 @@ export interface AddResult {
 }
 
 export interface UploadQueue {
-  /** Loads the user's queue and starts uploading (if this tab holds the lock). Idempotent per user. */
+  /**
+   * Loads the user's queue and starts uploading (if this tab holds the lock). Idempotent per user:
+   * a second call returns the first one's promise, so a caller can wait until `add` works.
+   */
   start(userId: string): Promise<void>;
   /** Stops uploading in this tab; the queue stays stored and resumes on the next start. */
   stop(): void;
@@ -135,6 +138,7 @@ export function createUploadQueue({
   /** Since when this tab has seen uploads waiting (null: none); the leader's grace starts then. */
   let waitingSince: number | null = null;
   let persistenceRequested = false;
+  let starting: Promise<void> = Promise.resolve();
 
   const items = new Map<string, UploadItem>();
   const progress = new Map<string, number>();
@@ -416,22 +420,27 @@ export function createUploadQueue({
     emit();
   }
 
-  return {
-    async start(nextUserId) {
-      if (userId === nextUserId) return;
-      stop();
-      userId = nextUserId;
-      const forSession = session;
-      channel = createChannel?.();
-      channel?.addEventListener("message", onMessage);
-      window.addEventListener("online", onOnline);
-      await reload();
-      if (forSession !== session) return;
-      if (registerSync) document.addEventListener("visibilitychange", onSyncVisibility);
+  async function begin(nextUserId: string) {
+    stop();
+    userId = nextUserId;
+    const forSession = session;
+    channel = createChannel?.();
+    channel?.addEventListener("message", onMessage);
+    window.addEventListener("online", onOnline);
+    await reload();
+    if (forSession !== session) return;
+    if (registerSync) document.addEventListener("visibilitychange", onSyncVisibility);
 
-      if (!locks) return lead(forSession);
-      document.addEventListener("visibilitychange", onVisibilityChange);
-      requestLock(forSession);
+    if (!locks) return lead(forSession);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    requestLock(forSession);
+  }
+
+  return {
+    start(nextUserId) {
+      if (userId === nextUserId) return starting;
+      starting = begin(nextUserId);
+      return starting;
     },
 
     stop,

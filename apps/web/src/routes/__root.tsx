@@ -12,6 +12,7 @@ import type { MediaCookies } from "@/auth/mediaCookie";
 import { Button } from "@/components/ui/button";
 import type { PersistedQueryCache } from "@/queries/persistedCache";
 import type { UploadQueue } from "@/upload/queue";
+import type { ShareInbox } from "@/upload/shareInbox";
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -23,6 +24,8 @@ export interface RouterContext {
   uploads: UploadQueue;
   /** The Query cache saved to IndexedDB for offline use (9.3). */
   persistedCache: PersistedQueryCache;
+  /** Photos shared from Android's share sheet, waiting for the upload page (9.6). */
+  shareInbox: ShareInbox;
 }
 
 export const Route = createRootRouteWithContext<RouterContext>()({

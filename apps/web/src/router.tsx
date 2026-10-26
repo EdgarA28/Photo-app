@@ -6,6 +6,7 @@ import type { Auth } from "./auth/auth";
 import type { MediaCookies } from "./auth/mediaCookie";
 import { QUERY_GC_TIME_MS, type PersistedQueryCache } from "./queries/persistedCache";
 import type { UploadQueue } from "./upload/queue";
+import type { ShareInbox } from "./upload/shareInbox";
 import { routeTree } from "./routeTree.gen";
 
 /** §12.2: below the 15-minute lifetime of signed URLs in API responses (§9). */
@@ -36,15 +37,17 @@ export interface AppDeps {
   media: MediaCookies;
   uploads: UploadQueue;
   persistedCache: PersistedQueryCache;
+  /** Photos shared from Android's share sheet, waiting for the upload page (9.6). */
+  shareInbox: ShareInbox;
 }
 
 export function createAppRouter(
-  { queryClient, auth, api, media, uploads, persistedCache }: AppDeps,
+  { queryClient, auth, api, media, uploads, persistedCache, shareInbox }: AppDeps,
   history?: RouterHistory,
 ) {
   return createRouter({
     routeTree,
-    context: { queryClient, auth, api, media, uploads, persistedCache },
+    context: { queryClient, auth, api, media, uploads, persistedCache, shareInbox },
     ...(history ? { history } : {}),
     defaultPreload: "intent",
     // Loaders read through the Query cache (ensureQueryData), which decides freshness.

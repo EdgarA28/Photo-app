@@ -93,7 +93,7 @@ function Section({
  * would be lost, so they are confirmed first; otherwise it logs out at once.
  */
 function LogoutButton() {
-  const { auth, queryClient, uploads, media, persistedCache } = Route.useRouteContext();
+  const { auth, queryClient, uploads, media, persistedCache, shareInbox } = Route.useRouteContext();
   const pending = useUploads().filter(isActive).length;
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -103,7 +103,7 @@ function LogoutButton() {
   const run = () => {
     setBusy(true);
     setFailed(false);
-    logout({ auth, queryClient, uploads, media, persistedCache }).catch(() => {
+    logout({ auth, queryClient, uploads, media, persistedCache, shareInbox }).catch(() => {
       setBusy(false);
       setFailed(true);
       setConfirming(false);
