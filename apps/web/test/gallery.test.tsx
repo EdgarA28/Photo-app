@@ -338,6 +338,24 @@ describe("press and slide to select (8.11)", () => {
   });
 });
 
+describe("the Select button (8.11)", () => {
+  it("turns into Unselect all in select mode, which unpicks everything and leaves it", async () => {
+    const { api } = setup({ "GET /photos": testPhotoPage(0, 3) });
+    await renderAt("/gallery", { api });
+    const button = await screen.findByRole("button", { name: "Select" });
+    fireEvent.click(button);
+    fireEvent.click(await screen.findByRole("button", { name: "IMG_0.jpg" }));
+    fireEvent.click(screen.getByRole("button", { name: "IMG_2.jpg" }));
+
+    // The same element, so the header (and the grid below it) doesn't move.
+    expect(screen.getByRole("button", { name: "Unselect all" })).toBe(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.queryByRole("toolbar")).toBeNull());
+    expect(screen.queryAllByRole("button", { pressed: true })).toEqual([]);
+    expect(screen.getByRole("button", { name: "Select" })).toBe(button);
+  });
+});
+
 describe("leaving select mode with Back (8.11)", () => {
   let history: ReturnType<typeof createBrowserHistory> | undefined;
   afterEach(() => history?.destroy());

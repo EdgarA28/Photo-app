@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { PhotoGrid } from "@/gallery/PhotoGrid";
 import type { GallerySearch } from "@/gallery/search";
+import { SelectButton } from "@/gallery/SelectButton";
 import { SelectionBar } from "@/gallery/SelectionBar";
 import { useSelection } from "@/gallery/useSelection";
 import { albumsQuery, useRemoveFromAlbum, useUpdateAlbum } from "@/queries/albums";
@@ -114,48 +115,45 @@ function AlbumView({ album }: { album: Album }) {
               {album.photoCount === 1 ? "1 photo" : `${album.photoCount} photos`}
             </p>
           </div>
-          {!selection.active && (
-            <div className="flex items-center gap-2">
-              {photos.length > 0 && (
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setStatus(null);
-                    selection.start();
-                  }}
-                >
-                  Select
+          <div className="flex items-center gap-2">
+            {(photos.length > 0 || selection.active) && (
+              <SelectButton
+                active={selection.active}
+                onSelect={() => {
+                  setStatus(null);
+                  selection.start();
+                }}
+                onUnselect={selection.stop}
+              />
+            )}
+            <Button asChild>
+              <Link to="/gallery" search={{ addTo: album.albumId }}>
+                <ImagePlus aria-hidden />
+                Add photos
+              </Link>
+            </Button>
+            <Button variant="outline" onClick={() => setDialog("share")}>
+              <Share2 aria-hidden />
+              Share
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" aria-label="Album actions">
+                  <Ellipsis aria-hidden />
                 </Button>
-              )}
-              <Button asChild>
-                <Link to="/gallery" search={{ addTo: album.albumId }}>
-                  <ImagePlus aria-hidden />
-                  Add photos
-                </Link>
-              </Button>
-              <Button variant="outline" onClick={() => setDialog("share")}>
-                <Share2 aria-hidden />
-                Share
-              </Button>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" aria-label="Album actions">
-                    <Ellipsis aria-hidden />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onSelect={() => setDialog("rename")}>
-                    <Pencil aria-hidden />
-                    Rename
-                  </DropdownMenuItem>
-                  <DropdownMenuItem variant="destructive" onSelect={() => setDialog("delete")}>
-                    <Trash2 aria-hidden />
-                    Delete album
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          )}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => setDialog("rename")}>
+                  <Pencil aria-hidden />
+                  Rename
+                </DropdownMenuItem>
+                <DropdownMenuItem variant="destructive" onSelect={() => setDialog("delete")}>
+                  <Trash2 aria-hidden />
+                  Delete album
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
         {status && (
           <p role="status" className="text-sm text-muted-foreground">

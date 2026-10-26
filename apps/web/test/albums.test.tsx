@@ -193,6 +193,9 @@ describe("album view (FR-ALB-1/2)", () => {
     fireEvent.click(await tile("IMG_2.jpg"));
     expect((await tile("IMG_0.jpg")).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByText("2 selected")).toBeTruthy();
+    // The header keeps its buttons; Select became Unselect all.
+    expect(screen.getByRole("button", { name: "Unselect all" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Share" })).toBeTruthy();
 
     removed = true;
     fireEvent.click(screen.getByRole("button", { name: "Remove from album" }));

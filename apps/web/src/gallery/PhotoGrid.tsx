@@ -144,8 +144,9 @@ function PhotoTile({
   const label =
     photo.status === "ready" ? photo.fileName : `${photo.fileName}, ${STATUS_LABELS[photo.status]}`;
   const className = cn(
-    // No iOS link preview / image callout, link dragging or text selection on a long press.
-    "relative flex h-full shrink-0 items-center justify-center overflow-hidden outline-offset-2 select-none [-webkit-touch-callout:none] [-webkit-user-drag:none] focus-visible:outline-2 focus-visible:outline-ring",
+    // A press shows nothing until it selects (no Android tap highlight), and no iOS link preview /
+    // image callout, link dragging or text selection on a long press.
+    "relative flex h-full shrink-0 items-center justify-center overflow-hidden outline-offset-2 select-none [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none] [-webkit-user-drag:none] focus-visible:outline-2 focus-visible:outline-ring",
     failed ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground",
   );
 

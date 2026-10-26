@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/select";
 import { PhotoGrid } from "@/gallery/PhotoGrid";
 import { gallerySearchSchema } from "@/gallery/search";
+import { SelectButton } from "@/gallery/SelectButton";
 import { SelectionBar } from "@/gallery/SelectionBar";
 import { useSelection } from "@/gallery/useSelection";
 import { albumsQuery, useAddToAlbum } from "@/queries/albums";
@@ -70,16 +71,15 @@ function Gallery() {
           <h1 className="text-2xl font-semibold tracking-tight">Gallery</h1>
           <div className="flex flex-wrap gap-2">
             <GalleryFilters album={album} sort={sort} />
-            {photos.length > 0 && !selection.active && (
-              <Button
-                variant="outline"
-                onClick={() => {
+            {(photos.length > 0 || selection.active) && (
+              <SelectButton
+                active={selection.active}
+                onSelect={() => {
                   setStatus(null);
                   selection.start();
                 }}
-              >
-                Select
-              </Button>
+                onUnselect={selection.stop}
+              />
             )}
           </div>
         </header>
