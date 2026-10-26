@@ -9,7 +9,7 @@
 
 | | |
 |---|---|
-| **Last updated** | 2026-10-25 |
+| **Last updated** | 2026-10-26 |
 | **Reflects** | Phase 0 (repo), Phase 1 (AWS bootstrap: dev + management), Phase 2 (`packages/shared`), Phase 3 (database + storage, deployed in dev), Phase 5.1–5.3 (API skeleton, not deployed), Phase 6.1–6.7 (thumbnail code, not deployed) |
 
 ---
