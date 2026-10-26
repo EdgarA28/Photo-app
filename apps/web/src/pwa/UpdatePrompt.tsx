@@ -4,6 +4,11 @@ import { Button } from "@/components/ui/button";
 
 /** An installed app can stay open for days without a navigation that would check for updates. */
 export const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+/**
+ * Also when the app comes back on screen, at most this often: an installed app is usually resumed,
+ * not restarted, so without it a fix could take an hour to be offered (found testing on Android).
+ */
+export const RESUME_CHECK_MIN_MS = 60 * 1000;
 
 /**
  * Registers the service worker (9.4, §12.5) and offers a new version once it's ready (FR-PWA-3).
@@ -19,13 +24,23 @@ export function UpdatePrompt() {
   } = useRegisterSW({
     onRegisteredSW(_url, registration) {
       if (!registration) return;
-      setInterval(() => {
-        if (navigator.onLine) {
-          registration.update().catch(() => {
-            // Network trouble; the next check tries again.
-          });
+      let lastCheck = Date.now();
+      const check = () => {
+        if (!navigator.onLine) return;
+        lastCheck = Date.now();
+        registration.update().catch(() => {
+          // Network trouble; the next check tries again.
+        });
+      };
+      setInterval(check, UPDATE_CHECK_INTERVAL_MS);
+      document.addEventListener("visibilitychange", () => {
+        if (
+          document.visibilityState === "visible" &&
+          Date.now() - lastCheck >= RESUME_CHECK_MIN_MS
+        ) {
+          check();
         }
-      }, UPDATE_CHECK_INTERVAL_MS);
+      });
     },
     onRegisterError(error) {
       // The app works without it, just not offline.

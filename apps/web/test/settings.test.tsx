@@ -135,6 +135,13 @@ describe("settings: username (FR-ACC-3)", () => {
   });
 });
 
+describe("settings: version", () => {
+  it("shows which build is running (installed apps update only on Reload)", async () => {
+    await renderAt("/settings", { api: setup().api });
+    expect(await screen.findByText("Version test-version")).toBeTruthy();
+  });
+});
+
 describe("settings: logout (FR-AUTH-5)", () => {
   it("clears the upload queue and the cache, then ends the session", async () => {
     const { api } = setup();

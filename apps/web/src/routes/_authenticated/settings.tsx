@@ -19,6 +19,7 @@ import { meQuery } from "@/queries/me";
 import { QuotaBar } from "@/settings/QuotaBar";
 import { UsernameSection } from "@/settings/UsernameSection";
 import { isActive, useUploads } from "@/upload/useUploads";
+import { APP_VERSION } from "@/version";
 
 // Account, storage, username and logout (FR-ACC-1, FR-ACC-3, FR-AUTH-5, 8.13).
 export const Route = createFileRoute("/_authenticated/settings")({
@@ -58,6 +59,8 @@ function Settings() {
       >
         <LogoutButton />
       </Section>
+
+      <p className="text-xs text-muted-foreground">Version {APP_VERSION}</p>
     </main>
   );
 }

@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
@@ -18,6 +19,17 @@ import {
 // Images: `/users` goes to the deployed CloudFront (MEDIA_PROXY_TARGET, 7.3). The media cookies,
 // set on localhost through the /api proxy, travel with these requests, and their policy names
 // the CloudFront domain, which is what CloudFront sees after `changeOrigin`.
+/** Shown in Settings (src/version.ts): commit, "+" if there are uncommitted changes, UTC time. */
+function appVersion() {
+  const git = (args: string) => execSync(`git ${args}`, { encoding: "utf8" }).trim();
+  try {
+    const dirty = git("status --porcelain") ? "+" : "";
+    return `${git("rev-parse --short HEAD")}${dirty} ${new Date().toISOString().slice(0, 16)}Z`;
+  } catch {
+    return `unknown ${new Date().toISOString().slice(0, 16)}Z`;
+  }
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const proxy = {
@@ -28,6 +40,7 @@ export default defineConfig(({ mode }) => {
   };
 
   return {
+    define: { __APP_VERSION__: JSON.stringify(appVersion()) },
     plugins: [
       // Generates src/routeTree.gen.ts from src/routes (§12.1); must run before the React plugin.
       tanstackRouter({ target: "react", autoCodeSplitting: true }),

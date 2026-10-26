@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { UPDATE_CHECK_INTERVAL_MS } from "../src/pwa/UpdatePrompt";
+import { RESUME_CHECK_MIN_MS, UPDATE_CHECK_INTERVAL_MS } from "../src/pwa/UpdatePrompt";
 import { renderAt } from "./render";
 import { pwa } from "./stubs/pwaRegister";
 
@@ -49,6 +49,22 @@ describe("update prompt (9.4, FR-PWA-3)", () => {
 
     vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
     act(() => void vi.advanceTimersByTime(UPDATE_CHECK_INTERVAL_MS));
+    expect(update).toHaveBeenCalledOnce();
+  });
+
+  it("also checks when the app comes back on screen, at most once a minute", async () => {
+    await renderAt("/gallery");
+    vi.useFakeTimers();
+    const update = vi.fn(async () => {});
+    pwa.options!.onRegisteredSW!("/sw.js", { update } as unknown as ServiceWorkerRegistration);
+    const show = () => document.dispatchEvent(new Event("visibilitychange"));
+
+    show(); // right after registering: too soon
+    expect(update).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(RESUME_CHECK_MIN_MS);
+    show();
+    expect(update).toHaveBeenCalledOnce();
+    show(); // again at once: skipped
     expect(update).toHaveBeenCalledOnce();
   });
 
