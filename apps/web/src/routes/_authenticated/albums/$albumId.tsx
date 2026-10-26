@@ -181,6 +181,10 @@ function AlbumView({ album }: { album: Album }) {
           fetchNextPage={fetchNextPage}
           viewerSearch={search}
           selection={selection.grid}
+          onSelectStart={(photoId) => {
+            setStatus(null);
+            selection.startWith(photoId);
+          }}
         />
       )}
       {isFetchNextPageError && (

@@ -53,6 +53,11 @@ export function useSelection({ forced = false }: { forced?: boolean } = {}) {
     ids: useMemo(() => [...selected], [selected]),
     grid,
     start: useCallback(() => setOn(true), []),
+    /** Starts select mode with one photo picked (long press on a tile). */
+    startWith: useCallback((photoId: string) => {
+      setOn(true);
+      setSelected(new Set([photoId]));
+    }, []),
     drop,
     stop,
   };

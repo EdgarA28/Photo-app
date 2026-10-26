@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "../src/api/errors";
 import {
@@ -9,6 +9,7 @@ import {
 import { emptyPage, fakeApi, testId, testMe, testPhoto, testPhotoPage } from "./fakes";
 import { REMOTE_CHANGES_POLL_MS } from "../src/queries/remoteChanges";
 import { defaultResponses, renderAt } from "./render";
+import { LONG_PRESS_MS } from "../src/gallery/useLongPress";
 
 afterEach(cleanup);
 
@@ -239,6 +240,61 @@ describe("gallery filters in the URL (FR-GAL-3)", () => {
     fireEvent.click(screen.getByRole("link", { name: "Show all photos" }));
     expect(await screen.findByRole("link", { name: "IMG_0.jpg" })).toBeTruthy();
     expect(router.state.location.search).toEqual({ sort: "taken-desc" });
+  });
+});
+
+describe("long press to select (8.11)", () => {
+  /** Holds the pointer on `target` for `ms`, then lifts it and clicks, as a browser would. */
+  function press(target: Element, ms: number, { moveBy = 0 } = {}) {
+    vi.useFakeTimers();
+    try {
+      fireEvent.pointerDown(target, {
+        button: 0,
+        isPrimary: true,
+        clientX: 10,
+        clientY: 10,
+        pointerType: "touch",
+      });
+      if (moveBy) fireEvent.pointerMove(target, { clientX: 10, clientY: 10 + moveBy });
+      act(() => vi.advanceTimersByTime(ms));
+      // The menu and the click go to whatever is under the finger by then.
+      const now = () => screen.getByLabelText(target.getAttribute("aria-label")!);
+      const menu = fireEvent.contextMenu(now());
+      fireEvent.pointerUp(now());
+      const clicked = fireEvent.click(now(), { detail: 1 });
+      return { menu, clicked };
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it("starts select mode with the pressed photo picked, without opening it", async () => {
+    const { api } = setup({ "GET /photos": testPhotoPage(0, 3) });
+    const { router } = await renderAt("/gallery", { api });
+    const link = await screen.findByRole("link", { name: "IMG_1.jpg" });
+    const { menu, clicked } = press(link, LONG_PRESS_MS);
+
+    expect(menu).toBe(false); // Android's image/link menu suppressed
+    expect(clicked).toBe(true); // landed on the new tile button and did nothing
+    expect(router.state.location.pathname).toBe("/gallery");
+    expect(screen.getByRole("toolbar").textContent).toContain("1 selected");
+    expect(screen.getByRole("button", { name: "IMG_1.jpg" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    // Further taps toggle as in select mode.
+    fireEvent.click(screen.getByRole("button", { name: "IMG_2.jpg" }));
+    expect(screen.getByRole("toolbar").textContent).toContain("2 selected");
+  });
+
+  it("opens the photo on a short press, and a scroll is no press", async () => {
+    const { api } = setup({ "GET /photos": testPhotoPage(0, 3) });
+    await renderAt("/gallery", { api });
+    const link = await screen.findByRole("link", { name: "IMG_1.jpg" });
+    expect(press(link, LONG_PRESS_MS, { moveBy: 30 }).menu).toBe(true);
+    expect(screen.queryByRole("toolbar")).toBeNull();
+    // A short press is a plain link click (navigation itself is covered by the viewer tests).
+    expect(press(link, LONG_PRESS_MS / 2).clicked).toBe(false);
+    expect(screen.queryByRole("toolbar")).toBeNull();
   });
 });
 

@@ -7,6 +7,7 @@ import { useImageFailed } from "@/components/useImageFailed";
 import { cn } from "@/lib/utils";
 import { justifyRows } from "./justify";
 import type { GallerySearch } from "./search";
+import { useLongPress } from "./useLongPress";
 
 const GAP = 4;
 /** Row height to aim for; full rows end up a little taller or shorter to fill the width. */
@@ -31,6 +32,8 @@ interface PhotoGridProps {
   /** The list the viewer walks (FR-GAL-4); default: the current page's search params. */
   viewerSearch?: GallerySearch | undefined;
   selection?: GridSelection | undefined;
+  /** Long press on a tile outside select mode: start it with that photo picked. */
+  onSelectStart?: ((photoId: string) => void) | undefined;
 }
 
 /**
@@ -45,6 +48,7 @@ export function PhotoGrid({
   fetchNextPage,
   viewerSearch,
   selection,
+  onSelectStart,
 }: PhotoGridProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { width, top } = useElementBox(ref);
@@ -98,6 +102,7 @@ export function PhotoGrid({
                 width={width}
                 viewerSearch={viewerSearch}
                 selection={selection}
+                onSelectStart={onSelectStart}
               />
             ))}
           </div>
@@ -117,17 +122,26 @@ function PhotoTile({
   width,
   viewerSearch,
   selection,
+  onSelectStart,
 }: {
   photo: Photo;
   width: number;
   viewerSearch: GallerySearch | undefined;
   selection: GridSelection | undefined;
+  onSelectStart: ((photoId: string) => void) | undefined;
 }) {
+  const longPress = useLongPress(
+    !selection && onSelectStart ? () => onSelectStart(photo.photoId) : undefined,
+  );
+  // Whether the press that ends in a click began on this tile in select mode: the click that ends
+  // a long press lands on the tile after it has switched to select mode, and mustn't unpick it.
+  const pressedInSelect = useRef(false);
   const failed = photo.status === "failed";
   const label =
     photo.status === "ready" ? photo.fileName : `${photo.fileName}, ${STATUS_LABELS[photo.status]}`;
   const className = cn(
-    "relative flex h-full shrink-0 items-center justify-center overflow-hidden outline-offset-2 focus-visible:outline-2 focus-visible:outline-ring",
+    // No iOS link preview / image callout on a long press, no text selection.
+    "relative flex h-full shrink-0 items-center justify-center overflow-hidden outline-offset-2 select-none [-webkit-touch-callout:none] focus-visible:outline-2 focus-visible:outline-ring",
     failed ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground",
   );
 
@@ -138,7 +152,19 @@ function PhotoTile({
         type="button"
         aria-label={label}
         aria-pressed={selected}
-        onClick={() => selection.onToggle(photo.photoId)}
+        onPointerDown={() => {
+          pressedInSelect.current = true;
+        }}
+        // A long press here would bring up Android's image menu (also right after the long press
+        // that started select mode, which ends on this button).
+        onContextMenu={(event) => event.preventDefault()}
+        onClick={(event) => {
+          const pressed = pressedInSelect.current;
+          pressedInSelect.current = false;
+          // `detail` 0: keyboard (Enter / Space), no pointer involved.
+          if (event.detail !== 0 && !pressed) return;
+          selection.onToggle(photo.photoId);
+        }}
         className={className}
         style={{ width }}
       >
@@ -171,6 +197,7 @@ function PhotoTile({
       title={failed ? "This photo couldn't be processed" : undefined}
       className={className}
       style={{ width }}
+      {...longPress}
     >
       <TileContent photo={photo} />
     </Link>

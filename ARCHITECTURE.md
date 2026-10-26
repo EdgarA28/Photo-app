@@ -263,7 +263,7 @@ Photo-app/
 │           └── s3-keys.json     cross-language key contract (TS + Python)
 │
 ├── apps/
-│   ├── web/                     🚧 React PWA (Phase 8 done: 8.1–8.15; Phase 9 in progress: 9.1–9.6)
+│   ├── web/                     🚧 React PWA (Phase 8 done: 8.1–8.15; Phase 9 done except the iOS test of 9.7)
 │       ├── index.html / vite.config.ts   Vite: router plugin, React, Tailwind, PWA (manifest, 9.1), port 5173, `/api` proxy (API_PROXY_TARGET); index.html has the per-scheme `theme-color` metas
 │       ├── pwa-assets.config.ts          icon generation (9.1): minimal-2023 preset with padding off → favicon.ico, pwa-64/192/512, maskable-icon-512, apple-touch-icon-180 (not committed)
 │       ├── public/logo.svg               icon source: viewfinder corners + dot in `--safelight` amber on the dark `--background`, full-bleed, content inside the maskable safe zone
@@ -291,7 +291,7 @@ Photo-app/
 │       ├── src/queries/persistedCache.ts Query cache in IndexedDB (9.3): `createPersistedQueryCache` (start per user / clear), `createIdbKeyValue`, max age 30 d, `QUERY_GC_TIME_MS`
 │       ├── src/queries/                  Query option factories: me.ts (meQuery, useSetUsername), photos.ts (galleryQuery, infinite; photoQuery; processing poll; removePhotoFromCache; refreshAfterUpload), albums.ts (albumsQuery + album mutation hooks, `batches`), shares.ts (sharesQuery, sharedAlbumsQuery, share/revoke hooks)
 │       ├── src/albums/                   AlbumNameForm, AlbumDialogs (create / rename / delete), AddToAlbumDialog (8.11); ShareDialog, shareTarget.ts (email vs username), sharedBy.ts (8.12)
-│       ├── src/gallery/                  justify.ts (justified-row layout), PhotoGrid.tsx (virtualized grid + tiles, select mode), search.ts (`gallerySearchSchema`, shared by gallery and viewer), useSelection.ts + SelectionBar.tsx (select mode, 8.11)
+│       ├── src/gallery/                  justify.ts (justified-row layout), PhotoGrid.tsx (virtualized grid + tiles, select mode), useLongPress.ts (long press on a tile starts select mode), search.ts (`gallerySearchSchema`, shared by gallery and viewer), useSelection.ts + SelectionBar.tsx (select mode, 8.11)
 │       ├── src/lib/format.ts             formatBytes
 │       ├── src/lib/idb.ts                IndexedDB request/transaction promises (upload store, session DB)
 │       ├── src/lib/download.ts           startDownload (click a temporary link to an `attachment` URL)
@@ -1088,6 +1088,7 @@ Target design: spec §12 (TanStack Router file routes with an authenticated layo
 | 2026-10-25 | 7.3: `POST`/`DELETE /session/media-cookie` (`routes/session.ts`, `lib/media.ts`: cloudfront-signer SHA-256 custom policy, SSM key loaded on first use), `api` module env + SSM grant, envs wired from `frontend`; web `mediaCookie.ts` (guard + `onTokens` + logout), `/users` dev proxy; tenant-isolation exemptions; deployed to dev (§2.1, §3.2, §9, §10.1, §10.3, §11, §12.3, §14.1, §15). |
 | 2026-10-25 | 7.4: shared-album signed URLs (`signUrl`, thumbs in album pages and covers, previews via `GET /photos/{id}?albumId=`), key parsed once, API Lambda 512 → 1769 MB after measuring; web: viewer fetches shared photos (+ neighbours, thumbnail stand-in), 10-min refetch of signed lists, `useImageFailed`. Phase 7 complete in dev (§9, §10.3, §10.6, §11, §12.3, §14.1). |
 | 2026-10-25 | Gallery select mode: delete several photos at once (`useDeletePhotos`, `useSelection.drop`, partial failures retried) (§1). |
+| 2026-10-26 | Select mode by long press: holding a tile (500 ms, still) in the gallery or an album starts select mode with that photo picked (`useSelection.startWith`); the click that ends the press and Android's image/link menu are swallowed, iOS link preview off (`-webkit-touch-callout: none`) (8.11). |
 | 2026-10-25 | Pre sign-up trigger: optional email allowlist (`ALLOWED_EMAILS` / `allowed_emails`, from `TF_VAR_allowed_emails`) for email/password and Google sign-ups; deviation added to §15 (§10.1, §15). |
 | 2026-10-25 | Allowlist: Google sign-ups also need a Google-verified email (security review finding) (§10.1). |
 | 2026-10-25 | 9.1: web app manifest (`vite-plugin-pwa` 2.0.0, `start_url` `/gallery`, standalone) and icons generated from `public/logo.svg` (`@vite-pwa/assets-generator` 2.0.0), per-scheme `theme-color` metas; service worker built but not registered (§3.2, §5, §14). |

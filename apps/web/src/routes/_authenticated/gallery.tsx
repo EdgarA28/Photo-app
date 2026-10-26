@@ -99,6 +99,10 @@ function Gallery() {
           isFetchingNextPage={isFetchingNextPage}
           fetchNextPage={fetchNextPage}
           selection={selection.grid}
+          onSelectStart={(photoId) => {
+            setStatus(null);
+            selection.startWith(photoId);
+          }}
         />
       )}
       {isFetchNextPageError && (
