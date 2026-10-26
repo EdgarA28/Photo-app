@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { postToS3, S3UploadError } from "../src/upload/s3Post";
+import { postToS3, postToS3WithFetch, S3UploadError } from "../src/upload/s3Post";
 
 /** Just enough XMLHttpRequest to drive postToS3. */
 class FakeXhr {
@@ -83,5 +83,38 @@ describe("postToS3 (FR-UP-4)", () => {
     controller.abort();
     await expect(sent).rejects.toMatchObject({ name: "AbortError" });
     expect(FakeXhr.last.aborted).toBe(true);
+  });
+});
+
+describe("postToS3WithFetch (service worker, 9.5)", () => {
+  it("posts the signed fields then the file", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status: 204 }));
+    await postToS3WithFetch(fetch)(upload, file);
+    const [url, init] = fetch.mock.calls[0]!;
+    expect(url).toBe(upload.url);
+    expect(init?.method).toBe("POST");
+    expect([...(init!.body as FormData).keys()]).toEqual(["key", "Policy", "file"]);
+  });
+
+  it("fails like the XHR version: S3 errors by status, no response as status 0", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    fetch.mockResolvedValueOnce(new Response(null, { status: 403 }));
+    await expect(postToS3WithFetch(fetch)(upload, file)).rejects.toMatchObject({
+      status: 403,
+      retryable: true,
+    });
+    fetch.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await expect(postToS3WithFetch(fetch)(upload, file)).rejects.toBeInstanceOf(S3UploadError);
+  });
+
+  it("aborts with the signal", async () => {
+    const controller = new AbortController();
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => {
+      controller.abort();
+      throw new DOMException("aborted", "AbortError");
+    });
+    await expect(
+      postToS3WithFetch(fetch)(upload, file, { signal: controller.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
   });
 });

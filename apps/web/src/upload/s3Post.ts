@@ -57,3 +57,23 @@ export const postToS3: PostToS3 = (upload, file, { onProgress, signal } = {}) =>
     signal?.addEventListener("abort", () => xhr.abort(), { once: true });
     xhr.send(form);
   });
+
+/**
+ * The same POST with fetch, for the service worker (9.5), which has no XMLHttpRequest. No
+ * progress: fetch doesn't report upload progress.
+ */
+export const postToS3WithFetch =
+  (doFetch: typeof fetch = fetch): PostToS3 =>
+  async (upload, file, { signal } = {}) => {
+    const form = new FormData();
+    for (const [name, value] of Object.entries(upload.fields)) form.append(name, value);
+    form.append("file", file);
+    let response: Response;
+    try {
+      response = await doFetch(upload.url, { method: "POST", body: form, signal: signal ?? null });
+    } catch {
+      if (signal?.aborted) throw new DOMException("Upload cancelled", "AbortError");
+      throw new S3UploadError(0);
+    }
+    if (!response.ok) throw new S3UploadError(response.status);
+  };

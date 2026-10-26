@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Version** | 0.10 |
-| **Date** | 2026-10-25 |
+| **Version** | 0.11 |
+| **Date** | 2026-10-26 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
 
@@ -467,7 +467,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 ### 11.4 Rules
 
 - Backend identity = Cognito `sub` only (never Google's ID, never an email from the request).
-- Frontend keeps the access and ID tokens in memory; only the refresh token is stored in `localStorage`, so sessions survive restarts (FR-AUTH-4). Refresh token handling via `oidc-client-ts` (D-2). The refresh token is revoked on logout.
+- Frontend keeps the access and ID tokens in memory; only the refresh token is stored, in IndexedDB, so sessions survive restarts (FR-AUTH-4) and the service worker can refresh tokens for Background Sync uploads (§12.4). IndexedDB rather than `localStorage` because service workers can't read `localStorage`; the exposure is the same (readable by scripts on the app's origin only). Refresh token handling via `oidc-client-ts` (D-2). The refresh token is revoked on logout.
 
 ---
 
@@ -507,7 +507,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 
 - Selected files stored in IndexedDB with status (`queued`/`uploading`/`done`/`failed`).
 - Worker loop: request upload URL → POST to S3 with progress → mark done → invalidate gallery.
-- Retries on `online` event and on app start; Background Sync where supported (Chromium only).
+- Retries on `online` event and on app start; Background Sync where supported (Chromium only): the service worker uploads the stored queue once online, even with the app closed, using the stored refresh token (§11.4).
 - Concurrency: 3 parallel uploads.
 
 ### 12.5 PWA configuration (vite-plugin-pwa)
@@ -710,6 +710,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 
 | Version | Date | Changes |
 |---|---|---|
+| 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.10 | 2026-10-25 | Optional sign-up allowlist in the pre sign-up trigger (§11.3), limiting FR-AUTH-1/2 to listed emails until launch |
 | 0.9 | 2026-10-25 | Shared-album photos: album pages carry signed thumbnails, `GET /photos/{id}?albumId=` the signed preview (§9) |
 | 0.8 | 2026-10-25 | Media cookies signed with SHA-256: four cookies incl. `CloudFront-Hash-Algorithm` (§9) |

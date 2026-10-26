@@ -8,6 +8,7 @@ import {
 } from "oidc-client-ts";
 import type { AppConfig } from "@/config";
 import { safeRedirect } from "./redirect";
+import { createIdbSessionDb, type SessionDb } from "./sessionDb";
 import { SessionStore } from "./sessionStore";
 
 /** Who is signed in, from the ID token. Display only: the API trusts the access token's `sub`. */
@@ -45,7 +46,10 @@ export interface Auth {
 }
 
 export interface AuthDeps {
-  persistentStorage?: Storage;
+  /** Refresh token + `sub` (§11.4); IndexedDB in the app, shared with the service worker (9.5). */
+  sessionDb?: SessionDb;
+  /** Where older versions kept the refresh token (localStorage); moved to `sessionDb` on read. */
+  legacyStorage?: Storage;
   /** Per-tab storage for in-flight logins (state, nonce, PKCE verifier). */
   requestStorage?: Storage;
   /** Full-page navigation to Cognito; replaceable in tests (jsdom can't navigate). */
@@ -54,7 +58,7 @@ export interface AuthDeps {
 
 export function userManagerSettings(
   config: AppConfig,
-  persistentStorage: Storage,
+  userStore: SessionStore,
   requestStorage: Storage,
 ): UserManagerSettings {
   const { issuer, clientId, domain } = config.cognito;
@@ -75,7 +79,7 @@ export function userManagerSettings(
       userinfo_endpoint: `${domain}/oauth2/userInfo`,
       end_session_endpoint: `${domain}/logout`,
     },
-    userStore: new SessionStore(persistentStorage),
+    userStore,
     // In-flight login requests: per tab, removed when the callback is processed.
     stateStore: new WebStorageStateStore({ store: requestStorage }),
     // Refresh-token renewal shortly before the 1 h access token expires (FR-AUTH-4); no iframes.
@@ -86,11 +90,13 @@ export function userManagerSettings(
 }
 
 export function createAuth(config: AppConfig, deps: AuthDeps = {}): Auth {
-  const persistentStorage = deps.persistentStorage ?? window.localStorage;
   const navigate = deps.navigate ?? ((url: string) => window.location.assign(url));
   const settings = userManagerSettings(
     config,
-    persistentStorage,
+    new SessionStore(
+      deps.sessionDb ?? createIdbSessionDb(),
+      deps.legacyStorage ?? window.localStorage,
+    ),
     deps.requestStorage ?? window.sessionStorage,
   );
   const manager = new UserManager(settings);

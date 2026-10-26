@@ -4,7 +4,15 @@ import type { Api } from "../src/api/api";
 import { TAKEOVER_CHECK_MS, TAKEOVER_AFTER_MS, type UploadQueue } from "../src/upload/queue";
 import type { PostToS3 } from "../src/upload/s3Post";
 import type { UploadItem } from "../src/upload/store";
-import { MemoryUploadStore, testFile, testId, testUploadQueue, testUser } from "./fakes";
+import {
+  channelHub,
+  FakeLocks,
+  MemoryUploadStore,
+  testFile,
+  testId,
+  testUploadQueue,
+  testUser,
+} from "./fakes";
 
 // Two windows of the app on one device (e.g. a Chrome tab and the installed PWA on Android) share
 // the stored queue; one holds the lock and uploads. Found in dev: the uploading one was in the
@@ -12,68 +20,6 @@ import { MemoryUploadStore, testFile, testId, testUploadQueue, testUser } from "
 
 const USER = testUser.sub;
 const UPLOAD = { url: "https://photos.s3.amazonaws.com/", fields: { key: "k", Policy: "p" } };
-
-/** Web Locks with one exclusive lock, a waiting line, `signal` and `steal`. */
-class FakeLocks {
-  holder: { reject: (error: unknown) => void } | null = null;
-  waiting: { grant: () => void }[] = [];
-
-  request(_name: string, options: LockOptions, callback: () => Promise<void> | undefined) {
-    return new Promise<void>((resolve, reject) => {
-      const grant = () => {
-        const held = { reject };
-        this.holder = held;
-        void Promise.resolve(callback()).then(() => {
-          if (this.holder === held) {
-            this.holder = null;
-            this.waiting.shift()?.grant();
-          }
-          resolve();
-        });
-      };
-      if (options.steal) {
-        const old = this.holder;
-        this.holder = null;
-        old?.reject(new DOMException("Lock stolen", "AbortError"));
-        return grant();
-      }
-      if (!this.holder) return grant();
-      const entry = { grant };
-      this.waiting.push(entry);
-      options.signal?.addEventListener("abort", () => {
-        this.waiting = this.waiting.filter((e) => e !== entry);
-        reject(new DOMException("Aborted", "AbortError"));
-      });
-    });
-  }
-}
-
-/** BroadcastChannel between the windows; a frozen window neither sends nor receives. */
-function channelHub() {
-  const members = new Set<{ frozen: boolean; listeners: Set<(e: MessageEvent) => void> }>();
-  const create = () => {
-    const member = { frozen: false, listeners: new Set<(e: MessageEvent) => void>() };
-    members.add(member);
-    const channel = {
-      postMessage(data: unknown) {
-        if (member.frozen) return;
-        for (const other of members) {
-          if (other === member || other.frozen) continue;
-          for (const listener of other.listeners) {
-            queueMicrotask(() => listener(new MessageEvent("message", { data })));
-          }
-        }
-      },
-      addEventListener: (_type: string, listener: (e: MessageEvent) => void) =>
-        member.listeners.add(listener),
-      removeEventListener: (_type: string, listener: (e: MessageEvent) => void) =>
-        member.listeners.delete(listener),
-      close: () => members.delete(member),
-    };
-    return { channel: channel as unknown as BroadcastChannel, member };
-  };
-  return { create };
-}
 
 function uploadApi({ hang = false } = {}) {
   let n = 0;
@@ -147,7 +93,7 @@ async function twoWindows({ aHangs = false, bVisible = true } = {}) {
   await queueA.start(USER);
   await queueB.start(USER);
   return {
-    ...{ locks, store, a, b, visible, apiA, apiB, postA, postB, queueA, queueB },
+    ...{ locks, hub, store, a, b, visible, apiA, apiB, postA, postB, queueA, queueB },
     ...{ uploadedA, uploadedB },
   };
 }
@@ -239,6 +185,20 @@ describe("upload queue across windows: takeover (§12.4, FR-UP-5)", () => {
 
     for (let i = 1; i <= 10; i++) {
       progress!(i / 20);
+      await wait(TAKEOVER_CHECK_MS);
+    }
+    expect(w.apiB.uploadUrl).not.toHaveBeenCalled();
+  });
+
+  it("doesn't take over from the service worker while it reports working (9.5)", async () => {
+    const w = await twoWindows({ aHangs: true });
+    await w.queueB.add([testFile("IMG_1.jpg")]);
+    await vi.waitFor(() => expect(w.apiA.uploadUrl).toHaveBeenCalled());
+    // A froze; Background Sync took the lock from it and uploads without progress events.
+    w.a.member.frozen = true;
+    const worker = w.hub.create().channel;
+    for (let i = 0; i < 10; i++) {
+      worker.postMessage({ type: "working" });
       await wait(TAKEOVER_CHECK_MS);
     }
     expect(w.apiB.uploadUrl).not.toHaveBeenCalled();

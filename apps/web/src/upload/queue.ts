@@ -1,6 +1,6 @@
 import type { Api } from "@/api/api";
-import { ApiRequestError, errorMessage } from "@/api/errors";
-import { postToS3, S3UploadError, type PostToS3 } from "./s3Post";
+import { attemptUpload, isAbort } from "./attempt";
+import { postToS3, type PostToS3 } from "./s3Post";
 import type { UploadItem, UploadStore } from "./store";
 import { checkFile } from "./validate";
 
@@ -48,6 +48,11 @@ export interface UploadQueueDeps {
   isOnline?: () => boolean;
   /** Whether this tab / app window is on screen: only a visible one takes over (see below). */
   isVisible?: () => boolean;
+  /**
+   * Background Sync (9.5, Chromium): asks the service worker to upload once this page can't, e.g.
+   * the app was closed or Android froze it in the background. Absent → uploads wait for the app.
+   */
+  registerSync?: (() => unknown) | undefined;
   /** Asks the browser not to evict the queued files (iOS evicts storage of unused sites). */
   requestPersistence?: () => unknown;
   now?: () => number;
@@ -56,14 +61,13 @@ export interface UploadQueueDeps {
 
 /** §12.4: 3 parallel uploads. */
 export const CONCURRENCY = 3;
-/** Backoff after a temporary failure: 2 s, 4 s, 8 s … capped at 1 min. */
-export const RETRY_BASE_MS = 2000;
-export const RETRY_MAX_MS = 60_000;
-export const retryDelay = (attempts: number) =>
-  Math.min(RETRY_BASE_MS * 2 ** (attempts - 1), RETRY_MAX_MS);
+export { RETRY_BASE_MS, RETRY_MAX_MS, retryDelay } from "./attempt";
 
-const LOCK_NAME = "photo-app-uploads";
-/** BroadcastChannel name for `createChannel` in the app. */
+/** Web Lock held by whoever uploads: one tab, or the service worker (9.5). */
+export const LOCK_NAME = "photo-app-uploads";
+/** Background Sync tag the tabs register and the service worker handles (9.5). */
+export const SYNC_TAG = "photo-app-uploads";
+/** BroadcastChannel name for `createChannel` in the app and the service worker. */
 export const UPLOAD_CHANNEL_NAME = "photo-app-uploads";
 /** Reason shown for a picked file whose bytes can't be read (e.g. a cloud photo not on the device). */
 export const UNREADABLE_FILE =
@@ -79,27 +83,26 @@ export const TAKEOVER_CHECK_MS = 3000;
  * progress counts.
  */
 export const TAKEOVER_AFTER_MS = 10_000;
+/** While hidden with uploads waiting, the Background Sync is asked for again this often (9.5). */
+export const SYNC_REARM_MS = 60_000;
 
-type Message = { type: "changed" } | { type: "progress"; id: string; progress: number };
-
-class FileMissingError extends Error {
-  constructor() {
-    super("The file is no longer available on this device. Add it again.");
-  }
-}
-
-const isAbort = (error: unknown) => error instanceof DOMException && error.name === "AbortError";
+/**
+ * Between tabs and the service worker. `working`: the service worker is uploading (its fetch
+ * reports no progress), so a tab doesn't take over from it.
+ */
+export type UploadMessage =
+  { type: "changed" } | { type: "progress"; id: string; progress: number } | { type: "working" };
 
 /**
  * The upload queue (§12.4, FR-UP-1/5/6). Files are stored in IndexedDB first, then a worker loop
- * uploads them: request upload URL → POST straight to S3 with progress → done → refresh the
- * gallery. Temporary failures (network, 5xx, expired signature) retry with backoff, on the
- * `online` event and on app start; permanent ones (validation, quota) wait for the user.
+ * uploads them (attempt.ts) with progress and refreshes the gallery. Temporary failures retry with
+ * backoff, on the `online` event and on app start; permanent ones (validation, quota) wait for the
+ * user.
  *
- * Every attempt asks for a fresh signature (an old one has likely expired), passing the stored
- * `photoId` after the first, so a retry re-signs the same pending photo instead of creating a
- * duplicate (5.6a). Only the tab holding the Web Lock uploads; all tabs share the stored queue
- * and hear about changes over a BroadcastChannel.
+ * Only the tab holding the Web Lock uploads; all tabs share the stored queue and hear about
+ * changes over a BroadcastChannel. While hidden with uploads waiting, a tab asks for Background
+ * Sync, so the service worker uploads after the app is closed or frozen (9.5,
+ * pwa/backgroundUploads.ts).
  */
 export function createUploadQueue({
   api,
@@ -110,6 +113,7 @@ export function createUploadQueue({
   createChannel,
   isOnline = () => navigator.onLine,
   isVisible = () => document.visibilityState === "visible",
+  registerSync,
   requestPersistence,
   now = Date.now,
   newId = () => crypto.randomUUID(),
@@ -124,6 +128,8 @@ export function createUploadQueue({
   let timer: ReturnType<typeof setTimeout> | undefined;
   /** Not leading: the check whether the leader is getting anywhere. */
   let ticker: ReturnType<typeof setInterval> | undefined;
+  /** Hidden: asks for Background Sync again now and then. */
+  let syncTimer: ReturnType<typeof setInterval> | undefined;
   /** When the uploading tab last reported progress. */
   let lastProgress = 0;
   /** Since when this tab has seen uploads waiting (null: none); the leader's grace starts then. */
@@ -146,7 +152,7 @@ export function createUploadQueue({
     for (const listener of listeners) listener();
   }
 
-  function broadcast(message: Message) {
+  function broadcast(message: UploadMessage) {
     channel?.postMessage(message);
   }
 
@@ -192,9 +198,11 @@ export function createUploadQueue({
     if (finishedElsewhere) await onUploaded?.();
   }
 
-  function onMessage(event: MessageEvent<Message>) {
+  function onMessage(event: MessageEvent<UploadMessage>) {
     const message = event.data;
-    if (message.type === "progress") {
+    if (message.type === "working") {
+      lastProgress = now();
+    } else if (message.type === "progress") {
       lastProgress = now();
       if (!items.has(message.id)) return;
       progress.set(message.id, message.progress);
@@ -252,79 +260,37 @@ export function createUploadQueue({
     try {
       await update(id, { status: "uploading", error: null, errorCode: null });
       const item = items.get(id);
-      if (!item?.file) throw new FileMissingError();
-      const { photoId, upload } = await api.photos.uploadUrl({
-        fileName: item.fileName,
-        contentType: item.contentType,
-        sizeBytes: item.sizeBytes,
-        ...(item.photoId ? { photoId: item.photoId } : {}),
-      });
-      if (signal.aborted) return;
-      if (photoId !== item.photoId) await update(id, { photoId });
-      await post(upload, item.file, {
-        signal,
-        onProgress: (fraction) => {
-          if (signal.aborted) return;
-          progress.set(id, fraction);
-          emit();
-          const t = now();
-          if (fraction === 1 || t - (lastProgressBroadcast.get(id) ?? 0) >= PROGRESS_BROADCAST_MS) {
-            lastProgressBroadcast.set(id, t);
-            broadcast({ type: "progress", id, progress: fraction });
-          }
+      if (!item) return;
+      const result = await attemptUpload(
+        item,
+        { api, post, now },
+        {
+          signal,
+          onPhotoId: (photoId) => update(id, { photoId }),
+          onProgress: (fraction) => {
+            if (signal.aborted) return;
+            progress.set(id, fraction);
+            emit();
+            const t = now();
+            if (
+              fraction === 1 ||
+              t - (lastProgressBroadcast.get(id) ?? 0) >= PROGRESS_BROADCAST_MS
+            ) {
+              lastProgressBroadcast.set(id, t);
+              broadcast({ type: "progress", id, progress: fraction });
+            }
+          },
         },
-      });
-      if (signal.aborted) return;
-      await onUploaded?.();
-      await finish(id);
-    } catch (error) {
-      if (signal.aborted || isAbort(error)) return;
-      await fail(id, error);
+      );
+      if (!result || signal.aborted) return;
+      if (result.uploaded) await onUploaded?.();
+      await update(id, result.patch);
     } finally {
       if (active.get(id) === controller) active.delete(id);
       progress.delete(id);
       lastProgressBroadcast.delete(id);
       pump();
     }
-  }
-
-  const finish = (id: string) =>
-    update(id, { status: "done", file: null, retryAt: 0, error: null, errorCode: null });
-
-  async function fail(id: string, error: unknown) {
-    const item = items.get(id);
-    if (!item) return;
-    const later = () => {
-      const attempts = item.attempts + 1;
-      return update(id, { status: "queued", attempts, retryAt: now() + retryDelay(attempts) });
-    };
-
-    if (error instanceof ApiRequestError) {
-      // Re-signing a photo that is gone (deleted, or swept as abandoned by 6.11): start afresh.
-      if (error.status === 404 && item.photoId) {
-        return update(id, { status: "queued", photoId: null, retryAt: 0 });
-      }
-      // No longer pending: an earlier attempt reached S3 even though its answer got lost.
-      if (error.status === 409 && item.photoId) {
-        await onUploaded?.();
-        return finish(id);
-      }
-      // The client already sent the user to /login; the upload continues after it.
-      if (error.code === "UNAUTHORIZED" || error.retryable) return later();
-      return update(id, { status: "failed", error: errorMessage(error), errorCode: error.code });
-    } else if (error instanceof S3UploadError) {
-      if (error.retryable) return later();
-      // The signed POST pins the exact size: an edited file is the usual cause.
-      return update(id, {
-        status: "failed",
-        error:
-          "This file couldn't be uploaded. It may have changed since you picked it. Remove it and add it again.",
-        errorCode: "S3_REJECTED",
-      });
-    } else if (error instanceof FileMissingError) {
-      return update(id, { status: "failed", error: error.message, errorCode: "FILE_MISSING" });
-    }
-    return update(id, { status: "failed", error: errorMessage(error), errorCode: "UNKNOWN" });
   }
 
   async function forget(id: string) {
@@ -406,12 +372,34 @@ export function createUploadQueue({
     if (isVisible()) checkTakeover();
   }
 
+  /** Asks for Background Sync if there is anything to upload (registering again is harmless). */
+  function armSync() {
+    if ([...items.values()].some((item) => item.status === "queued" || item.status === "uploading"))
+      void Promise.resolve(registerSync?.()).catch(() => {});
+  }
+
+  /**
+   * Hidden: the app may be closed or frozen next, so hand the uploads to the service worker. It
+   * leaves them to this tab while this tab makes progress; asking again every minute covers a sync
+   * that already ran meanwhile (it only runs once per request).
+   */
+  function onSyncVisibility() {
+    clearInterval(syncTimer);
+    syncTimer = undefined;
+    if (isVisible()) return;
+    armSync();
+    syncTimer = setInterval(armSync, SYNC_REARM_MS);
+  }
+
   function stop() {
     session++;
     clearTimeout(timer);
     clearInterval(ticker);
     ticker = undefined;
     document.removeEventListener("visibilitychange", onVisibilityChange);
+    document.removeEventListener("visibilitychange", onSyncVisibility);
+    clearInterval(syncTimer);
+    syncTimer = undefined;
     for (const controller of active.values()) controller.abort();
     active.clear();
     progress.clear();
@@ -439,6 +427,7 @@ export function createUploadQueue({
       window.addEventListener("online", onOnline);
       await reload();
       if (forSession !== session) return;
+      if (registerSync) document.addEventListener("visibilitychange", onSyncVisibility);
 
       if (!locks) return lead(forSession);
       document.addEventListener("visibilitychange", onVisibilityChange);

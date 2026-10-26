@@ -1,5 +1,6 @@
 import type { AllowedContentType } from "@photo-app/shared";
 import type { ClientErrorCode } from "@/api/errors";
+import { done, promisify } from "@/lib/idb";
 
 export type UploadStatus = "queued" | "uploading" | "done" | "failed";
 
@@ -42,18 +43,6 @@ export interface UploadStore {
 
 const DB_NAME = "photo-app-uploads";
 const STORE = "uploads";
-
-const promisify = <T>(request: IDBRequest<T>) =>
-  new Promise<T>((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-
-const done = (tx: IDBTransaction) =>
-  new Promise<void>((resolve, reject) => {
-    tx.oncomplete = () => resolve();
-    tx.onerror = tx.onabort = () => reject(tx.error);
-  });
 
 /**
  * The queue in IndexedDB (FR-UP-5): files survive reloads, app restarts and connection loss.

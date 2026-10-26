@@ -4,6 +4,7 @@ import { createApi } from "../src/api/api";
 import type { Request, RequestOptions } from "../src/api/client";
 import type { Auth, SessionUser } from "../src/auth/auth";
 import type { MediaCookies } from "../src/auth/mediaCookie";
+import type { SessionDb } from "../src/auth/sessionDb";
 import type { AppConfig } from "../src/config";
 import type { PersistedQueryCache } from "../src/queries/persistedCache";
 import { createUploadQueue, type UploadQueueDeps } from "../src/upload/queue";
@@ -86,6 +87,88 @@ export class MemoryStorage implements Storage {
   }
   setItem(key: string, value: string) {
     this.items.set(key, value);
+  }
+}
+
+/** Web Locks with one exclusive lock, a waiting line, `signal`, `steal` and `ifAvailable`. */
+export class FakeLocks {
+  holder: { reject: (error: unknown) => void } | null = null;
+  waiting: { grant: () => void }[] = [];
+
+  request<T>(name: string, options: LockOptions, callback: (lock: Lock | null) => T) {
+    return new Promise<Awaited<T>>((resolve, reject) => {
+      const grant = () => {
+        const held = { reject };
+        this.holder = held;
+        void Promise.resolve(callback({ name, mode: "exclusive" })).then((value) => {
+          if (this.holder === held) {
+            this.holder = null;
+            this.waiting.shift()?.grant();
+          }
+          resolve(value);
+        });
+      };
+      if (options.ifAvailable && this.holder) {
+        return void Promise.resolve(callback(null)).then(resolve);
+      }
+      if (options.steal) {
+        const old = this.holder;
+        this.holder = null;
+        old?.reject(new DOMException("Lock stolen", "AbortError"));
+        return grant();
+      }
+      if (!this.holder) return grant();
+      const entry = { grant };
+      this.waiting.push(entry);
+      options.signal?.addEventListener("abort", () => {
+        this.waiting = this.waiting.filter((e) => e !== entry);
+        reject(new DOMException("Aborted", "AbortError"));
+      });
+    });
+  }
+}
+
+/** BroadcastChannel between the windows; a frozen window neither sends nor receives. */
+export function channelHub() {
+  const members = new Set<{ frozen: boolean; listeners: Set<(e: MessageEvent) => void> }>();
+  const create = () => {
+    const member = { frozen: false, listeners: new Set<(e: MessageEvent) => void>() };
+    members.add(member);
+    const channel = {
+      postMessage(data: unknown) {
+        if (member.frozen) return;
+        for (const other of members) {
+          if (other === member || other.frozen) continue;
+          for (const listener of other.listeners) {
+            queueMicrotask(() => listener(new MessageEvent("message", { data })));
+          }
+        }
+      },
+      addEventListener: (_type: string, listener: (e: MessageEvent) => void) =>
+        member.listeners.add(listener),
+      removeEventListener: (_type: string, listener: (e: MessageEvent) => void) =>
+        member.listeners.delete(listener),
+      close: () => members.delete(member),
+    };
+    return { channel: channel as unknown as BroadcastChannel, member };
+  };
+  return { create };
+}
+
+/** The session database (9.5) in memory. */
+export class MemorySessionDb implements SessionDb {
+  readonly items = new Map<string, string>();
+  async get(key: string) {
+    return this.items.get(key);
+  }
+  async set(key: string, value: string) {
+    this.items.set(key, value);
+  }
+  async delete(key: string) {
+    this.items.delete(key);
+  }
+  async keys() {
+    return [...this.items.keys()];
   }
 }
 

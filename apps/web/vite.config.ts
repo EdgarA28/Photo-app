@@ -5,13 +5,6 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, loadEnv } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
-import {
-  THUMBNAIL_CACHE,
-  THUMBNAIL_CACHE_LIMITS,
-  isThumbnailRequest,
-  onlyImages,
-  thumbnailCacheKey,
-} from "./src/pwa/thumbnailCache";
 
 // The API has no CORS (§9): in production the browser reaches it on the app's own origin via
 // CloudFront `/api/*` (Phase 7). Locally Vite proxies `/api` to a deployed API instead; the target
@@ -52,31 +45,14 @@ export default defineConfig(({ mode }) => {
       VitePWA({
         registerType: "prompt",
         injectRegister: false,
-        // Service worker caching (9.2, NFR-PERF-4).
-        workbox: {
-          // App shell: everything the build emits, fonts and icons included; `index.html` is
-          // served for every navigation, so the app opens offline (FR-PWA-2).
+        // Our own service worker, src/sw.ts: Workbox caching (9.2, NFR-PERF-4) plus Background
+        // Sync for the upload queue (9.5), which generateSW can't add.
+        strategies: "injectManifest",
+        srcDir: "src",
+        filename: "sw.ts",
+        injectManifest: {
+          // App shell precache: everything the build emits, fonts and icons included (FR-PWA-2).
           globPatterns: ["**/*.{js,css,html,woff2,ico,png,svg}"],
-          navigateFallback: "/index.html",
-          // Real responses, never the app shell: API calls and images (CloudFront `/api/*` and
-          // `/users/*`), e.g. a download link opened in the tab.
-          navigateFallbackDenylist: [/^\/api\//, /^\/users\//],
-          cleanupOutdatedCaches: true,
-          // Thumbnails: CacheFirst. Only 200 images are stored (a 403 from an expired cookie or
-          // signature must not stick). Everything else, `/api/*` included, has no route and goes
-          // straight to the network (NetworkOnly); offline data comes from the Query cache (9.3).
-          runtimeCaching: [
-            {
-              urlPattern: isThumbnailRequest,
-              handler: "CacheFirst",
-              options: {
-                cacheName: THUMBNAIL_CACHE,
-                expiration: { ...THUMBNAIL_CACHE_LIMITS, purgeOnQuotaError: true },
-                cacheableResponse: { statuses: [200] },
-                plugins: [{ cacheKeyWillBeUsed: thumbnailCacheKey, cacheWillUpdate: onlyImages }],
-              },
-            },
-          ],
         },
         // Icons from pwa-assets.config.ts; their <link> tags and the manifest `icons` are added
         // by the plugin. Theme colour metas are written in index.html, one per colour scheme.

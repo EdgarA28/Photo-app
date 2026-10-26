@@ -1,8 +1,5 @@
-// Service worker thumbnail cache (9.2, §12.5, NFR-PERF-4, FR-PWA-2). Used by vite.config.ts for
-// the Workbox runtime route, by logout (FR-AUTH-5) to delete the cache, and by the tests.
-//
-// Workbox copies the two functions into sw.js as source text, so they must not use anything
-// outside their own body (no imports, no module constants).
+// Service worker thumbnail cache (9.2, §12.5, NFR-PERF-4, FR-PWA-2). Used by src/sw.ts for the
+// Workbox runtime route, by logout (FR-AUTH-5) to delete the cache, and by the tests.
 
 /** Cache Storage name of the thumbnail cache. */
 export const THUMBNAIL_CACHE = "thumbnails";

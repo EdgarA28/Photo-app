@@ -10,7 +10,7 @@ import { loadConfig } from "./config";
 import { createPersistedQueryCache } from "./queries/persistedCache";
 import { refreshAfterUpload } from "./queries/photos";
 import { createAppRouter, createQueryClient } from "./router";
-import { createUploadQueue, UPLOAD_CHANNEL_NAME } from "./upload/queue";
+import { createUploadQueue, SYNC_TAG, UPLOAD_CHANNEL_NAME } from "./upload/queue";
 import { createIdbStore } from "./upload/store";
 
 const config = loadConfig();
@@ -42,6 +42,16 @@ const uploads = createUploadQueue({
     typeof BroadcastChannel === "undefined"
       ? undefined
       : () => new BroadcastChannel(UPLOAD_CHANNEL_NAME),
+  // Background Sync (9.5): Chromium only; `getRegistration` is undefined until the service worker
+  // is registered (never in `pnpm dev`).
+  registerSync: () =>
+    navigator.serviceWorker
+      ?.getRegistration()
+      .then((registration) =>
+        (
+          registration as { sync?: { register(tag: string): Promise<void> } } | undefined
+        )?.sync?.register(SYNC_TAG),
+      ),
   requestPersistence: () => navigator.storage?.persist?.(),
 });
 const persistedCache = createPersistedQueryCache(queryClient);

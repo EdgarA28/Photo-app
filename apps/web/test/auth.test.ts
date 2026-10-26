@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAuth, type Auth } from "../src/auth/auth";
-import { MemoryStorage, testConfig, testUser } from "./fakes";
+import { readStoredSession } from "../src/auth/sessionDb";
+import { MemorySessionDb, MemoryStorage, testConfig, testUser } from "./fakes";
 
 const { domain, clientId, issuer } = testConfig.cognito;
 const TOKEN_URL = `${domain}/oauth2/token`;
@@ -33,13 +34,15 @@ function tokenResponse(extra: Record<string, unknown> = {}) {
 }
 
 let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
-let persistent: MemoryStorage;
+let persistent: MemorySessionDb;
+let legacy: MemoryStorage;
 let navigate: ReturnType<typeof vi.fn<(url: string) => void>>;
 
-/** A tab: own memory + sessionStorage, shared localStorage (`persistent`). */
+/** A tab: own memory + sessionStorage, shared session database (`persistent`). */
 function openTab(): Auth {
   return createAuth(testConfig, {
-    persistentStorage: persistent,
+    sessionDb: persistent,
+    legacyStorage: legacy,
     requestStorage: new MemoryStorage(),
     navigate,
   });
@@ -65,7 +68,8 @@ async function signIn(auth: Auth, redirect?: string) {
 beforeEach(() => {
   fetchMock = vi.fn<typeof fetch>();
   vi.stubGlobal("fetch", fetchMock);
-  persistent = new MemoryStorage();
+  persistent = new MemorySessionDb();
+  legacy = new MemoryStorage();
   navigate = vi.fn();
 });
 
@@ -155,15 +159,18 @@ describe("callback", () => {
   });
 });
 
+/** The one stored session value. */
+const stored = () => [...persistent.items.values()][0]!;
+
 describe("token storage (option A)", () => {
   it("persists only the refresh token", async () => {
     await signIn(openTab());
-    const stored = persistent.getItem(persistent.key(0)!)!;
-    expect(persistent.length).toBe(1);
-    expect(JSON.parse(stored)).toMatchObject({ refresh_token: "refresh-1" });
-    expect(stored).not.toContain("access-1");
-    expect(stored).not.toContain(idToken);
-    expect(stored).not.toContain(testUser.email!);
+    const value = stored();
+    expect(persistent.items.size).toBe(1);
+    expect(JSON.parse(value)).toMatchObject({ refresh_token: "refresh-1" });
+    expect(value).not.toContain("access-1");
+    expect(value).not.toContain(idToken);
+    expect(value).not.toContain(testUser.email!);
   });
 
   it("restores the session in a new tab or after a restart via the refresh token (FR-AUTH-4)", async () => {
@@ -181,7 +188,29 @@ describe("token storage (option A)", () => {
       client_id: clientId,
     });
     // Cognito doesn't rotate refresh tokens: the original one is kept.
-    expect(persistent.getItem(persistent.key(0)!)).toContain("refresh-1");
+    expect(stored()).toContain("refresh-1");
+  });
+
+  it("moves a session stored in localStorage by an older version (9.5)", async () => {
+    await signIn(openTab());
+    const [key, value] = [...persistent.items][0]!;
+    persistent.items.clear();
+    legacy.setItem(`photo-app.session.${key}`, value);
+
+    const restarted = openTab();
+    fetchMock.mockResolvedValueOnce(tokenResponse({ access_token: "access-2" }));
+    expect(await restarted.getAccessToken()).toBe("access-2");
+    expect(persistent.items.get(key)).toContain("refresh-1");
+    expect(legacy.length).toBe(0);
+  });
+
+  it("is readable by the service worker as refresh token + sub (9.5)", async () => {
+    expect(await readStoredSession(persistent)).toBeNull();
+    await signIn(openTab());
+    expect(await readStoredSession(persistent)).toEqual({
+      sub: testUser.sub,
+      refreshToken: "refresh-1",
+    });
   });
 
   it("refreshes once for concurrent callers", async () => {
@@ -198,7 +227,7 @@ describe("token storage (option A)", () => {
     const restarted = openTab();
     fetchMock.mockResolvedValueOnce(Response.json({ error: "invalid_grant" }, { status: 400 }));
     expect(await restarted.getUser()).toBeNull();
-    expect(persistent.length).toBe(0);
+    expect(persistent.items.size).toBe(0);
   });
 
   it("keeps the session when the refresh fails for network reasons", async () => {
@@ -206,7 +235,7 @@ describe("token storage (option A)", () => {
     const restarted = openTab();
     fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
     await expect(restarted.getUser()).rejects.toThrow();
-    expect(persistent.length).toBe(1);
+    expect(persistent.items.size).toBe(1);
   });
 
   it("knows the stored session's user offline, by sub only (9.3)", async () => {
@@ -242,7 +271,7 @@ describe("token storage (option A)", () => {
     await signIn(auth);
     await auth.clearSession();
     expect(await auth.getUser()).toBeNull();
-    expect(persistent.length).toBe(0);
+    expect(persistent.items.size).toBe(0);
     expect(fetchMock).toHaveBeenCalledTimes(1); // only the login
     expect(navigate).toHaveBeenCalledTimes(1); // only the login redirect
   });
@@ -286,7 +315,7 @@ describe("logout (FR-AUTH-5)", () => {
       token_type_hint: "refresh_token",
       client_id: clientId,
     });
-    expect(persistent.length).toBe(0);
+    expect(persistent.items.size).toBe(0);
     expect(await auth.getUser()).toBeNull();
     const logout = new URL(navigate.mock.calls.at(-1)![0]);
     expect(logout.origin + logout.pathname).toBe(`${domain}/logout`);
@@ -304,7 +333,7 @@ describe("logout (FR-AUTH-5)", () => {
 
     await auth.logout();
 
-    expect(persistent.length).toBe(0);
+    expect(persistent.items.size).toBe(0);
     expect(navigate).toHaveBeenLastCalledWith(expect.stringContaining("/logout?"));
   });
 });
