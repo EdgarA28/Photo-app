@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.11 |
+| **Version** | 0.12 |
 | **Date** | 2026-10-26 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -502,6 +502,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 - Virtualized grid of rows; only visible rows rendered.
 - API returns `width`/`height` so tiles reserve space before images load (no layout shift).
 - `fetchNextPage()` triggered when approaching the end.
+- Select mode (several photos at once: delete, add to / remove from an album), as in Google Photos: entered with the header's Select button or by pressing and holding a photo; sliding the finger on without lifting picks every photo up to the one under it (starting on a picked photo unpicks), scrolling the page near the screen edges. In select mode the Select button reads "Unselect all" (same place, so nothing moves), and Back (Android's back gesture) leaves select mode instead of the page.
 
 ### 12.4 Upload queue
 
@@ -711,6 +712,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | Version | Date | Changes |
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
+| 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
 | 0.10 | 2026-10-25 | Optional sign-up allowlist in the pre sign-up trigger (§11.3), limiting FR-AUTH-1/2 to listed emails until launch |
 | 0.9 | 2026-10-25 | Shared-album photos: album pages carry signed thumbnails, `GET /photos/{id}?albumId=` the signed preview (§9) |
 | 0.8 | 2026-10-25 | Media cookies signed with SHA-256: four cookies incl. `CloudFront-Hash-Algorithm` (§9) |
