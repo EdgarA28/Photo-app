@@ -339,15 +339,23 @@ describe("press and slide to select (8.11)", () => {
 });
 
 describe("leaving select mode with Back (8.11)", () => {
-  it("ends select mode instead of leaving the page", async () => {
-    window.history.replaceState(null, "", "/settings");
-    const history = createBrowserHistory();
+  let history: ReturnType<typeof createBrowserHistory> | undefined;
+  afterEach(() => history?.destroy());
+
+  /** The app in the window's own history, opened on `url`, in select mode with one photo. */
+  async function selecting(url: string) {
+    window.history.replaceState(null, "", url);
+    history = createBrowserHistory();
     const { api } = setup({ "GET /photos": testPhotoPage(0, 3) });
     const { router } = await renderAt("", { api, history });
-    await router.navigate({ to: "/gallery" });
+    if (url !== "/gallery") await router.navigate({ to: "/gallery" });
     fireEvent.click(await screen.findByRole("button", { name: "Select" }));
     fireEvent.click(await screen.findByRole("button", { name: "IMG_1.jpg" }));
+    return router;
+  }
 
+  it("ends select mode instead of leaving the page", async () => {
+    const router = await selecting("/settings");
     window.history.back();
     await waitFor(() => expect(screen.queryByRole("toolbar")).toBeNull());
     expect(await screen.findByRole("link", { name: "IMG_1.jpg" })).toBeTruthy();
@@ -356,7 +364,28 @@ describe("leaving select mode with Back (8.11)", () => {
     // Out of select mode, Back leaves as usual.
     window.history.back();
     await waitFor(() => expect(router.state.location.pathname).toBe("/settings"));
-    history.destroy();
+  });
+
+  it("also when the app was opened on this page (Back would close it)", async () => {
+    const router = await selecting("/gallery");
+    window.history.back();
+    await waitFor(() => expect(screen.queryByRole("toolbar")).toBeNull());
+    expect(router.state.location.pathname).toBe("/gallery");
+    // Selecting again works the same way.
+    fireEvent.click(await screen.findByRole("button", { name: "Select" }));
+    await screen.findByRole("toolbar");
+    window.history.back();
+    await waitFor(() => expect(screen.queryByRole("toolbar")).toBeNull());
+    expect(router.state.location.pathname).toBe("/gallery");
+  });
+
+  it("takes its history entry off when select mode ends otherwise", async () => {
+    const router = await selecting("/settings");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("toolbar")).toBeNull());
+    await waitFor(() => expect(window.history.state?.photoAppSelectMode).toBeUndefined());
+    window.history.back();
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings"));
   });
 });
 

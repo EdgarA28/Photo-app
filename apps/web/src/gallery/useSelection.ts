@@ -1,6 +1,10 @@
-import { useBlocker } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { GridSelection } from "./PhotoGrid";
+
+/** Flag on the history entry select mode adds (see below). */
+const SELECT_ENTRY = "photoAppSelectMode";
+const onSelectEntry = () =>
+  (window.history.state as Record<string, unknown> | null)?.[SELECT_ENTRY] === true;
 
 /**
  * Select mode for a photo grid (8.11): which photos are picked, toggling, and Escape or Back
@@ -43,18 +47,24 @@ export function useSelection({ forced = false }: { forced?: boolean } = {}) {
     return () => window.removeEventListener("keydown", onKey);
   }, [active, forced, stop]);
 
-  // A Back while selecting is undone by the router (no new history entry is needed) and ends
-  // select mode instead, as in Google Photos. With no page to go back to (the installed app
-  // opened on this page), Android closes the app as before.
-  useBlocker({
-    shouldBlockFn: ({ action }) => {
-      if (action !== "BACK") return false;
-      stop();
-      return true;
-    },
-    enableBeforeUnload: false,
-    disabled: !active || forced,
-  });
+  // Back (Android's back gesture, the browser's button) ends select mode, as in Google Photos,
+  // also when there's no page to go back to (the installed app opened on this page), which would
+  // close the app: select mode adds a history entry for Back to take off. A copy of the current
+  // one, router key included, so the router and its scroll restoration see the same page. Ending
+  // select mode otherwise (Cancel, Escape, done) takes it off again; leaving the page while
+  // selecting leaves it behind (one more Back, on the same page).
+  useEffect(() => {
+    if (!active || forced) return;
+    window.history.pushState({ ...window.history.state, [SELECT_ENTRY]: true }, "");
+    const onPop = () => {
+      if (!onSelectEntry()) stop();
+    };
+    window.addEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      if (onSelectEntry()) window.history.back();
+    };
+  }, [active, forced, stop]);
 
   const grid: GridSelection | undefined = useMemo(
     () => (active ? { selected, onToggle } : undefined),
