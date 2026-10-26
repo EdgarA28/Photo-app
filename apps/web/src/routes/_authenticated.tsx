@@ -2,6 +2,7 @@ import { createFileRoute, Outlet, redirect, useMatches } from "@tanstack/react-r
 import { WifiOff } from "lucide-react";
 import { useEffect } from "react";
 import { BottomNav, SideNav } from "@/components/app-nav";
+import { useRemoteChanges } from "@/queries/remoteChanges";
 import { UsernamePrompt } from "@/settings/UsernamePrompt";
 import { useOnline } from "@/upload/useUploads";
 
@@ -36,7 +37,8 @@ export const Route = createFileRoute("/_authenticated")({
 // App shell (8.5): side rail from `md`, bottom tab bar below. Routes with `staticData.fullScreen`
 // (the viewer, FR-GAL-4) get the whole screen.
 function AuthenticatedLayout() {
-  const { user, uploads } = Route.useRouteContext();
+  const { user, uploads, api } = Route.useRouteContext();
+  useRemoteChanges(api);
   // The upload queue runs while signed in (8.10). Stopped when the session ends, so it doesn't
   // keep hitting the API with a dead session; the stored queue resumes on the next login.
   useEffect(() => {

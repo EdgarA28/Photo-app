@@ -6,7 +6,8 @@ import {
   PROCESSING_WINDOW_MS,
   processingPollInterval,
 } from "../src/queries/photos";
-import { emptyPage, fakeApi, testId, testPhoto, testPhotoPage } from "./fakes";
+import { emptyPage, fakeApi, testId, testMe, testPhoto, testPhotoPage } from "./fakes";
+import { REMOTE_CHANGES_POLL_MS } from "../src/queries/remoteChanges";
 import { defaultResponses, renderAt } from "./render";
 
 afterEach(cleanup);
@@ -335,3 +336,39 @@ async function chooseOption(label: string, option: string) {
   fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
   fireEvent.click(await screen.findByRole("option", { name: option }));
 }
+
+describe("changes made on another device", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("shows a photo uploaded elsewhere while the gallery stays on screen", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let uploadedElsewhere = false;
+    const { api } = setup({
+      "GET /photos": () => (uploadedElsewhere ? testPhotoPage(0, 2) : testPhotoPage(1, 1)),
+      "GET /me": () => ({
+        ...testMe,
+        usage: { ...testMe.usage, photoCount: uploadedElsewhere ? 2 : 1 },
+      }),
+    });
+    await renderAt("/gallery", { api });
+    await screen.findByRole("link", { name: "IMG_1.jpg" });
+    expect(screen.queryByRole("link", { name: "IMG_0.jpg" })).toBeNull();
+
+    uploadedElsewhere = true;
+    await vi.advanceTimersByTimeAsync(REMOTE_CHANGES_POLL_MS);
+    expect(await screen.findByRole("link", { name: "IMG_0.jpg" })).toBeTruthy();
+  });
+
+  it("doesn't reload the photos while nothing changed", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { api, request } = setup({ "GET /photos": testPhotoPage(0, 1) });
+    await renderAt("/gallery", { api });
+    await screen.findByRole("link", { name: "IMG_0.jpg" });
+    const photoCalls = () => request.mock.calls.filter(([, path]) => path === "/photos").length;
+    const before = photoCalls();
+
+    await vi.advanceTimersByTimeAsync(REMOTE_CHANGES_POLL_MS * 3);
+    expect(request.mock.calls.filter(([, path]) => path === "/me").length).toBeGreaterThan(2);
+    expect(photoCalls()).toBe(before);
+  });
+});
