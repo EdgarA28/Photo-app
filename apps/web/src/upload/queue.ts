@@ -65,6 +65,9 @@ export const retryDelay = (attempts: number) =>
 const LOCK_NAME = "photo-app-uploads";
 /** BroadcastChannel name for `createChannel` in the app. */
 export const UPLOAD_CHANNEL_NAME = "photo-app-uploads";
+/** Reason shown for a picked file whose bytes can't be read (e.g. a cloud photo not on the device). */
+export const UNREADABLE_FILE =
+  "This file couldn't be read. If it's stored in the cloud, download it to the device first.";
 /** Progress messages to other tabs at most this often. */
 const PROGRESS_BROADCAST_MS = 250;
 /** How often a waiting tab checks whether the uploading tab is getting anywhere. */
@@ -150,7 +153,13 @@ export function createUploadQueue({
   async function save(item: UploadItem) {
     items.set(item.id, item);
     emit();
-    await store.put(item);
+    try {
+      await store.put(item);
+    } catch (error) {
+      // The stored copy only matters if the app closes mid-upload; failing to write it must not
+      // stop the upload or a retry (found on Android: "Failed to write blobs (InvalidBlob)").
+      console.warn("Saving the upload queue failed", error);
+    }
     broadcast({ type: "changed" });
   }
 
@@ -448,10 +457,19 @@ export function createUploadQueue({
           result.rejected.push({ fileName: file.name || "photo", reason: check.reason });
           continue;
         }
+        // Our own copy of the bytes, read now: on Android a picked file is a reference whose read
+        // permission can lapse, and every later write of it to IndexedDB then fails (InvalidBlob).
+        let copy: Blob;
+        try {
+          copy = new Blob([await file.arrayBuffer()], { type: file.type });
+        } catch {
+          result.rejected.push({ fileName: check.fileName, reason: UNREADABLE_FILE });
+          continue;
+        }
         await save({
           id: newId(),
           userId: owner,
-          file,
+          file: copy,
           fileName: check.fileName,
           contentType: check.contentType,
           sizeBytes: file.size,

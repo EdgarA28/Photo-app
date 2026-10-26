@@ -2,7 +2,13 @@ import type { UploadUrlRequest } from "@photo-app/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Api } from "../src/api/api";
 import { ApiRequestError } from "../src/api/errors";
-import { CONCURRENCY, RETRY_BASE_MS, RETRY_MAX_MS, retryDelay } from "../src/upload/queue";
+import {
+  CONCURRENCY,
+  RETRY_BASE_MS,
+  RETRY_MAX_MS,
+  retryDelay,
+  UNREADABLE_FILE,
+} from "../src/upload/queue";
 import { S3UploadError } from "../src/upload/s3Post";
 import type { UploadItem } from "../src/upload/store";
 import {
@@ -79,7 +85,11 @@ describe("upload queue (§12.4, FR-UP-1/5/6)", () => {
       sizeBytes: 1234,
     });
     expect(calls[0]!.upload).toEqual(UPLOAD);
-    expect(calls[0]!.file).toBe(file);
+    // Its own copy of the bytes (Android), not the picked File.
+    expect(new Uint8Array(await calls[0]!.file.arrayBuffer())).toEqual(
+      new Uint8Array(await file.arrayBuffer()),
+    );
+    expect(calls[0]!.file.type).toBe(file.type);
     expect(queue.getSnapshot()[0]).toMatchObject({ status: "uploading", photoId: testId(1) });
 
     calls[0]!.progress(0.5);
@@ -376,5 +386,69 @@ describe("upload queue (§12.4, FR-UP-1/5/6)", () => {
 
     grant!(); // that tab closed
     await vi.waitFor(() => expect(statuses(queue)).toEqual(["done"]));
+  });
+});
+
+describe("upload queue: files from the device (Android, 2026-10-26)", () => {
+  it("keeps its own copy of the bytes, read when the file is added", async () => {
+    const store = new MemoryUploadStore();
+    const { queue } = testUploadQueue(uploadApi().api, {
+      store,
+      post: () => new Promise(() => {}),
+    });
+    await queue.start(USER);
+    const picked = testFile("IMG_1.jpg", 1234);
+    await queue.add([picked]);
+
+    const stored = [...store.items.values()][0]!;
+    expect(stored.file).not.toBe(picked);
+    expect(stored.file!.size).toBe(1234);
+    expect(stored.file!.type).toBe("image/jpeg");
+  });
+
+  it("rejects a file whose bytes can't be read, and adds the rest", async () => {
+    const { queue } = testUploadQueue(uploadApi().api, { post: () => new Promise(() => {}) });
+    await queue.start(USER);
+    const unreadable = testFile("cloud.jpg");
+    unreadable.arrayBuffer = () => Promise.reject(new DOMException("gone", "NotReadableError"));
+    const result = await queue.add([unreadable, testFile("IMG_2.jpg")]);
+
+    expect(result.added).toBe(1);
+    expect(result.rejected).toEqual([{ fileName: "cloud.jpg", reason: UNREADABLE_FILE }]);
+  });
+
+  it("keeps uploading when saving the queue to IndexedDB fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const store = new MemoryUploadStore();
+    const { api, uploadUrl } = uploadApi();
+    const { queue } = testUploadQueue(api, { store });
+    await queue.start(USER);
+    vi.spyOn(store, "put").mockRejectedValue(
+      new DOMException("Failed to write blobs (InvalidBlob)", "UnknownError"),
+    );
+    await queue.add([testFile("IMG_1.jpg")]);
+
+    await vi.waitFor(() => expect(statuses(queue)).toEqual(["done"]));
+    expect(uploadUrl).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
+  it("Retry still uploads when saving fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const store = new MemoryUploadStore();
+    let calls = 0;
+    // First attempt refused for good, the retry accepted.
+    const { api } = uploadApi(() =>
+      ++calls === 1 ? new ApiRequestError("VALIDATION_ERROR", "bad", 400) : undefined,
+    );
+    const { queue } = testUploadQueue(api, { store });
+    await queue.start(USER);
+    await queue.add([testFile("IMG_1.jpg")]);
+    await vi.waitFor(() => expect(statuses(queue)).toEqual(["failed"]));
+
+    vi.spyOn(store, "put").mockRejectedValue(new DOMException("blocked", "UnknownError"));
+    await queue.retry(queue.getSnapshot()[0]!.id);
+    await vi.waitFor(() => expect(statuses(queue)).toEqual(["done"]));
+    warn.mockRestore();
   });
 });
