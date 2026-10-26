@@ -1108,3 +1108,4 @@ Target design: spec §12 (TanStack Router file routes with an authenticated layo
 | 2026-10-26 | Dev site uploaded with 9.5; the new service worker installs from CloudFront (§14). |
 | 2026-10-26 | 9.5 confirmed on Android by the user; signed-in offline start confirmed too (§14). |
 | 2026-10-26 | 9.6: Android share target — manifest `share_target` → service worker `receiveShare` → IndexedDB share inbox → `/upload` offers the photos with Upload / Discard (never added unconfirmed: CSRF via the share target), also after a login; logout clears the inbox (§5, §11, §14). |
+| 2026-10-26 | Dev site uploaded with 9.6 (share target in the served manifest) (§14). |
