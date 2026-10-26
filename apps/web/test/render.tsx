@@ -1,4 +1,4 @@
-import { createMemoryHistory } from "@tanstack/react-router";
+import { createMemoryHistory, type RouterHistory } from "@tanstack/react-router";
 import { render } from "@testing-library/react";
 import { App } from "../src/App";
 import type { MediaCookies } from "../src/auth/mediaCookie";
@@ -28,7 +28,10 @@ export const defaultResponses = {
   "GET /shared-albums": emptyPage,
 };
 
-/** Renders the whole app at `url` with a memory history and waits for the first load. */
+/**
+ * Renders the whole app at `url` with a memory history (or `history`, then `url` is ignored) and
+ * waits for the first load.
+ */
 export async function renderAt(
   url: string,
   {
@@ -40,6 +43,7 @@ export async function renderAt(
     persistedCache = undefined as
       PersistedQueryCache | ((queryClient: QueryClient) => PersistedQueryCache) | undefined,
     shareInbox = new MemoryShareInbox(),
+    history = undefined as RouterHistory | undefined,
   } = {},
 ) {
   const queryClient = createQueryClient();
@@ -54,7 +58,7 @@ export async function renderAt(
         testUploadQueue(api, { onUploaded: () => refreshAfterUpload(queryClient) }).queue);
   const router = createAppRouter(
     { queryClient, auth, api, media, uploads: queue, persistedCache: cache, shareInbox },
-    createMemoryHistory({ initialEntries: [url] }),
+    history ?? createMemoryHistory({ initialEntries: [url] }),
   );
   render(<App config={config} queryClient={queryClient} router={router} />);
   await router.load();

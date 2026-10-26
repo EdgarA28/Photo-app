@@ -1,9 +1,11 @@
+import { useBlocker } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { GridSelection } from "./PhotoGrid";
 
 /**
- * Select mode for a photo grid (8.11): which photos are picked, toggling, and Escape to leave.
- * `forced` keeps it on (picking photos to add to an album).
+ * Select mode for a photo grid (8.11): which photos are picked, toggling, and Escape or Back
+ * (Android's back gesture, the browser's back button) to leave. `forced` keeps it on (picking
+ * photos to add to an album), and Back then leaves the page as usual.
  */
 export function useSelection({ forced = false }: { forced?: boolean } = {}) {
   const [on, setOn] = useState(forced);
@@ -41,6 +43,19 @@ export function useSelection({ forced = false }: { forced?: boolean } = {}) {
     return () => window.removeEventListener("keydown", onKey);
   }, [active, forced, stop]);
 
+  // A Back while selecting is undone by the router (no new history entry is needed) and ends
+  // select mode instead, as in Google Photos. With no page to go back to (the installed app
+  // opened on this page), Android closes the app as before.
+  useBlocker({
+    shouldBlockFn: ({ action }) => {
+      if (action !== "BACK") return false;
+      stop();
+      return true;
+    },
+    enableBeforeUnload: false,
+    disabled: !active || forced,
+  });
+
   const grid: GridSelection | undefined = useMemo(
     () => (active ? { selected, onToggle } : undefined),
     [active, selected, onToggle],
@@ -53,10 +68,10 @@ export function useSelection({ forced = false }: { forced?: boolean } = {}) {
     ids: useMemo(() => [...selected], [selected]),
     grid,
     start: useCallback(() => setOn(true), []),
-    /** Starts select mode with one photo picked (long press on a tile). */
-    startWith: useCallback((photoId: string) => {
+    /** Picks exactly these photos, starting select mode (press and slide on the grid). */
+    replace: useCallback((photoIds: ReadonlySet<string>) => {
       setOn(true);
-      setSelected(new Set([photoId]));
+      setSelected(photoIds);
     }, []),
     drop,
     stop,

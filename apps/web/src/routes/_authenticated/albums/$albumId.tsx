@@ -181,9 +181,9 @@ function AlbumView({ album }: { album: Album }) {
           fetchNextPage={fetchNextPage}
           viewerSearch={search}
           selection={selection.grid}
-          onSelectStart={(photoId) => {
+          onSelectionChange={(photoIds) => {
             setStatus(null);
-            selection.startWith(photoId);
+            selection.replace(photoIds);
           }}
         />
       )}

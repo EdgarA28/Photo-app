@@ -7,7 +7,7 @@ import { useImageFailed } from "@/components/useImageFailed";
 import { cn } from "@/lib/utils";
 import { justifyRows } from "./justify";
 import type { GallerySearch } from "./search";
-import { useLongPress } from "./useLongPress";
+import { TILE_ATTRIBUTE, useDragSelect } from "./useDragSelect";
 
 const GAP = 4;
 /** Row height to aim for; full rows end up a little taller or shorter to fill the width. */
@@ -32,8 +32,8 @@ interface PhotoGridProps {
   /** The list the viewer walks (FR-GAL-4); default: the current page's search params. */
   viewerSearch?: GallerySearch | undefined;
   selection?: GridSelection | undefined;
-  /** Long press on a tile outside select mode: start it with that photo picked. */
-  onSelectStart?: ((photoId: string) => void) | undefined;
+  /** Press and slide on the tiles picks photos (useDragSelect), starting select mode. */
+  onSelectionChange?: ((selected: ReadonlySet<string>) => void) | undefined;
 }
 
 /**
@@ -48,7 +48,7 @@ export function PhotoGrid({
   fetchNextPage,
   viewerSearch,
   selection,
-  onSelectStart,
+  onSelectionChange,
 }: PhotoGridProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { width, top } = useElementBox(ref);
@@ -63,6 +63,14 @@ export function PhotoGrid({
         : [],
     [photos, width],
   );
+
+  const photoIds = useMemo(() => photos.map((photo) => photo.photoId), [photos]);
+  const dragStartedInSelect = useDragSelect({
+    container: ref,
+    photoIds,
+    selected: selection?.selected,
+    onChange: onSelectionChange,
+  });
 
   const virtualizer = useWindowVirtualizer({
     count: rows.length,
@@ -102,7 +110,7 @@ export function PhotoGrid({
                 width={width}
                 viewerSearch={viewerSearch}
                 selection={selection}
-                onSelectStart={onSelectStart}
+                asButton={dragStartedInSelect ?? selection !== undefined}
               />
             ))}
           </div>
@@ -122,67 +130,38 @@ function PhotoTile({
   width,
   viewerSearch,
   selection,
-  onSelectStart,
+  asButton,
 }: {
   photo: Photo;
   width: number;
   viewerSearch: GallerySearch | undefined;
   selection: GridSelection | undefined;
-  onSelectStart: ((photoId: string) => void) | undefined;
+  /** Select mode's toggle button, else the viewer link (kept as is during a drag, useDragSelect). */
+  asButton: boolean;
 }) {
-  const longPress = useLongPress(
-    !selection && onSelectStart ? () => onSelectStart(photo.photoId) : undefined,
-  );
-  // Whether the press that ends in a click began on this tile in select mode: the click that ends
-  // a long press lands on the tile after it has switched to select mode, and mustn't unpick it.
-  const pressedInSelect = useRef(false);
+  const selected = selection?.selected.has(photo.photoId) ?? false;
   const failed = photo.status === "failed";
   const label =
     photo.status === "ready" ? photo.fileName : `${photo.fileName}, ${STATUS_LABELS[photo.status]}`;
   const className = cn(
-    // No iOS link preview / image callout on a long press, no text selection.
-    "relative flex h-full shrink-0 items-center justify-center overflow-hidden outline-offset-2 select-none [-webkit-touch-callout:none] focus-visible:outline-2 focus-visible:outline-ring",
+    // No iOS link preview / image callout, link dragging or text selection on a long press.
+    "relative flex h-full shrink-0 items-center justify-center overflow-hidden outline-offset-2 select-none [-webkit-touch-callout:none] [-webkit-user-drag:none] focus-visible:outline-2 focus-visible:outline-ring",
     failed ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground",
   );
 
-  if (selection) {
-    const selected = selection.selected.has(photo.photoId);
+  const tile = { [TILE_ATTRIBUTE]: photo.photoId, className, style: { width } };
+
+  if (selection && asButton) {
     return (
       <button
         type="button"
         aria-label={label}
         aria-pressed={selected}
-        onPointerDown={() => {
-          pressedInSelect.current = true;
-        }}
-        // A long press here would bring up Android's image menu (also right after the long press
-        // that started select mode, which ends on this button).
-        onContextMenu={(event) => event.preventDefault()}
-        onClick={(event) => {
-          const pressed = pressedInSelect.current;
-          pressedInSelect.current = false;
-          // `detail` 0: keyboard (Enter / Space), no pointer involved.
-          if (event.detail !== 0 && !pressed) return;
-          selection.onToggle(photo.photoId);
-        }}
-        className={className}
-        style={{ width }}
+        onClick={() => selection.onToggle(photo.photoId)}
+        {...tile}
       >
         <TileContent photo={photo} />
-        <span
-          aria-hidden
-          className={cn(
-            "absolute top-1.5 left-1.5 grid size-5 place-items-center rounded-full border-2 transition-colors",
-            selected
-              ? "border-primary bg-primary text-primary-foreground"
-              : "border-white/90 bg-black/20",
-          )}
-        >
-          {selected && <Check className="size-3" strokeWidth={3} />}
-        </span>
-        {selected && (
-          <span aria-hidden className="absolute inset-0 ring-3 ring-primary ring-inset" />
-        )}
+        <SelectMark selected={selected} />
       </button>
     );
   }
@@ -195,12 +174,32 @@ function PhotoTile({
       search={viewerSearch ?? ((prev) => prev)}
       aria-label={label}
       title={failed ? "This photo couldn't be processed" : undefined}
-      className={className}
-      style={{ width }}
-      {...longPress}
+      draggable={false}
+      {...tile}
     >
       <TileContent photo={photo} />
+      {selection && <SelectMark selected={selected} />}
     </Link>
+  );
+}
+
+/** Select mode's check circle and frame. */
+function SelectMark({ selected }: { selected: boolean }) {
+  return (
+    <>
+      <span
+        aria-hidden
+        className={cn(
+          "absolute top-1.5 left-1.5 grid size-5 place-items-center rounded-full border-2 transition-colors",
+          selected
+            ? "border-primary bg-primary text-primary-foreground"
+            : "border-white/90 bg-black/20",
+        )}
+      >
+        {selected && <Check className="size-3" strokeWidth={3} />}
+      </span>
+      {selected && <span aria-hidden className="absolute inset-0 ring-3 ring-primary ring-inset" />}
+    </>
   );
 }
 

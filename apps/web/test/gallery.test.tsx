@@ -9,7 +9,8 @@ import {
 import { emptyPage, fakeApi, testId, testMe, testPhoto, testPhotoPage } from "./fakes";
 import { REMOTE_CHANGES_POLL_MS } from "../src/queries/remoteChanges";
 import { defaultResponses, renderAt } from "./render";
-import { LONG_PRESS_MS } from "../src/gallery/useLongPress";
+import { LONG_PRESS_MS } from "../src/gallery/useDragSelect";
+import { createBrowserHistory } from "@tanstack/react-router";
 
 afterEach(cleanup);
 
@@ -243,58 +244,119 @@ describe("gallery filters in the URL (FR-GAL-3)", () => {
   });
 });
 
-describe("long press to select (8.11)", () => {
-  /** Holds the pointer on `target` for `ms`, then lifts it and clicks, as a browser would. */
-  function press(target: Element, ms: number, { moveBy = 0 } = {}) {
-    vi.useFakeTimers();
-    try {
-      fireEvent.pointerDown(target, {
-        button: 0,
-        isPrimary: true,
-        clientX: 10,
-        clientY: 10,
-        pointerType: "touch",
-      });
-      if (moveBy) fireEvent.pointerMove(target, { clientX: 10, clientY: 10 + moveBy });
-      act(() => vi.advanceTimersByTime(ms));
-      // The menu and the click go to whatever is under the finger by then.
-      const now = () => screen.getByLabelText(target.getAttribute("aria-label")!);
-      const menu = fireEvent.contextMenu(now());
-      fireEvent.pointerUp(now());
-      const clicked = fireEvent.click(now(), { detail: 1 });
-      return { menu, clicked };
-    } finally {
-      vi.useRealTimers();
-    }
-  }
+describe("press and slide to select (8.11)", () => {
+  const X = 100; // tile n is under x = n * X (layout is stubbed in jsdom)
+  const tileNamed = (n: number) => screen.getByLabelText(`IMG_${n}.jpg`);
+  const toolbar = () => screen.queryByRole("toolbar")?.textContent;
+  const pressed = () =>
+    screen
+      .queryAllByRole("button", { pressed: true })
+      .map((tile) => tile.getAttribute("aria-label"));
 
-  it("starts select mode with the pressed photo picked, without opening it", async () => {
-    const { api } = setup({ "GET /photos": testPhotoPage(0, 3) });
-    const { router } = await renderAt("/gallery", { api });
-    const link = await screen.findByRole("link", { name: "IMG_1.jpg" });
-    const { menu, clicked } = press(link, LONG_PRESS_MS);
-
-    expect(menu).toBe(false); // Android's image/link menu suppressed
-    expect(clicked).toBe(true); // landed on the new tile button and did nothing
-    expect(router.state.location.pathname).toBe("/gallery");
-    expect(screen.getByRole("toolbar").textContent).toContain("1 selected");
-    expect(screen.getByRole("button", { name: "IMG_1.jpg" }).getAttribute("aria-pressed")).toBe(
-      "true",
-    );
-    // Further taps toggle as in select mode.
-    fireEvent.click(screen.getByRole("button", { name: "IMG_2.jpg" }));
-    expect(screen.getByRole("toolbar").textContent).toContain("2 selected");
+  afterEach(() => {
+    vi.useRealTimers();
+    Reflect.deleteProperty(document, "elementFromPoint");
   });
 
-  it("opens the photo on a short press, and a scroll is no press", async () => {
+  /**
+   * A touch on tile `from`, held for `hold` ms, then slid over tiles `over` and lifted; the menu
+   * and the click go to what is under the finger by then, as in a browser. Fake timers from here.
+   */
+  function gesture(from: number, { hold = LONG_PRESS_MS, over = [] as number[], early = 0 } = {}) {
+    document.elementFromPoint = (x: number) => tileNamed(Math.round(x / X));
+    vi.useFakeTimers();
+    const at = (n: number) => ({ clientX: n * X, clientY: 10, pointerId: 1, isPrimary: true });
+    const touched = tileNamed(from);
+    fireEvent.pointerDown(touched, { ...at(from), button: 0, pointerType: "touch" });
+    if (early) fireEvent.pointerMove(window, { ...at(from), clientY: 10 + early });
+    act(() => vi.advanceTimersByTime(hold));
+    const touchMove = new Event("touchmove", { bubbles: true, cancelable: true });
+    tileNamed(from).dispatchEvent(touchMove);
+    for (const n of over) act(() => void fireEvent.pointerMove(window, at(n)));
+    // A touch whose target leaves the DOM gets no more events in a browser.
+    const kept = touched.isConnected;
+    const last = over.at(-1) ?? from;
+    const menu = fireEvent.contextMenu(tileNamed(last));
+    act(() => void fireEvent.pointerUp(window, at(last)));
+    const clicked = fireEvent.click(tileNamed(last), { detail: 1 });
+    return { menu, clicked, kept, scrollPrevented: touchMove.defaultPrevented };
+  }
+
+  it("picks the held photo, starting select mode, without opening it", async () => {
+    const { api } = setup({ "GET /photos": testPhotoPage(0, 6) });
+    const { router } = await renderAt("/gallery", { api });
+    await screen.findByRole("link", { name: "IMG_1.jpg" });
+    const { menu, clicked, kept, scrollPrevented } = gesture(1);
+    expect(kept).toBe(true);
+
+    expect(menu).toBe(false); // Android's image/link menu
+    expect(clicked).toBe(false); // the click that ends the press
+    expect(scrollPrevented).toBe(true);
+    expect(router.state.location.pathname).toBe("/gallery");
+    expect(toolbar()).toContain("1 selected");
+    expect(pressed()).toEqual(["IMG_1.jpg"]);
+    // Then taps toggle, as in select mode.
+    fireEvent.click(tileNamed(4));
+    expect(pressed()).toEqual(["IMG_1.jpg", "IMG_4.jpg"]);
+  });
+
+  it("picks every photo it slides over, and unpicks them sliding back", async () => {
+    const { api } = setup({ "GET /photos": testPhotoPage(0, 6) });
+    await renderAt("/gallery", { api });
+    await screen.findByRole("link", { name: "IMG_1.jpg" });
+    gesture(1, { over: [2, 4, 3] });
+    expect(pressed()).toEqual(["IMG_1.jpg", "IMG_2.jpg", "IMG_3.jpg"]);
+    expect(toolbar()).toContain("3 selected");
+  });
+
+  it("in select mode, starting on a picked photo unpicks the range", async () => {
+    const { api } = setup({ "GET /photos": testPhotoPage(0, 6) });
+    await renderAt("/gallery", { api });
+    await screen.findByRole("link", { name: "IMG_1.jpg" });
+    gesture(0, { over: [4] });
+    vi.useRealTimers();
+    expect(gesture(3, { over: [2] }).kept).toBe(true);
+    expect(pressed()).toEqual(["IMG_0.jpg", "IMG_1.jpg", "IMG_4.jpg"]);
+    // Starting on an unpicked one picks again.
+    vi.useRealTimers();
+    gesture(5);
+    expect(pressed()).toEqual(["IMG_0.jpg", "IMG_1.jpg", "IMG_4.jpg", "IMG_5.jpg"]);
+  });
+
+  it("is a plain tap when let go early, and nothing when the finger scrolls", async () => {
     const { api } = setup({ "GET /photos": testPhotoPage(0, 3) });
     await renderAt("/gallery", { api });
-    const link = await screen.findByRole("link", { name: "IMG_1.jpg" });
-    expect(press(link, LONG_PRESS_MS, { moveBy: 30 }).menu).toBe(true);
-    expect(screen.queryByRole("toolbar")).toBeNull();
-    // A short press is a plain link click (navigation itself is covered by the viewer tests).
-    expect(press(link, LONG_PRESS_MS / 2).clicked).toBe(false);
-    expect(screen.queryByRole("toolbar")).toBeNull();
+    await screen.findByRole("link", { name: "IMG_1.jpg" });
+    const scroll = gesture(1, { early: 30 });
+    expect(scroll.menu).toBe(true);
+    expect(scroll.scrollPrevented).toBe(false);
+    expect(toolbar()).toBeUndefined();
+    vi.useRealTimers();
+    // Not swallowed: the link opens the viewer (covered by the viewer tests).
+    expect(gesture(1, { hold: LONG_PRESS_MS - 100 }).clicked).toBe(false);
+    expect(toolbar()).toBeUndefined();
+  });
+});
+
+describe("leaving select mode with Back (8.11)", () => {
+  it("ends select mode instead of leaving the page", async () => {
+    window.history.replaceState(null, "", "/settings");
+    const history = createBrowserHistory();
+    const { api } = setup({ "GET /photos": testPhotoPage(0, 3) });
+    const { router } = await renderAt("", { api, history });
+    await router.navigate({ to: "/gallery" });
+    fireEvent.click(await screen.findByRole("button", { name: "Select" }));
+    fireEvent.click(await screen.findByRole("button", { name: "IMG_1.jpg" }));
+
+    window.history.back();
+    await waitFor(() => expect(screen.queryByRole("toolbar")).toBeNull());
+    expect(await screen.findByRole("link", { name: "IMG_1.jpg" })).toBeTruthy();
+    expect(router.state.location.pathname).toBe("/gallery");
+
+    // Out of select mode, Back leaves as usual.
+    window.history.back();
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings"));
+    history.destroy();
   });
 });
 

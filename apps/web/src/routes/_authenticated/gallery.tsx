@@ -99,9 +99,9 @@ function Gallery() {
           isFetchingNextPage={isFetchingNextPage}
           fetchNextPage={fetchNextPage}
           selection={selection.grid}
-          onSelectStart={(photoId) => {
+          onSelectionChange={(photoIds) => {
             setStatus(null);
-            selection.startWith(photoId);
+            selection.replace(photoIds);
           }}
         />
       )}
