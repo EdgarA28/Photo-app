@@ -1103,3 +1103,4 @@ Target design: spec §12 (TanStack Router file routes with an authenticated layo
 | 2026-10-26 | Upload queue copies picked files' bytes at once and keeps uploading when an IndexedDB write fails (Android "InvalidBlob") (§14). |
 | 2026-10-26 | Pages left in front pick up uploads/deletes from other devices within ~30 s (`useRemoteChanges`: `/me` poll, refresh lists on usage change) (§14). |
 | 2026-10-26 | 9.5: Background Sync for the upload queue — own service worker `src/sw.ts` (`injectManifest`), `uploadInBackground` (lock/takeover, `working` messages, 150 s budget, retry by rejecting), `workerAuth` (refresh at Cognito in the worker), shared `attempt.ts`; refresh token + `sub` moved from localStorage to IndexedDB `photo-app-session` (§3.2, §5, §11, §14). |
+| 2026-10-26 | Dev site uploaded with 9.5; the new service worker installs from CloudFront (§14). |
