@@ -15,7 +15,7 @@
 
 | | |
 |---|---|
-| **Phase** | 3 done (dev), 5.1–5.15 done (all API routes; API deployed in dev), 6.1–6.7 + 6.12 done (thumbnail code), Phase 4 done (Cognito + Google IdP + pre sign-up trigger in dev, linking verified) 6.8–6.10 done (thumbnail Lambda deployed in dev, end-to-end upload ≤ 5 s), 8.1–8.10 done (web scaffold, Tailwind + shadcn/ui, login, API client, app shell, gallery, processing/failed tiles, viewer, download + delete, upload queue, albums, sharing, settings, quota/error messages, username prompt) — **Phase 8 done**, **Phase 7 done** (CloudFront + site + signed media cookies + shared-album signed URLs in dev, `https://dopqu53s0gzhf.cloudfront.net`) → Phase 9 (PWA) in progress: 9.1 done (manifest + icons), 9.2 done (service worker caching, not registered yet), 9.3 done (Query cache in IndexedDB, offline start), 9.4 done (SW registered, update prompt); dev tested by the user on Android (installed app) + laptop on 2026-10-25/26, 8 issues found and fixed (see session log); 9.5 done (Background Sync, own service worker, refresh token in IndexedDB; on dev since 028aa23, confirmed by the user on Android); 9.6 done (Android share target; on dev since 068ddb4, confirmed by the user on Android on 2026-10-26) ; 9.7 Android done (install + Google login in standalone mode, confirmed by the user on 2026-10-26), iOS not tested yet (no device); select mode reworked on user feedback (press and slide, Unselect all, Back; on dev since 28ed0ee, spec v0.12 §12.3) → Phase 10: **10.1 done** (`ci.yml`: checks + dev plan + PR comment); **10.2 deploying dev** (`deploy.yml` after green CI on `main`, first run green, user check left); 9.8 share target hardening queued (security review); user check of select mode still open. 6.11 moved to Phase 13 (after everything else) |
+| **Phase** | 3 done (dev), 5.1–5.15 done (all API routes; API deployed in dev), 6.1–6.7 + 6.12 done (thumbnail code), Phase 4 done (Cognito + Google IdP + pre sign-up trigger in dev, linking verified) 6.8–6.10 done (thumbnail Lambda deployed in dev, end-to-end upload ≤ 5 s), 8.1–8.10 done (web scaffold, Tailwind + shadcn/ui, login, API client, app shell, gallery, processing/failed tiles, viewer, download + delete, upload queue, albums, sharing, settings, quota/error messages, username prompt) — **Phase 8 done**, **Phase 7 done** (CloudFront + site + signed media cookies + shared-album signed URLs in dev, `https://dopqu53s0gzhf.cloudfront.net`) → Phase 9 (PWA) in progress: 9.1 done (manifest + icons), 9.2 done (service worker caching, not registered yet), 9.3 done (Query cache in IndexedDB, offline start), 9.4 done (SW registered, update prompt); dev tested by the user on Android (installed app) + laptop on 2026-10-25/26, 8 issues found and fixed (see session log); 9.5 done (Background Sync, own service worker, refresh token in IndexedDB; on dev since 028aa23, confirmed by the user on Android); 9.6 done (Android share target; on dev since 068ddb4, confirmed by the user on Android on 2026-10-26) ; 9.7 Android done (install + Google login in standalone mode, confirmed by the user on 2026-10-26), iOS moved to Phase 11; select mode reworked on user feedback (press and slide, Unselect all, Back; on dev since 28ed0ee, spec v0.12 §12.3) → Phase 10: **10.1 done** (`ci.yml`: checks + dev plan + PR comment); **10.2 done** (`deploy.yml` deploys dev after green CI on `main`; app checked by the user 2026-10-27); 10.3 (prod) → Phase 11; 9.8 share target hardening queued (security review); user check of select mode still open. 6.11 moved to Phase 13 (after everything else). **Phase 12 (verification, on dev) in progress: 12.1 done**; Phase 11 (prod + iOS) moved to the very end (2026-10-27) |
 | **Last updated** | 2026-10-27 |
 | **Deployed envs** | dev: bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` + Cognito pool `us-east-1_vYJcHEj4G` + trigger `photo-app-dev-pre-sign-up` + thumbnail Lambda `photo-app-dev-thumbnails` with DLQ + API `https://tnl6uhgwkg.execute-api.us-east-1.amazonaws.com` + site bucket `photo-app-site-dev-063359189013` + CloudFront `E1TPVGEAUNF8HT` + media key group / public key `K3C9HRNJD7QAW6` / SSM key (test resources, destroy when done). general: budget. prod: nothing |
 | **Blockers** | none |
@@ -23,11 +23,12 @@
 ## Next up
 
 1. **Select mode** (user request, on dev since `28ed0ee`): the user checks on Android that a press is one step (no tap highlight before the tick), Unselect all, and Back with the app opened on the gallery; adjustable: hold time `LONG_PRESS_MS` 400 ms and edge auto-scroll speed in `useDragSelect.ts`. Known leftover: leaving the page while selecting leaves the select-mode history entry behind (one extra Back).
-2. **Phase 10 (CI/CD)**: 10.1 done; 10.2 deployed dev automatically for the first time (`87fbe5c`), left: the user's app check + one upload. Then 10.3 (prod job). Merges to `main` now deploy dev by themselves (after CI passes). Then 10.2 `deploy.yml` (use the `photo-app-ci-deploy` role from `main`, no `environment:` for dev since the deploy trust is `ref:refs/heads/main`; join concurrency group `tofu-dev`). Phase 9 is done except 9.7 on iOS: the user has no iOS device for now; when they do: Safari → Share → Add to Home Screen, Google login inside the installed app, restart stays signed in. Risk to watch: the login state (PKCE verifier) is in `sessionStorage`; if iOS opened the Cognito/Google pages outside the app's web view, the callback would fail with a missing state. Pre-checked 2026-10-26: CloudFront serves the manifest, apple-touch-icon, icons and `sw.js` with the right types. 9.1–9.6 and 9.7 (Android) confirmed by the user on dev (2026-10-26). Open suggestion to the user: a "Recently added" sort or a hint after uploads (photos are placed by date taken, so older photos land far down). Check the running build in Settings (`Version <commit> <UTC time>`) before testing; installed apps update on Reload. Hand uploads of the site (only if CI can't; `apps/web/scripts/upload-site.sh <bucket> <distribution>` does the upload + invalidation): build with the dev `VITE_*` vars (`set -a; source apps/web/.env.development.local; set +a`), upload `assets/*` immutable first, then the other root files `no-cache` (`manifest.webmanifest` with `--content-type application/manifest+json`), `sw.js` and `index.html` last, keep old assets, invalidate `/ /index.html /sw.js /workbox-* /manifest.webmanifest`. Run locally: `pnpm --filter @photo-app/web env:dev` once (needs the dev SSO session), then `pnpm --filter @photo-app/web dev`; 6.11 is in Phase 13.
-   Dev app resources (table + photo bucket + Cognito + trigger + thumbnail Lambda + DLQ + API + site bucket + CloudFront) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done. Dev plans need `pnpm build` (trigger + API bundles), `pnpm build:py` (thumbnails) and `source ~/.config/photo-app/dev.env` (Google secret + sign-up allowlist; without it the plan turns Google off and opens sign-up).
-3. **9.8 share target hardening**: done in code (branch `fix/share-target`); merge → dev deploy → the user re-checks a share on Android.
-4. **Prod comes last** (user, 2026-10-27): prod bootstrap (1.3/1.4/1.5), 10.3 and Phase 11 after everything else (Phases 12–13 included).
-5. GitHub `prod` environment (required approval) + prod environment secrets with 10.3.
+2. **Open user check on dev**: 9.8 (merge `fix/share-target` → automatic dev deploy → share several photos + one non-photo → "1 shared file was left out"). Merges to `main` deploy dev by themselves after CI passes. Hand uploads of the site (only if CI can't): `apps/web/scripts/upload-site.sh <bucket> <distribution>` with the dev `VITE_*` vars (`set -a; source apps/web/.env.development.local; set +a`). Run locally: `pnpm --filter @photo-app/web env:dev` once (needs the dev SSO session), then `pnpm --filter @photo-app/web dev`. Open suggestion to the user: a "Recently added" sort or a hint after uploads (photos are placed by date taken, so older photos land far down).
+3. **Phase 12 (verification, against dev)**: 12.1 done; next 12.2 security review, 12.3 performance, 12.5 state encryption, 12.6 deploy role scope, 12.8 bootstrap state, 12.9 DLQ alarm (needs approval).
+4. **Phase 13** (6.11 sweeper, 13.1 bulk upload, 13.2 search by place).
+5. **Phase 11 last** (user, 2026-10-27): everything prod (prod bootstrap 1.3/1.4/1.5, domain 1.7, 10.3, 11.1–11.5, 12.4, 12.7) and the iOS test of 9.7.
+
+Dev app resources (table + photo bucket + Cognito + trigger + thumbnail Lambda + DLQ + API + site bucket + CloudFront) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done. Dev plans need `pnpm build` (trigger + API bundles), `pnpm build:py` (thumbnails) and `source ~/.config/photo-app/dev.env` (Google secret + sign-up allowlist; without it the plan turns Google off and opens sign-up).
 
 ---
 
@@ -60,15 +61,15 @@
 - [x] **1.2** Org-wide budget `photo-app-monthly`, $5/month, in the management account (`general`), alerts to edgar.ayala2893@gmail.com at 80 %/100 % actual and 100 % forecast. `infra/bootstrap/budget.tf`, workspace `general`. **Applied 2026-10-19.** (The account also has a pre-existing "My Zero-Spend Budget", which isn't managed here)
 - [~] **1.3** `infra/bootstrap/`: state bucket `photo-app-tfstate-<account-id>` per account (versioning, SSE-S3, ACLs disabled, public access block, TLS-only policy, old versions expire after 90 days keeping the newest 10, `prevent_destroy`). Workspaces `dev`/`prod`
   - [x] dev: `photo-app-tfstate-063359189013` **applied 2026-10-19**
-  - [ ] prod: `photo-app-tfstate-968632140314`, plan clean, **needs user approval**
+  - prod part → Phase 11 (last)
 - [~] **1.4** `infra/envs/{dev,prod}`: S3 backend (`use_lockfile = true`, key `<env>/terraform.tfstate`), provider with `allowed_account_ids` + default tags
   - [x] dev: `tofu init` against the bucket done; empty plan OK (lock round-trip works)
-  - [ ] prod: after prod bucket exists
+  - prod part → Phase 11 (last)
 - [~] **1.5** `infra/bootstrap/github-oidc.tf`: OIDC provider + `photo-app-ci-plan` (ReadOnlyAccess + state read + `.tflock` write; denies reading S3 objects other than state and DynamoDB items; any ref/PR of `EdgarA28/Photo-app`) and `photo-app-ci-deploy` (AdministratorAccess for now → 12.6; 1 h sessions; dev: `ref:refs/heads/main`, prod: `environment:prod`)
   - [x] dev **applied 2026-10-19**: `arn:aws:iam::063359189013:role/photo-app-ci-plan`, `arn:aws:iam::063359189013:role/photo-app-ci-deploy`
-  - [ ] prod: with prod bootstrap, **needs user approval**
+  - prod part → Phase 11 (last)
 - [x] **1.6** Google Cloud project + OAuth consent screen (done after Cognito domain exists → see 4.3)
-- [ ] **1.7** Decide domain name (D-4) — only needed for prod
+- 1.7 (domain, prod only) → Phase 11 (last)
 
 ## Phase 2 — Shared package (`packages/shared`)
 
@@ -231,9 +232,9 @@
   - Manifest `share_target` (POST multipart, field `photos`, `image/*`) → service worker route `/share-target` (`src/pwa/shareTarget.ts`) copies the files into an IndexedDB share inbox (`src/upload/shareInbox.ts`) → 303 to `/upload?shared=received`
   - Upload page shows the shared photos with Upload / Discard and adds them only on Upload (security review: any site can POST to the share target, CSRF); `start()` now returns the in-flight start; at most 100 files per share; signed-out shares survive the login; logout clears the inbox
   - Checked in headless Chrome (share POST stored + redirected); on Android still to check
-- [ ] **9.7** Test install + Google login in standalone mode on iOS and Android (§12.6)
+- [~] **9.7** Test install + Google login in standalone mode on iOS and Android (§12.6)
   - [x] Android: installed app, Google login stays in the app window (user, 2026-10-26)
-  - [ ] iOS: not tested yet, the user has no device for now
+  - iOS part → Phase 11 (last)
 
 - [~] **9.8** Share target hardening (security review finding 2026-10-27, follow-up to 9.6; do after 10.1). Any website can POST to `/share-target` (CSRF; the user's Upload tap is the only guard), and today the inbox **appends** across POSTs with the 100-file cap per request only:
   - [x] A new share **replaces** what is waiting (`replace()`: clear + add in one transaction), so planted files can't ride along with a real share
@@ -252,32 +253,28 @@
   - [x] First green run (`7ff3d01`, run 40528322253, 2026-10-27): both jobs pass, the plan role signs in via OIDC and plans dev
   - [x] CI dev plan: `0 to add, 3 to change` = the three Lambdas' `source_code_hash` only (user checked the summary); a local plan of the same commit is clean, so it's CI-built zips differing from local ones (secrets and AWS fine). Recheck in 10.2: once CI deploys, consecutive CI plans should be clean, else make the bundles reproducible
   - [x] Test PR #1 (`ci/test-pr`): `github-actions[bot]` posted the plan comment (marker `<!-- tofu-plan-dev -->`); a second push (same plan) kept a single comment, no duplicate (its `updated_at` didn't move since the text was identical, so the in-place edit itself is seen once a plan changes)
-- [~] **10.2** `deploy.yml` (dev on `main`): build all, `tofu apply`, upload site with correct `Cache-Control`, CloudFront invalidation, smoke test
+- [x] **10.2** `deploy.yml` (dev on `main`): build all, `tofu apply`, upload site with correct `Cache-Control`, CloudFront invalidation, smoke test
   - [x] Written (2026-10-27, branch `ci/deploy`): `workflow_run` after CI succeeds for a push to `main` (+ manual, `main` only), deploy role, plan → apply, web build from outputs (`google_login` output added), `apps/web/scripts/upload-site.sh`, smoke test (`/api/health`, served `index.html`/`sw.js` = build)
   - [x] Reproducible Lambda zips: `output_file_mode = "0644"` on all `archive_file`s (the CI plan's 3 changes were file modes: umask 002 locally vs 022 on runners); same hashes under both umasks locally
   - [x] CI plan: `-lock-timeout=10m` instead of the `tofu-dev` concurrency group (a pending job in a group is cancelled when another queues, which could drop a deploy)
   - [x] First deploy (PR #2 → `87fbe5c`, CI run 40537747499 → Deploy run 40538395457, 2026-10-27): green incl. smoke test; 3 Lambdas updated 16:11–16:12 UTC
   - [x] After it: local plan of `87fbe5c` = **No changes** (CI-built zips, Python bytecode included, equal local ones); thumbnails direct invoke with a `thumbs/` key → `skipped` (loads fine with 0644 files)
-  - [ ] User checks the app on dev (Settings → Version `87fbe5c`), incl. one photo upload (thumbnails end to end)
-- [ ] **10.3** Prod deploy job with GitHub `prod` environment + required approval
-
-## Phase 11 — Production
-
-- [ ] **11.1** Domain + ACM cert in `us-east-1`, custom domain on CloudFront (D-4)
-- [ ] **11.2** `envs/prod`: 10 GB quota, PITR on, bucket versioning + 30-day noncurrent expiry (D-6), WAF rate limiting (NFR-SEC-9)
-- [ ] **11.3** Add prod callback URLs to Cognito and Google
-- [ ] **11.4** Publish Google consent screen (§11.2)
-- [ ] **11.5** First prod deploy + smoke test
+  - [x] User checked the app on dev (2026-10-27): everything works, incl. photo upload (thumbnails end to end)
+- 10.3 (prod deploy job) → Phase 11 (last)
 
 ## Phase 12 — Verification before launch
 
-- [ ] **12.1** Walk through every FR-* in spec §6 and confirm
+Run against dev. Prod-only checks (12.4 cost after the first month, 12.7 budget) → Phase 11 (last).
+
+- [x] **12.1** Walk through every FR-* in spec §6 and confirm (2026-10-27, against code + tests; baseline 740 TS + 76 Python + 39 infra tests pass)
+  - All 42 FRs (AUTH 1–6, UP 1–7, GAL 1–6, DL 1–2, DEL 1–2, ALB 1–2, SHR 1–5, ACC 1–3, PWA 1–4) are implemented, each with tests; AUTH-1/2/3, UP-5, PWA-1/3/4 also confirmed by the user on dev/Android (Phases 4, 9)
+  - Checked by hand: email verification (`auto_verified_attributes`), camera input (`capture="environment"`) + drag & drop, confirmation dialogs in gallery and viewer (FR-DEL-2, tests `gallery.test.tsx`/`viewer.test.tsx` tag it `FR-DEL-1/2`), photo delete clears album covers, default sort `taken-desc`, username hold `USERNAME_HOLD_DAYS = 30`, EXIF orientation test
+  - Open, tracked elsewhere: FR-PWA-1 iOS (→ Phase 11), FR-GAL-2 10,000+ photos smooth (→ 12.3); known deviation: album views list in upload order with the sort menu hidden (Decisions 2026-10-24, FR-GAL-1/3); FR-ACC-2 per-user quota exists as `quotaBytes` on the Usage item, set by hand (no UI/tool)
+  - Fix found on the way: `pnpm test:infra` failed with `dev.env` sourced (exported `TF_VAR_google_client_secret` fed the `google_needs_secret` run); the script now unsets `TF_VAR_*`
 - [ ] **12.2** Security review: tenant isolation, bucket policies, IAM, metadata stripping (NFR-SEC-*)
 - [ ] **12.3** Performance checks: 10,000-photo gallery, API p95, thumbnail latency (NFR-PERF-*)
-- [ ] **12.4** Cost check after first month vs §16 estimate
 - [ ] **12.5** Enable OpenTofu client-side state encryption (deferred by user 2026-10-18): passphrase (pbkdf2, free) or KMS (~$1/month per key); migrate existing state
-- [ ] **12.6** Scope `photo-app-ci-deploy` down from AdministratorAccess to the services actually deployed
-- [ ] **12.7** Revisit the budget (currently $5/month org-wide) before public launch
+- [ ] **12.6** Scope `photo-app-ci-deploy` down from AdministratorAccess to the services actually deployed (dev now; the prod role gets the same policy in Phase 11)
 - [ ] **12.8** Move bootstrap state off the local machine (deferred by user 2026-10-23). Today it lives only in `infra/bootstrap/terraform.tfstate.d/<workspace>/`; losing it means `tofu import` for every bootstrap resource. Option: S3 backend in each account's own state bucket + `tofu init -migrate-state`. Needs restructuring first: one config serves 3 accounts, `general` has no state bucket, prod bucket not applied yet. No new AWS resources
 - [ ] **12.9** *(consider)* Alarm on the thumbnail DLQ: CloudWatch alarm on `ApproximateNumberOfMessagesVisible > 0` for `photo-app-<env>-thumbnails-dlq` → SNS email topic, so failed uploads aren't silent (today someone must look at the queue). ~$0.10/month per alarm, SNS email free at this volume. New AWS resources, **needs approval**. Could cover the Lambda's `Errors` metric too
 
@@ -310,12 +307,45 @@ Deferred by the user (2026-10-24): done once Phases 7–12 are finished. Until t
   - [ ] **13.2h** *(optional, later)* Map view with photo pins (MapLibre + tile provider); would need coordinates in the API
   - [ ] **13.2i** Spec: move search into scope, new FR-SRCH-*, §8.2 data model (fields, place items, GSI), note on NFR-SEC-5. ARCHITECTURE update. Tests: GPS parsing (incl. missing/invalid GPS, southern/western hemispheres), nearest-city lookup, place counts on delete, place filter, tenant isolation (another user's place returns nothing)
 
+## Phase 11 — Production & iOS (last)
+
+Moved to the end by the user (2026-10-27): everything about prod and iOS waits until Phases 12–13 are done. Task IDs are kept from their original phases.
+
+### Prod bootstrap (from Phase 1)
+
+- [ ] **1.3** prod: `photo-app-tfstate-968632140314`, plan clean, **needs user approval**
+- [ ] **1.4** prod: after prod bucket exists
+- [ ] **1.5** prod: with prod bootstrap, **needs user approval**
+- [ ] **1.7** Decide domain name (D-4) — only needed for prod
+
+### Prod CI/CD (from Phase 10)
+
+- [ ] **10.3** Prod deploy job with GitHub `prod` environment (required approval) + prod environment secrets
+
+### Prod environment
+
+- [ ] **11.1** Domain + ACM cert in `us-east-1`, custom domain on CloudFront (D-4)
+- [ ] **11.2** `envs/prod`: 10 GB quota, PITR on, bucket versioning + 30-day noncurrent expiry (D-6), WAF rate limiting (NFR-SEC-9)
+- [ ] **11.3** Add prod callback URLs to Cognito and Google
+- [ ] **11.4** Publish Google consent screen (§11.2)
+- [ ] **11.5** First prod deploy + smoke test
+
+### Launch checks (from Phase 12)
+
+- [ ] **12.4** Cost check after first month vs §16 estimate
+- [ ] **12.7** Revisit the budget (currently $5/month org-wide) before public launch
+
+### iOS (from 9.7)
+
+- [ ] **9.7** iOS: install (Safari → Share → Add to Home Screen), Google login inside the installed app, restart stays signed in. The user has no device for now. Risk: the login state (PKCE verifier) is in `sessionStorage`; if iOS opens the Cognito/Google pages outside the app's web view, the callback fails with a missing state. Pre-checked 2026-10-26: CloudFront serves the manifest, apple-touch-icon, icons and `sw.js` with the right types
+
 ---
 
 ## Decisions & notes
 
 | Date | Note |
 |---|---|
+| 2026-10-27 | **Plan reorder** (user): everything prod (1.3–1.5 prod parts, 1.7, 10.3, 11.x, 12.4, 12.7) and the iOS test (9.7) moved into Phase 11, placed last after Phase 13. Task IDs kept. Phase 12 runs against dev now. |
 | 2026-10-27 | **Prod last** (user): prod bootstrap, 10.3 (prod deploy job) and Phase 11 wait until everything else is done, Phase 13 features included. |
 | 2026-10-27 | **Deploy trigger (10.2):** `deploy.yml` runs on `workflow_run` after CI **succeeds** for a push to `main`, not directly on push as §14.2 says, so failing tests block the deploy. Lambda zips use `output_file_mode = "0644"` so local and CI builds hash the same. |
 | 2026-10-27 | **CI secrets:** dev values are **repository** secrets (the plan job runs on every branch/PR, so an environment would restrict nothing, would log each plan as a deployment and change the OIDC `sub` to `environment:dev`); prod values will be **environment** secrets in `prod` with required approval (10.3). The CI plan role got `kms:Decrypt` via SSM for `/photo-app/*`: refreshing the SecureString media key needs it, and the role can read the same key from the state anyway (12.5). |
@@ -494,3 +524,6 @@ Deferred by the user (2026-10-24): done once Phases 7–12 are finished. Until t
 | 2026-10-27 | 10.2 written: `deploy.yml`, `upload-site.sh`, `google_login` output, reproducible zips (`output_file_mode`; CI plan's 3 Lambda changes were umask-dependent file modes), CI plan lock timeout. Module tests + validate pass; local plan: 3 Lambdas (modes) + 1 output. Not merged yet. |
 | 2026-10-27 | First automatic dev deploy (`87fbe5c`): CI + Deploy green, smoke test passed; local plan afterwards clean (reproducible zips confirmed), thumbnails invoke OK. User check of the app left. |
 | 2026-10-27 | 9.8 in code: share limits checked before reading (`checkFile`, 100 files / 1 GiB, `?skipped=N`), share replaces the inbox, upload/discard take only the shown photos. 740 tests pass, build OK. User decided prod comes last. |
+| 2026-10-27 | Plan reorder: prod + iOS tasks gathered in Phase 11 at the end; Phase 12 (on dev) is next. |
+| 2026-10-27 | 12.1 done: all 42 FRs implemented and tested (no gaps; iOS → Phase 11, 10k gallery → 12.3). `test:infra` now unsets exported `TF_VAR_*`. |
+| 2026-10-27 | 10.2 done: the user checked the app on dev after the automatic deploy, everything works. Phase 10 is done for dev; 10.3 (prod) is in Phase 11. |

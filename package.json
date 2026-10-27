@@ -17,7 +17,7 @@
     "lint:py": "uv run --project services/thumbnails ruff check services/thumbnails && uv run --project services/thumbnails ruff format --check services/thumbnails",
     "test:py": "uv run --project services/thumbnails pytest services/thumbnails",
     "build:py": "services/thumbnails/build.sh",
-    "test:infra": "set -e; node --test infra/modules/*/functions/*.test.mjs; for m in infra/modules/*/; do if [ -d \"$m/tests\" ]; then (cd \"$m\" && tofu init -input=false >/dev/null && tofu test); fi; done"
+    "test:infra": "set -e; unset $(env | sed -n 's/^\\(TF_VAR_[^=]*\\)=.*/\\1/p'); node --test infra/modules/*/functions/*.test.mjs; for m in infra/modules/*/; do if [ -d \"$m/tests\" ]; then (cd \"$m\" && tofu init -input=false >/dev/null && tofu test); fi; done"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

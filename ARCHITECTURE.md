@@ -378,7 +378,7 @@ flowchart LR
 | **Python** | `services/thumbnails` is an independent uv project (`uv_build` backend, src layout). boto3 is dev-only because the Lambda runtime ships it. Root scripts `lint:py` / `test:py` call uv. Packaging (`build.sh`, root `build:py`): `uv export --frozen --no-dev` → `uv pip install --target dist --python-platform aarch64-manylinux_2_28 --only-binary :all: --require-hashes`, plus `src/thumbnails`, plus hash-based `.pyc` (`compileall --invalidation-mode unchecked-hash`). Only prebuilt wheels, so it builds on any host; `PLATFORM=x86_64-manylinux_2_28` builds a local copy for smoke tests. |
 | **IaC** | OpenTofu; provider lock files are committed; `tofu fmt` enforced. |
 
-Root commands: `pnpm lint`, `pnpm format[:check]`, `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm lint:py`, `pnpm test:py`, `pnpm build:py`, `pnpm test:infra` (runs `tofu test` in every module with a `tests/` folder; fails on any failure).
+Root commands: `pnpm lint`, `pnpm format[:check]`, `pnpm typecheck`, `pnpm test`, `pnpm build`, `pnpm lint:py`, `pnpm test:py`, `pnpm build:py`, `pnpm test:infra` (runs `tofu test` in every module with a `tests/` folder with exported `TF_VAR_*` unset, so a sourced `dev.env` can't change test inputs; fails on any failure).
 
 ---
 
@@ -970,7 +970,7 @@ Still to come: ACM cert + custom domain (11.1), WAF (11.2), CSP header.
 | GitHub secrets (dev) | ✅ | Repository secrets `TF_VAR_GOOGLE_CLIENT_SECRET`, `TF_VAR_ALLOWED_EMAILS` (the plan needs them; without them it would turn Google off and open sign-up) |
 | `prod` environment + secrets | 📋 | Environment secrets in `prod` with required approval (10.3) |
 | `ci.yml` (lint, typecheck, tests, build, `tofu plan`) | ✅ | See below |
-| `deploy.yml` (build, apply, upload site, invalidate, smoke test) | 🚧 | Dev job ✅ (first run `87fbe5c`, 2026-10-27); prod job 10.3 📋 |
+| `deploy.yml` (build, apply, upload site, invalidate, smoke test) | 🚧 | Dev job ✅ (first run `87fbe5c`, app checked by the user 2026-10-27); prod job 10.3 📋 (Phase 11) |
 
 **`ci.yml`** (10.1), on every push and pull request, Ubuntu 24.04 runners:
 
@@ -1141,3 +1141,5 @@ Target design: spec §12 (TanStack Router file routes with an authenticated layo
 | 2026-10-27 | 10.2: `deploy.yml` (dev deploy after CI succeeds on `main`: build, plan + apply with the deploy role, web build from outputs, `upload-site.sh`, smoke test); `google_login` output (auth module + envs, tested); `archive_file` `output_file_mode = "0644"` for reproducible zips; CI plans use `-lock-timeout` instead of a concurrency group (§13). |
 | 2026-10-27 | First automatic dev deploy (`87fbe5c`): smoke test passed, local re-plan clean, thumbnail Lambda invoke OK (§13). |
 | 2026-10-27 | 9.8: share target hardening — `checkFile` + 100 files / 1 GiB limits before reading bytes (`?skipped=N` notice), a share replaces the inbox (`replace()`), upload/discard take exactly the shown photos (`take(ids)`); 6 new tests (§14). |
+| 2026-10-27 | `pnpm test:infra` unsets exported `TF_VAR_*` first (with `dev.env` sourced, `auth`'s `google_needs_secret` run got the real secret and failed). 12.1 FR walk-through: no code changes needed. |
+| 2026-10-27 | 10.2 confirmed: the user checked the dev app after the automatic deploy. |
