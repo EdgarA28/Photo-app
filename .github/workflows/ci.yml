@@ -1,0 +1,181 @@
+# CI (spec §14.2, task 10.1): lint, typecheck, tests, builds, then `tofu plan` for dev.
+# The plan is posted as a PR comment and to the job summary.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Lint, test, build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      # pnpm version from `packageManager`, Node from .nvmrc.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.1"
+          enable-cache: true
+          cache-dependency-glob: services/thumbnails/uv.lock
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.13.1
+          tofu_wrapper: false
+
+      - run: pnpm install --frozen-lockfile
+      - run: uv sync --frozen --project services/thumbnails
+
+      - name: Format
+        run: pnpm format:check
+      - name: Lint (TypeScript)
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Lint (Python)
+        run: pnpm lint:py
+
+      # apps/api repository tests start DynamoDB Local in Docker (available on the runner).
+      - name: Test (TypeScript)
+        run: pnpm test
+      - name: Test (Python)
+        run: pnpm test:py
+
+      - name: Build (web, API, auth trigger)
+        run: pnpm build
+      - name: Build (thumbnails, arm64 wheels)
+        run: pnpm build:py
+
+      - name: OpenTofu format
+        run: tofu fmt -check -recursive -diff infra
+      - name: OpenTofu module tests (mocked provider)
+        run: pnpm test:infra
+      - name: OpenTofu validate (prod, bootstrap)
+        run: |
+          for dir in infra/envs/prod infra/bootstrap; do
+            tofu -chdir="$dir" init -backend=false -input=false >/dev/null
+            tofu -chdir="$dir" validate
+          done
+
+      # Lambda bundles for the plan job (the env modules zip these directories).
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lambda-bundles
+          path: |
+            apps/api/dist
+            services/auth-triggers/dist
+            services/thumbnails/dist
+          retention-days: 1
+
+  plan-dev:
+    name: tofu plan (dev)
+    needs: checks
+    # OIDC and secrets aren't available to pull requests from forks.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # One plan at a time: they take the state lock.
+    concurrency:
+      group: tofu-dev
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    defaults:
+      run:
+        working-directory: infra/envs/dev
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: lambda-bundles
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.13.1
+          tofu_wrapper: false
+
+      - name: Check secrets
+        # Without these the plan would turn Google sign-in off and open sign-up (PROGRESS 4.4,
+        # sign-up allowlist). Only the steps that need them get them, not third-party actions.
+        env:
+          TF_VAR_google_client_secret: ${{ secrets.TF_VAR_GOOGLE_CLIENT_SECRET }}
+          TF_VAR_allowed_emails: ${{ secrets.TF_VAR_ALLOWED_EMAILS }}
+        run: |
+          if [ -z "$TF_VAR_google_client_secret" ] || [ -z "$TF_VAR_allowed_emails" ]; then
+            echo "::error::Repository secrets TF_VAR_GOOGLE_CLIENT_SECRET and TF_VAR_ALLOWED_EMAILS are required"
+            exit 1
+          fi
+
+      # Read-only role (spec §14.1): state read/lock, no photo objects or table items.
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::063359189013:role/photo-app-ci-plan
+          aws-region: us-east-1
+
+      - run: tofu init -input=false
+      - run: tofu validate
+
+      - name: Plan
+        id: plan
+        env:
+          TF_VAR_google_client_secret: ${{ secrets.TF_VAR_GOOGLE_CLIENT_SECRET }}
+          TF_VAR_allowed_emails: ${{ secrets.TF_VAR_ALLOWED_EMAILS }}
+        run: |
+          set +e
+          tofu plan -input=false -no-color -detailed-exitcode -var-file=env.tfvars -out=dev.tfplan > plan.log 2>&1
+          code=$?
+          set -e
+          cat plan.log
+          # 0 = no changes, 2 = changes, anything else = error.
+          [ "$code" -eq 1 ] && exit 1
+          tofu show -no-color dev.tfplan > plan.txt
+          echo "changes=$([ "$code" -eq 2 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        run: |
+          {
+            echo "### tofu plan (dev)"
+            grep -E '^(Plan:|No changes\.)' plan.log || true
+            echo '<details><summary>Plan</summary>'
+            echo
+            echo '```'
+            head -c 60000 plan.txt
+            echo '```'
+            echo '</details>'
+          } > comment.md
+          cat comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      # One comment per PR, updated on every push.
+      - name: Comment on the PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require("node:fs");
+            const marker = "<!-- tofu-plan-dev -->";
+            const body = `${marker}\n${fs.readFileSync("infra/envs/dev/comment.md", "utf8")}`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const existing = comments.find((c) => c.body?.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }

@@ -91,6 +91,26 @@ data "aws_iam_policy_document" "ci_plan_inline" {
     resources = ["arn:aws:s3:::${local.state_bucket_name}/*.tflock"]
   }
 
+  # Refreshing SecureString parameters (the CloudFront media key, 7.3) reads them decrypted.
+  # Only through SSM and only for this app's parameters; the same values are in the state anyway.
+  statement {
+    sid       = "AppParameterDecrypt"
+    actions   = ["kms:Decrypt"]
+    resources = ["arn:aws:kms:*:${data.aws_caller_identity.current.account_id}:key/*"]
+
+    condition {
+      test     = "StringLike"
+      variable = "kms:ViaService"
+      values   = ["ssm.*.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringLike"
+      variable = "kms:EncryptionContext:PARAMETER_ARN"
+      values   = ["arn:aws:ssm:*:${data.aws_caller_identity.current.account_id}:parameter/photo-app/*"]
+    }
+  }
+
   # ReadOnlyAccess would otherwise let CI read users' photos and metadata.
   statement {
     sid           = "DenyUserDataReads"

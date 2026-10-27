@@ -9,7 +9,7 @@
 
 | | |
 |---|---|
-| **Last updated** | 2026-10-26 |
+| **Last updated** | 2026-10-27 |
 | **Reflects** | Phase 0 (repo), Phase 1 (AWS bootstrap: dev + management), Phase 2 (`packages/shared`), Phase 3 (database + storage, deployed in dev), Phase 5.1–5.3 (API skeleton, not deployed), Phase 6.1–6.7 (thumbnail code, not deployed) |
 
 ---
@@ -54,7 +54,7 @@
 | Thumbnail Lambda | `services/thumbnails` | 🚧 | Handler, image pipeline, S3-key mirror, orphan cleanup + 76 pytest tests (6.1–6.7, 6.12); arm64 package `build.sh` → `dist/` (6.8); not deployed yet (6.9–6.10) |
 | Auth trigger Lambda | `services/auth-triggers` | ✅ (dev) | Pre sign-up handler (Google → native account linking, refuses duplicate email sign-ups) + 24 tests (4.5); **deployed in dev** (4.6), linking verified manually |
 | Web app / PWA | `apps/web` | 🚧 | 8.1 scaffold: Vite + React, file routes of spec §12.1 (placeholder pages), Query client, Zod-validated gallery search, `/api` dev proxy. 8.2 Tailwind CSS 4 + shadcn/ui (D-3). 8.3 login (oidc-client-ts, PKCE, refresh, guard, logout). 8.4 API client (bearer, Zod, 401 retry); settings shows `GET /me`. 8.5 app shell (side rail / bottom tab bar, full-screen viewer, system dark mode). 8.6 gallery (infinite query, virtualized justified rows, album/sort filters in the URL). 8.7 processing/failed tiles + polling while photos process. 8.8 full-screen viewer (preview, prev/next through the gallery list, arrow keys, Escape, swipe). 8.9 download original + delete with confirmation in the viewer. 8.10 upload queue (IndexedDB, picker / drag & drop / camera, 3 parallel, progress, automatic retry, one uploading tab, gallery tiles + nav badge). 8.11 albums (list, create, rename, delete, album view, select mode, add/remove photos, cover; album actions in the viewer). 8.12 sharing (share dialog by email or @username, revoke, "Shared with me", read-only shared album view, "Shared by" in the viewer). 8.13 settings (account, quota bar, username set/change, logout clearing the upload queue and Query cache). 8.14 storage-full handling (space warning, grouped banner, Retry all), session-expired and offline messages. 8.15 "choose a username" prompt after login. **Phase 8 complete.** Thumbnails and previews show once Phase 7 serves them. 9.1 web app manifest + icons (installable metadata). 9.2 service worker caching: precached shell, offline navigation fallback, CacheFirst thumbnails. 9.4 service worker registered (`registerType: 'prompt'`) with an "Update available" prompt and hourly update checks. 9.3 Query cache saved to IndexedDB per user and restored on start; offline start with the stored session's `sub`. 9.5 Background Sync: the service worker uploads the queue after the app is closed or frozen (Chromium); refresh token now in IndexedDB. 9.6 Android share target: photos shared to the app land in the upload queue |
-| CI/CD workflows | `.github/workflows` | 📋 | AWS-side roles exist (dev); no workflows yet |
+| CI/CD workflows | `.github/workflows` | 🚧 | `ci.yml` (10.1: checks, build, dev `tofu plan` + PR comment); `deploy.yml` planned |
 
 ---
 
@@ -338,7 +338,7 @@ Photo-app/
 │       ├── api/                 ✅ HTTP API, JWT authorizer, API Lambda, IAM, throttling (+ tests/)
 │       └── frontend/            🚧 site bucket, CloudFront, SPA rewrite function (functions/), media signing keys (media-keys.tf) (+ tests/)
 │
-└── .github/workflows/           📋 ci.yml, deploy.yml
+└── .github/workflows/           🚧 ci.yml ✅ (checks + dev plan), deploy.yml 📋
 ```
 
 ---
@@ -806,7 +806,7 @@ Local state, one workspace per account (`terraform.tfstate.d/<ws>/`, git-ignored
 | `aws_iam_openid_connect_provider.github` | `token.actions.githubusercontent.com`, aud `sts.amazonaws.com` | ✅ | — | 📋 |
 | `aws_iam_role.ci_plan` | `photo-app-ci-plan`; trust `repo:EdgarA28/Photo-app:*` | ✅ | — | 📋 |
 | `aws_iam_role_policy_attachment.ci_plan_readonly` | `ReadOnlyAccess` | ✅ | — | 📋 |
-| `aws_iam_role_policy.ci_plan` | inline `state-access`: state read, `*.tflock` write, data-read denies | ✅ | — | 📋 |
+| `aws_iam_role_policy.ci_plan` | inline `state-access`: state read, `*.tflock` write, `kms:Decrypt` only via SSM for `parameter/photo-app/*` (refreshing the SecureString media key), data-read denies | ✅ | — | 📋 |
 | `aws_iam_role.ci_deploy` | `photo-app-ci-deploy`; trust dev `ref:refs/heads/main`, prod `environment:prod`; 1 h sessions | ✅ | — | 📋 |
 | `aws_iam_role_policy_attachment.ci_deploy_admin` | `AdministratorAccess` (to be scoped down) | ✅ | — | 📋 |
 | `aws_budgets_budget.monthly` | `photo-app-monthly`, $5, alerts 80 %/100 % actual, 100 % forecast | — | ✅ | — |
@@ -966,9 +966,16 @@ Still to come: ACM cert + custom domain (11.1), WAF (11.2), CSP header.
 | AWS roles for GitHub (dev) | ✅ | `arn:aws:iam::063359189013:role/photo-app-ci-plan`, `arn:aws:iam::063359189013:role/photo-app-ci-deploy` |
 | AWS roles for GitHub (prod) | 📋 | Applied with prod bootstrap |
 | Repo | ✅ | `github.com/EdgarA28/Photo-app`, default branch `main` |
-| GitHub secrets / `prod` environment | 📋 | Phase 10 |
-| `ci.yml` (lint, typecheck, tests, build, `tofu plan`) | 📋 | Phase 10 |
+| GitHub secrets (dev) | ✅ | Repository secrets `TF_VAR_GOOGLE_CLIENT_SECRET`, `TF_VAR_ALLOWED_EMAILS` (the plan needs them; without them it would turn Google off and open sign-up) |
+| `prod` environment + secrets | 📋 | Environment secrets in `prod` with required approval (10.3) |
+| `ci.yml` (lint, typecheck, tests, build, `tofu plan`) | ✅ | See below |
 | `deploy.yml` (build, apply, upload site, invalidate, smoke test) | 📋 | Phase 10 |
+
+**`ci.yml`** (10.1), on every push and pull request, Ubuntu 24.04 runners:
+
+- **`checks`**: pnpm (from `packageManager`), Node (`.nvmrc`, pnpm store cached), uv 0.13.1 (cache on `uv.lock`), OpenTofu 1.13.1 → `pnpm install --frozen-lockfile`, `uv sync --frozen` → `format:check`, `lint`, `typecheck`, `lint:py`, `test` (DynamoDB Local in the runner's Docker), `test:py`, `build`, `build:py`, `tofu fmt -check -recursive`, `test:infra`, `validate` for `envs/prod` and `bootstrap` (`-backend=false`). The Lambda `dist/` folders go to the next job as a 1-day artifact.
+- **`plan-dev`** (after `checks`; skipped for fork PRs): OIDC → `photo-app-ci-plan`, `tofu init/validate/plan -detailed-exitcode` in `infra/envs/dev`; the plan goes to the job summary and to one PR comment (marker `<!-- tofu-plan-dev -->`, updated on each push, cut at 60 KB). Job concurrency group `tofu-dev` (no cancelling) since plans take the state lock.
+- Hardening: default `contents: read`; `id-token`/`pull-requests: write` only on `plan-dev`; third-party actions pinned to commit SHAs (tag in a comment), `actions/*` on major tags; the `TF_VAR_*` secrets only on the steps that use them.
 
 ---
 
@@ -1117,3 +1124,5 @@ Target design: spec §12 (TanStack Router file routes with an authenticated layo
 | 2026-10-26 | 9.5 confirmed on Android by the user; signed-in offline start confirmed too (§14). |
 | 2026-10-26 | 9.6: Android share target — manifest `share_target` → service worker `receiveShare` → IndexedDB share inbox → `/upload` offers the photos with Upload / Discard (never added unconfirmed: CSRF via the share target), also after a login; logout clears the inbox (§5, §11, §14). |
 | 2026-10-26 | Dev site uploaded with 9.6 (share target in the served manifest) (§14). |
+| 2026-10-27 | 10.1: `.github/workflows/ci.yml` (checks + dev `tofu plan` with PR comment); dev repository secrets added (§13). |
+| 2026-10-27 | Bootstrap (dev): `photo-app-ci-plan` may `kms:Decrypt` via SSM for `/photo-app/*` parameters, needed to refresh the SecureString media key in CI plans; applied, checked with the IAM policy simulator (§12). |
