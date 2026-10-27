@@ -16,6 +16,10 @@ Contract with the API (§8.2):
   becomes `failed` and loses its thumb and preview, so share recipients (who see `ready` photos
   only) can't download something other than what they were shown. Not reprocessed: derived images
   are cached as immutable under the same URL, so new ones wouldn't reach viewers.
+- Album memberships are sorted by the photo's takenAt (GSI1 `ALBUM#{albumId}`, §12.3). Once the
+  photo is `ready` with its real takenAt, the memberships made while it was pending (sorted by the
+  provisional upload time) are moved to match. The API writes a membership with the photo's takenAt
+  at that moment, conditional on it, so one added meanwhile is right already.
 
 Errors: corrupt/unsupported images are permanent (mark `failed`, return normally). Everything
 else (S3/DynamoDB/network) is transient and raised, so Lambda retries and then uses the DLQ.
@@ -126,6 +130,7 @@ class Processor:
                 )
             return Outcome("skipped", "photo changed during processing")
 
+        self._sync_memberships(user_id, photo_id)
         logger.info(
             "Photo ready",
             extra={**log, "width": image.width, "height": image.height, "takenAt": taken_at},
@@ -214,6 +219,31 @@ class Processor:
         )
         logger.warning("Original replaced after processing", extra=log)
         return Outcome("failed", reason)
+
+    def _sync_memberships(self, user_id: str, photo_id: str) -> None:
+        """Re-sorts the photo's album memberships by its final takenAt (§12.3). Read after the
+        status update, so an album added in between is either in `albumIds` here or was written
+        with the final takenAt by the API."""
+        item = self._get_photo(user_id, photo_id)
+        if item is None:
+            return
+        taken_at = item["takenAt"]["S"]
+        for album_id in item.get("albumIds", {}).get("SS", []):
+            try:
+                self._dynamodb.update_item(
+                    TableName=self._table,
+                    Key={"PK": {"S": f"ALBUM#{album_id}"}, "SK": {"S": f"PHOTO#{photo_id}"}},
+                    UpdateExpression="SET GSI1PK = :pk, GSI1SK = :sk",
+                    # Not for a membership removed meanwhile (no stub items).
+                    ConditionExpression="attribute_exists(PK)",
+                    ExpressionAttributeValues={
+                        ":pk": {"S": f"ALBUM#{album_id}"},
+                        ":sk": {"S": f"TAKEN#{taken_at}#{photo_id}"},
+                    },
+                )
+            except ClientError as e:
+                if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                    raise
 
     def _get_photo(self, user_id: str, photo_id: str) -> dict[str, Any] | None:
         response = self._dynamodb.get_item(

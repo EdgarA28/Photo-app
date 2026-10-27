@@ -135,6 +135,10 @@ describe("album view (FR-ALB-1/2)", () => {
     const link = await screen.findByRole("link", { name: "IMG_0.jpg" });
     expect(link.getAttribute("href")).toBe(
       `/photos/${testId(0)}?album=${HOLIDAYS}&sort=taken-desc`,
+    ); // Newest taken first, under month headings like the gallery (§12.3).
+    const month = new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" });
+    expect(screen.getByRole("heading", { level: 2 }).textContent).toBe(
+      month.format(new Date(testPhoto(0).takenAt)),
     );
   });
 

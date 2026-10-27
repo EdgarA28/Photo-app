@@ -103,6 +103,7 @@ function Gallery() {
             setStatus(null);
             selection.replace(photoIds);
           }}
+          months
         />
       )}
       {isFetchNextPageError && (
@@ -354,26 +355,23 @@ function GalleryFilters({ album, sort }: { album: string | undefined; sort: Phot
           {unlisted && <SelectItem value={album}>Selected album</SelectItem>}
         </SelectContent>
       </Select>
-      {/* Albums list in the order photos were added (API, §9): sorting doesn't apply there. */}
-      {album === undefined && (
-        <Select
-          value={sort}
-          onValueChange={(value) =>
-            void navigate({ search: (prev) => ({ ...prev, sort: value as PhotoSort }) })
-          }
-        >
-          <SelectTrigger aria-label="Sort order" className="w-36">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {photoSortSchema.options.map((value) => (
-              <SelectItem key={value} value={value}>
-                {SORT_LABELS[value]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
+      <Select
+        value={sort}
+        onValueChange={(value) =>
+          void navigate({ search: (prev) => ({ ...prev, sort: value as PhotoSort }) })
+        }
+      >
+        <SelectTrigger aria-label="Sort order" className="w-36">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {photoSortSchema.options.map((value) => (
+            <SelectItem key={value} value={value}>
+              {SORT_LABELS[value]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }

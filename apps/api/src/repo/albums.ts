@@ -1,5 +1,5 @@
 import { DeleteCommand, GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
-import type { Page } from "@photo-app/shared";
+import type { Page, PhotoSort } from "@photo-app/shared";
 import {
   batchDelete,
   batchGet,
@@ -12,8 +12,8 @@ import {
 } from "./db";
 import {
   ALBUM_SK_PREFIX,
-  PHOTO_SK_PREFIX,
-  TABLE_KEY_ATTRIBUTES,
+  GSI1,
+  GSI1_KEY_ATTRIBUTES,
   albumKey,
   albumPk,
   membershipKey,
@@ -208,20 +208,23 @@ export function albumsRepo(db: Db) {
       removeMembership(db, ownerId, albumId, photoId),
 
     /**
-     * Memberships in upload order (photo IDs are ULIDs). Callers load the photos themselves.
-     * Not scoped to a user: the caller must first check the album is the user's or shared with them.
+     * Memberships by the photos' date taken, newest first unless `taken-asc` (GSI1, §12.3).
+     * Callers load the photos themselves. Not scoped to a user: the caller must first check the
+     * album is the user's or shared with them.
      */
     async listMemberships(
       albumId: string,
-      options: { limit: number; cursor?: string | undefined },
+      options: { sort: PhotoSort; limit: number; cursor?: string | undefined },
     ): Promise<Page<MembershipRecord>> {
       const page = await queryPage(db, {
         input: {
-          KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
-          ExpressionAttributeValues: { ":pk": albumPk(albumId), ":prefix": PHOTO_SK_PREFIX },
+          IndexName: GSI1,
+          KeyConditionExpression: "GSI1PK = :pk AND begins_with(GSI1SK, :taken)",
+          ExpressionAttributeValues: { ":pk": albumPk(albumId), ":taken": "TAKEN#" },
+          ScanIndexForward: options.sort === "taken-asc",
         },
-        keyAttributes: TABLE_KEY_ATTRIBUTES,
-        partition: { attribute: "PK", value: albumPk(albumId) },
+        keyAttributes: GSI1_KEY_ATTRIBUTES,
+        partition: { attribute: "GSI1PK", value: albumPk(albumId) },
         limit: options.limit,
         cursor: options.cursor,
       });

@@ -1,6 +1,11 @@
-import { DeleteCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import {
+  DeleteCommand,
+  GetCommand,
+  TransactWriteCommand,
+  UpdateCommand,
+} from "@aws-sdk/lib-dynamodb";
 import { conditionFailedAt, isConditionalCheckFailed, type Db } from "./db";
-import { albumKey, membershipKey, photoKey } from "./keys";
+import { albumKey, albumPk, membershipKey, photoKey, takenSk } from "./keys";
 
 /**
  * Album membership (spec §8.2): item `ALBUM#{albumId}` / `PHOTO#{photoId}`, mirrored on the photo
@@ -8,7 +13,14 @@ import { albumKey, membershipKey, photoKey } from "./keys";
  *
  * Each change is one transaction over membership + photo + album count, guarded by conditions,
  * so retries and duplicates never double-count.
+ *
+ * Memberships are also in GSI1 under `ALBUM#{albumId}`, sorted like the gallery by the photo's
+ * date taken (`TAKEN#{takenAt}#{photoId}`), so albums list by date taken too (§12.3). The thumbnail
+ * Lambda moves them when processing replaces the provisional takenAt (§10).
  */
+
+/** Tries for an add whose photo got a new takenAt in between (processing just finished). */
+const ADD_ATTEMPTS = 3;
 
 export type AddResult = "added" | "already-member" | "photo-not-found" | "album-not-found";
 
@@ -19,6 +31,31 @@ export async function addMembership(
   photoId: string,
   addedAt: string,
 ): Promise<AddResult> {
+  for (let attempt = 1; ; attempt++) {
+    const photo = await db.client.send(
+      new GetCommand({
+        TableName: db.table,
+        Key: photoKey(userId, photoId),
+        ProjectionExpression: "takenAt",
+        ConsistentRead: true,
+      }),
+    );
+    const takenAt = photo.Item?.takenAt as string | undefined;
+    if (!takenAt) return "photo-not-found";
+    const result = await addWithTakenAt(db, userId, albumId, photoId, addedAt, takenAt);
+    if (result !== "taken-at-changed") return result;
+    if (attempt === ADD_ATTEMPTS) throw new Error(`Photo ${photoId} kept changing while adding it`);
+  }
+}
+
+async function addWithTakenAt(
+  db: Db,
+  userId: string,
+  albumId: string,
+  photoId: string,
+  addedAt: string,
+  takenAt: string,
+): Promise<AddResult | "taken-at-changed"> {
   try {
     await db.client.send(
       new TransactWriteCommand({
@@ -37,8 +74,9 @@ export async function addMembership(
               TableName: db.table,
               Key: photoKey(userId, photoId),
               UpdateExpression: "ADD albumIds :album",
-              ConditionExpression: "attribute_exists(PK)",
-              ExpressionAttributeValues: { ":album": new Set([albumId]) },
+              // The membership's sort key below must match the photo's current takenAt.
+              ConditionExpression: "attribute_exists(PK) AND takenAt = :takenAt",
+              ExpressionAttributeValues: { ":album": new Set([albumId]), ":takenAt": takenAt },
             },
           },
           {
@@ -46,6 +84,8 @@ export async function addMembership(
               TableName: db.table,
               Item: {
                 ...membershipKey(albumId, photoId),
+                GSI1PK: albumPk(albumId),
+                GSI1SK: takenSk(takenAt, photoId),
                 entity: "membership",
                 albumId,
                 photoId,
@@ -61,7 +101,8 @@ export async function addMembership(
     return "added";
   } catch (err) {
     if (conditionFailedAt(err, 0)) return "album-not-found";
-    if (conditionFailedAt(err, 1)) return "photo-not-found";
+    // The photo is gone, or the thumbnail Lambda changed its takenAt since it was read.
+    if (conditionFailedAt(err, 1)) return "taken-at-changed";
     if (conditionFailedAt(err, 2)) return "already-member";
     throw err;
   }

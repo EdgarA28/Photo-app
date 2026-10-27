@@ -33,7 +33,7 @@ import { albumsQuery, useRemoveFromAlbum, useUpdateAlbum } from "@/queries/album
 import { galleryQuery } from "@/queries/photos";
 import { sharedAlbumsQuery } from "@/queries/shares";
 
-// Album photos are listed in upload order (§9), so sort doesn't apply.
+// Album photos newest taken first, in month sections like the gallery (§12.3).
 const listOf = (albumId: string): GallerySearch => ({ album: albumId, sort: "taken-desc" });
 
 // Album view (FR-ALB-1/2, 8.11): the album's photos, add/remove, rename, cover, delete, share
@@ -178,6 +178,7 @@ function AlbumView({ album }: { album: Album }) {
           isFetchingNextPage={isFetchingNextPage}
           fetchNextPage={fetchNextPage}
           viewerSearch={search}
+          months
           selection={selection.grid}
           onSelectionChange={(photoIds) => {
             setStatus(null);
@@ -281,6 +282,7 @@ function SharedAlbumView({ albumId }: { albumId: string }) {
           isFetchingNextPage={photos.isFetchingNextPage}
           fetchNextPage={photos.fetchNextPage}
           viewerSearch={search}
+          months
         />
       )}
       {photos.isFetchNextPageError && (

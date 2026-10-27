@@ -3,7 +3,7 @@ import {
   createAlbumRequestSchema,
   idSchema,
   newId,
-  pageQuerySchema,
+  listPhotosQuerySchema,
   updateAlbumRequestSchema,
   type Album,
   type AlbumList,
@@ -77,23 +77,23 @@ export function albumRoutes(app: Hono<AppEnv>, { repos, media }: Deps): void {
   });
 
   /**
-   * Album photos in upload order (memberships are keyed by the photo ULID, §8.2), paginated. For
-   * the owner, or for a recipient of the share (FR-SHR-4), who sees only `ready` photos.
+   * Album photos by date taken, newest first unless `?sort=taken-asc` (GSI1, §9, §12.3), paginated.
+   * For the owner, or for a recipient of the share (FR-SHR-4), who sees only `ready` photos.
    */
   app.get(
     "/albums/:albumId/photos",
     validate("param", albumParam),
-    validate("query", pageQuerySchema),
+    validate("query", listPhotosQuerySchema),
     async (c) => {
       const userId = c.get("userId");
       const { albumId } = c.req.valid("param");
-      const { limit, cursor } = c.req.valid("query");
+      const { sort, limit, cursor } = c.req.valid("query");
       const { album, shared } = orNotFound(
         await albumAccess(repos, userId, albumId),
         "Album not found",
       );
 
-      const page = await repos.albums.listMemberships(albumId, { limit, cursor });
+      const page = await repos.albums.listMemberships(albumId, { sort, limit, cursor });
       // Under the album's owner: memberships only ever point at the owner's photos.
       const photos = await repos.photos.getMany(
         album.ownerId,

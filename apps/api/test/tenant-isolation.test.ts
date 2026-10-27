@@ -85,8 +85,8 @@ async function snapshot() {
   return {
     photos: await repos.photos.list(w.alice, { sort: "taken-desc", limit: 100 }),
     albums: await repos.albums.list(w.alice),
-    membersA: await repos.albums.listMemberships(w.albumA, { limit: 100 }),
-    membersB: await repos.albums.listMemberships(w.albumB, { limit: 100 }),
+    membersA: await repos.albums.listMemberships(w.albumA, { sort: "taken-desc", limit: 100 }),
+    membersB: await repos.albums.listMemberships(w.albumB, { sort: "taken-desc", limit: 100 }),
     sharesA: await repos.shares.listForAlbum(w.albumA),
     sharesB: await repos.shares.listForAlbum(w.albumB),
     usage: await repos.usage.get(w.alice),

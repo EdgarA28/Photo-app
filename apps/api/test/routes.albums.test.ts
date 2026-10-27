@@ -132,7 +132,7 @@ describe("albums CRUD (FR-ALB-1)", () => {
 });
 
 describe("album photos (FR-ALB-2)", () => {
-  test("add, list in upload order, re-add is a no-op, remove", async () => {
+  test("add, list by date taken (newest first), re-add is a no-op, remove", async () => {
     const user = newUserId();
     const album = await createAlbum(user);
     const [p1, p2, p3] = await upload(user, 3);
@@ -146,7 +146,8 @@ describe("album photos (FR-ALB-2)", () => {
     ).toBe(204);
 
     const list = photoPageSchema.parse((await albumPhotos(user, album.albumId)).body);
-    expect(list.items.map((p) => p.photoId)).toEqual([p1, p2, p3]);
+    // Not yet processed: takenAt is the upload time, so the last upload comes first (§12.3).
+    expect(list.items.map((p) => p.photoId)).toEqual([p3, p2, p1]);
     expect(list.nextCursor).toBeNull();
     expect((await repos.albums.get(user, album.albumId))?.photoCount).toBe(3);
 
@@ -156,12 +157,15 @@ describe("album photos (FR-ALB-2)", () => {
     });
     expect((await api(user, "DELETE", `/albums/${album.albumId}/photos/${p2}`)).status).toBe(404);
     const after = photoPageSchema.parse((await albumPhotos(user, album.albumId)).body);
-    expect(after.items.map((p) => p.photoId)).toEqual([p1, p3]);
+    expect(after.items.map((p) => p.photoId)).toEqual([p3, p1]);
     // The photo itself stays.
     expect((await api(user, "GET", `/photos/${p2}`)).status).toBe(200);
   });
 
-  test("paginates with a cursor", async () => {
+  test.each([
+    ["", "taken-desc"],
+    ["&sort=taken-asc", "taken-asc"],
+  ])("paginates with a cursor (%s → %s)", async (sortParam, sort) => {
     const user = newUserId();
     const album = await createAlbum(user);
     const ids = await upload(user, 5);
@@ -170,12 +174,18 @@ describe("album photos (FR-ALB-2)", () => {
     const seen: string[] = [];
     let cursor: string | null = null;
     do {
-      const query: string = `?limit=2${cursor ? `&cursor=${cursor}` : ""}`;
+      const query: string = `?limit=2${sortParam}${cursor ? `&cursor=${cursor}` : ""}`;
       const page = photoPageSchema.parse((await albumPhotos(user, album.albumId, query)).body);
       seen.push(...page.items.map((p) => p.photoId));
       cursor = page.nextCursor;
     } while (cursor);
-    expect(seen).toEqual(ids);
+    expect(seen).toEqual(sort === "taken-asc" ? ids : [...ids].reverse());
+  });
+
+  test("rejects an unknown sort", async () => {
+    const user = newUserId();
+    const album = await createAlbum(user);
+    expect((await albumPhotos(user, album.albumId, "?sort=name")).status).toBe(400);
   });
 
   test("an unknown photo makes the whole add 404 and adds nothing", async () => {

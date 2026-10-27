@@ -16,22 +16,24 @@ export const albumsQuery = (api: Api) =>
     queryFn: ({ signal }) => api.albums.list({ signal }),
   });
 
-/** The key of an album's photo list (`galleryQuery` with `album`). */
+/** Matches an album's photo lists (`galleryQuery` with `album`), in either sort order. */
 const albumPhotosKey = (albumId: string) => ["photos", { album: albumId }] as const;
 
 /** Drops photos from an album's cached list at once, before the refetch confirms. */
 function removeFromAlbumCache(queryClient: QueryClient, albumId: string, photoIds: string[]) {
   const gone = new Set(photoIds);
-  queryClient.setQueryData<InfiniteData<PhotoPage>>(albumPhotosKey(albumId), (data) =>
-    data
-      ? {
-          ...data,
-          pages: data.pages.map((page) => ({
-            ...page,
-            items: page.items.filter((p) => !gone.has(p.photoId)),
-          })),
-        }
-      : data,
+  queryClient.setQueriesData<InfiniteData<PhotoPage>>(
+    { queryKey: albumPhotosKey(albumId) },
+    (data) =>
+      data
+        ? {
+            ...data,
+            pages: data.pages.map((page) => ({
+              ...page,
+              items: page.items.filter((p) => !gone.has(p.photoId)),
+            })),
+          }
+        : data,
   );
 }
 

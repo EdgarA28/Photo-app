@@ -1,5 +1,5 @@
 /** Albums, memberships, shares and usage repositories against DynamoDB Local (task 5.3). */
-import { PutCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { newId } from "@photo-app/shared";
 import { beforeAll, describe, expect, test } from "vitest";
 import type { Db, Repositories } from "../src/repo";
@@ -13,6 +13,18 @@ beforeAll(async () => {
 
 async function album(ownerId: string, name = "Holidays") {
   return repos.albums.create({ ownerId, albumId: newId(), name, createdAt: nextIso() });
+}
+
+/** What the thumbnail Lambda does when it reads the date taken (§10). */
+async function setTakenAt(userId: string, photoId: string, takenAt: string) {
+  await db.client.send(
+    new UpdateCommand({
+      TableName: db.table,
+      Key: { PK: `USER#${userId}`, SK: `PHOTO#${photoId}` },
+      UpdateExpression: "SET takenAt = :t, GSI1SK = :sk",
+      ExpressionAttributeValues: { ":t": takenAt, ":sk": `TAKEN#${takenAt}#${photoId}` },
+    }),
+  );
 }
 
 async function photos(userId: string, count: number) {
@@ -113,20 +125,51 @@ describe("memberships", () => {
     expect(await repos.photos.get(owner, missing)).toBeNull();
   });
 
-  test("listMemberships pages in upload order", async () => {
+  test("listMemberships pages by date taken, newest first, or oldest first (§12.3)", async () => {
     const owner = newUserId();
     const a = await album(owner);
     const ids = await photos(owner, 3);
+    // Processed photos: dates taken out of upload order.
+    const taken = [
+      "2024-05-01T10:00:00.000Z",
+      "2026-01-01T10:00:00.000Z",
+      "2025-03-01T10:00:00.000Z",
+    ];
+    for (const [i, photoId] of ids.entries()) await setTakenAt(owner, photoId, taken[i]!);
     await repos.albums.addPhotos(owner, a.albumId, ids, nextIso());
 
-    const first = await repos.albums.listMemberships(a.albumId, { limit: 2 });
+    const first = await repos.albums.listMemberships(a.albumId, { sort: "taken-desc", limit: 2 });
     const second = await repos.albums.listMemberships(a.albumId, {
+      sort: "taken-desc",
       limit: 2,
       cursor: first.nextCursor!,
     });
-    expect([...first.items, ...second.items].map((m) => m.photoId)).toEqual(ids);
+    const newestFirst = [ids[1], ids[2], ids[0]];
+    expect([...first.items, ...second.items].map((m) => m.photoId)).toEqual(newestFirst);
     expect(first.items[0]).toMatchObject({ albumId: a.albumId, ownerId: owner });
+    expect(first.items[0]).not.toHaveProperty("GSI1SK");
     expect(second.nextCursor).toBeNull();
+
+    const oldest = await repos.albums.listMemberships(a.albumId, { sort: "taken-asc", limit: 10 });
+    expect(oldest.items.map((m) => m.photoId)).toEqual([...newestFirst].reverse());
+  });
+
+  test("a membership is sorted by the photo's takenAt at the time it is added", async () => {
+    const owner = newUserId();
+    const a = await album(owner);
+    const [photoId] = await photos(owner, 1);
+    await setTakenAt(owner, photoId!, "2023-07-04T12:00:00.000Z");
+    await repos.albums.addPhotos(owner, a.albumId, [photoId!], nextIso());
+    const item = await db.client.send(
+      new GetCommand({
+        TableName: db.table,
+        Key: { PK: `ALBUM#${a.albumId}`, SK: `PHOTO#${photoId}` },
+      }),
+    );
+    expect(item.Item).toMatchObject({
+      GSI1PK: `ALBUM#${a.albumId}`,
+      GSI1SK: `TAKEN#2023-07-04T12:00:00.000Z#${photoId}`,
+    });
   });
 
   test("remove fixes count, cover and the photo's albumIds; second remove is false", async () => {

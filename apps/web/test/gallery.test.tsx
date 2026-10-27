@@ -99,6 +99,54 @@ describe("gallery (FR-GAL-1/2/3)", () => {
   });
 });
 
+describe("month headings (§12.3)", () => {
+  const monthOf = (iso: string) =>
+    new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(new Date(iso));
+  const october = "2026-10-15T12:00:00.000Z";
+  const september = "2026-09-15T12:00:00.000Z";
+  const page = {
+    items: [
+      testPhoto(0, { takenAt: october }),
+      testPhoto(1, { takenAt: october }),
+      testPhoto(2, { takenAt: september }),
+    ],
+    nextCursor: null,
+  };
+
+  it("puts a heading above each month, and a month's photos never share a row", async () => {
+    const { api } = setup({ "GET /photos": page });
+    await renderAt("/gallery", { api });
+    await screen.findByRole("link", { name: "IMG_2.jpg" });
+
+    const headings = screen.getAllByRole("heading", { level: 2 });
+    expect(headings.map((h) => h.textContent)).toEqual([monthOf(october), monthOf(september)]);
+    // Document order: October heading, its two photos, September heading, its photo.
+    const order = [...document.querySelectorAll("h2, a[aria-label^='IMG_']")].map(
+      (el) => el.textContent || el.getAttribute("aria-label"),
+    );
+    expect(order).toEqual([
+      monthOf(october),
+      "IMG_0.jpg",
+      "IMG_1.jpg",
+      monthOf(september),
+      "IMG_2.jpg",
+    ]);
+    const rowOf = (name: string) => screen.getByRole("link", { name }).parentElement;
+    expect(rowOf("IMG_1.jpg")).toBe(rowOf("IMG_0.jpg"));
+    expect(rowOf("IMG_2.jpg")).not.toBe(rowOf("IMG_1.jpg"));
+  });
+
+  it("has them in an album list too, which is by date taken as well", async () => {
+    const { api } = setup({ [`GET /albums/${album.albumId}/photos`]: page });
+    await renderAt(`/gallery?album=${album.albumId}`, { api });
+    await screen.findByRole("link", { name: "IMG_2.jpg" });
+    expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual([
+      monthOf(october),
+      monthOf(september),
+    ]);
+  });
+});
+
 describe("processing and failed photos (FR-GAL-5)", () => {
   const pending = (n: number, uploadedAt = new Date().toISOString()) =>
     testPhoto(n, { status: "pending", width: null, height: null, thumbUrl: null, uploadedAt });
@@ -208,16 +256,18 @@ describe("gallery filters in the URL (FR-GAL-3)", () => {
     expect(await screen.findByRole("link", { name: "IMG_50.jpg" })).toBeTruthy();
   });
 
-  it("lists an album from the URL in its own order, without a sort menu", async () => {
+  it("lists an album from the URL by date taken, with the sort menu (§12.3)", async () => {
     const { api, request } = setup({ [`GET /albums/${album.albumId}/photos`]: emptyPage });
-    await renderAt(`/gallery?album=${album.albumId}`, { api });
+    await renderAt(`/gallery?album=${album.albumId}&sort=taken-asc`, { api });
     expect(await screen.findByText("This album has no photos yet.")).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Upload photos" })).toBeNull();
-    expect(screen.queryByRole("combobox", { name: "Sort order" })).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Sort order" }).textContent).toBe("Oldest first");
     await waitFor(() =>
       expect(screen.getByRole("combobox", { name: "Album" }).textContent).toBe("Holidays"),
     );
-    expect(queriesTo(request, `/albums/${album.albumId}/photos`)).toEqual([{ cursor: undefined }]);
+    expect(queriesTo(request, `/albums/${album.albumId}/photos`)).toEqual([
+      { sort: "taken-asc", cursor: undefined },
+    ]);
     expect(queriesTo(request, "/photos")).toEqual([]);
   });
 

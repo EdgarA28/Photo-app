@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.13 |
+| **Version** | 0.14 |
 | **Date** | 2026-10-27 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -346,7 +346,7 @@ Initial design; refine during implementation.
 |---|---|---|---|---|---|
 | Photo | `USER#{userId}` | `PHOTO#{photoId}` | `USER#{userId}` | `TAKEN#{takenAt}#{photoId}` | status (`pending`/`ready`/`failed`), fileName, contentType, sizeBytes, width, height, takenAt, uploadedAt, originalKey, originalETag |
 | Album | `USER#{ownerId}` | `ALBUM#{albumId}` | — | — | name, createdAt, coverPhotoId, photoCount |
-| Album membership | `ALBUM#{albumId}` | `PHOTO#{photoId}` | — | — | ownerId, addedAt |
+| Album membership | `ALBUM#{albumId}` | `PHOTO#{photoId}` | `ALBUM#{albumId}` | `TAKEN#{takenAt}#{photoId}` (the photo's) | ownerId, addedAt |
 | Album share | `ALBUM#{albumId}` | `SHARE#{userId}` | `SHAREDWITH#{userId}` | `ALBUM#{albumId}` | ownerId, sharedAt |
 | Usage | `USER#{userId}` | `USAGE` | — | — | bytesUsed, photoCount, quotaBytes |
 | Profile | `USER#{userId}` | `PROFILE` | — | — | username, usernameChangedAt |
@@ -359,7 +359,7 @@ Access patterns:
 | Gallery (by date taken) | GSI1: `GSI1PK = USER#{id}`, descending, paginated |
 | Get one photo | `PK = USER#{id}, SK = PHOTO#{photoId}` |
 | List my albums | `PK = USER#{id}, SK begins_with ALBUM#` |
-| Photos in album | `PK = ALBUM#{albumId}, SK begins_with PHOTO#` |
+| Photos in album (by date taken) | GSI1: `GSI1PK = ALBUM#{albumId}`, descending (or ascending), paginated |
 | Who an album is shared with | `PK = ALBUM#{albumId}, SK begins_with SHARE#` |
 | Albums shared with me | GSI1: `GSI1PK = SHAREDWITH#{id}` |
 | User by username | `PK = USERNAME#{username}, SK = USERNAME` (ignored while `heldUntil` is set) |
@@ -393,7 +393,7 @@ Access patterns:
 | `POST` | `/albums` | Create album `{name}` |
 | `PATCH` | `/albums/{albumId}` | Rename / set cover |
 | `DELETE` | `/albums/{albumId}` | Delete album (not photos) |
-| `GET` | `/albums/{albumId}/photos` | Photos in album (owner or share recipient) `?cursor&limit` |
+| `GET` | `/albums/{albumId}/photos` | Photos in album by date taken (owner or share recipient) `?sort&cursor&limit`, like `/photos` |
 | `POST` | `/albums/{albumId}/photos` | Add photos `{photoIds: []}` |
 | `DELETE` | `/albums/{albumId}/photos/{photoId}` | Remove photo from album |
 | `GET` | `/albums/{albumId}/shares` | List shares (owner only) |
@@ -433,6 +433,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 | Output headers | `Content-Type: image/jpeg`, `Cache-Control: public, max-age=31536000, immutable`, storage class STANDARD |
 | Limits | Skip sources > 50 MB; memory 1536 MB; timeout 60 s |
 | Errors — permanent (corrupt / unsupported) | Log, set DynamoDB status `failed`, return success (no retry) |
+| Album order | Once `ready`, the photo's album memberships get its final takenAt in `GSI1SK` (they were sorted by the upload time while pending) |
 | Replaced original | The item stores the processed bytes' ETag (`originalETag`). If the original is overwritten after processing (the upload POST is valid 15 min), the photo becomes `failed` and its thumb/preview are deleted, so recipients can't download other bytes than they were shown |
 | Errors — transient | Raise → Lambda async retries (2×) → SQS DLQ (14-day retention) |
 | Packaging | Native wheels for `manylinux` aarch64 (`pip install --platform manylinux2014_aarch64 --only-binary=:all:`) or Docker build |
@@ -503,6 +504,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 - Virtualized grid of rows; only visible rows rendered.
 - API returns `width`/`height` so tiles reserve space before images load (no layout shift).
 - `fetchNextPage()` triggered when approaching the end.
+- Month sections, as in Google Photos but by month only: a heading ("October 2026", local time) above each month of date taken, in the gallery and in albums; a row never mixes months.
 - Select mode (several photos at once: delete, add to / remove from an album), as in Google Photos: entered with the header's Select button or by pressing and holding a photo; sliding the finger on without lifting picks every photo up to the one under it (starting on a picked photo unpicks), scrolling the page near the screen edges. In select mode the Select button reads "Unselect all" (same place, so nothing moves), and Back (Android's back gesture) leaves select mode instead of the page.
 
 ### 12.4 Upload queue
@@ -714,6 +716,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.14 | 2026-10-27 | Month sections in gallery and albums (§12.3); album photos listed by date taken with `sort` (§9), memberships in GSI1 (§8.2) |
 | 0.13 | 2026-10-27 | Security review 12.2: Content-Security-Policy on the site (§13.1 `frontend`); replaced originals fail the photo, `originalETag` on Photo items (§8.2, §10) |
 | 0.10 | 2026-10-25 | Optional sign-up allowlist in the pre sign-up trigger (§11.3), limiting FR-AUTH-1/2 to listed emails until launch |
 | 0.9 | 2026-10-25 | Shared-album photos: album pages carry signed thumbnails, `GET /photos/{id}?albumId=` the signed preview (§9) |

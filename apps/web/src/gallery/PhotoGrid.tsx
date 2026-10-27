@@ -5,7 +5,8 @@ import { Check, ImageOff, LoaderCircle } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useImageFailed } from "@/components/useImageFailed";
 import { cn } from "@/lib/utils";
-import { justifyRows } from "./justify";
+import { justifyRows, type Row } from "./justify";
+import { monthSections } from "./months";
 import type { GallerySearch } from "./search";
 import { TILE_ATTRIBUTE, useDragSelect } from "./useDragSelect";
 
@@ -14,9 +15,16 @@ const GAP = 4;
 const targetHeightFor = (width: number) => (width < 640 ? 112 : 192);
 /** Start loading the next page this many rows before the end (FR-GAL-2). */
 const LOOKAHEAD_ROWS = 6;
+/** Height of a month heading above its rows, the gap after the previous row included. */
+const MONTH_HEADING_HEIGHT = 44;
 
 // Pending photos have no dimensions yet (they come from the thumbnail Lambda): square until ready.
 const aspectOf = (photo: Photo) => (photo.width && photo.height ? photo.width / photo.height : 1);
+
+/** What the virtualizer lays out: a month heading or a row of tiles. */
+type GridItem =
+  | { kind: "month"; label: string; height: number }
+  | { kind: "row"; row: Row<Photo>; height: number };
 
 /** Select mode (8.11): tiles toggle instead of opening the viewer. */
 export interface GridSelection {
@@ -34,6 +42,8 @@ interface PhotoGridProps {
   selection?: GridSelection | undefined;
   /** Press and slide on the tiles picks photos (useDragSelect), starting select mode. */
   onSelectionChange?: ((selected: ReadonlySet<string>) => void) | undefined;
+  /** A heading per month of date taken; only for lists ordered by date taken. */
+  months?: boolean | undefined;
 }
 
 /**
@@ -49,20 +59,26 @@ export function PhotoGrid({
   viewerSearch,
   selection,
   onSelectionChange,
+  months = false,
 }: PhotoGridProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { width, top } = useElementBox(ref);
-  const rows = useMemo(
-    () =>
-      width > 0
-        ? justifyRows(photos, aspectOf, {
-            containerWidth: width,
-            targetHeight: targetHeightFor(width),
-            gap: GAP,
-          })
-        : [],
-    [photos, width],
-  );
+  const items = useMemo((): GridItem[] => {
+    if (width <= 0) return [];
+    const options = { containerWidth: width, targetHeight: targetHeightFor(width), gap: GAP };
+    const rowsOf = (list: Photo[]): GridItem[] =>
+      justifyRows(list, aspectOf, options).map((row) => ({
+        kind: "row",
+        row,
+        height: row.height + GAP,
+      }));
+    if (!months) return rowsOf(photos);
+    // Each month gets its own rows, so a row never mixes months (§12.3).
+    return monthSections(photos, (photo) => photo.takenAt).flatMap(({ label, items }) => [
+      { kind: "month", label, height: MONTH_HEADING_HEIGHT } as const,
+      ...rowsOf(items),
+    ]);
+  }, [photos, width, months]);
 
   const photoIds = useMemo(() => photos.map((photo) => photo.photoId), [photos]);
   const dragStartedInSelect = useDragSelect({
@@ -73,35 +89,44 @@ export function PhotoGrid({
   });
 
   const virtualizer = useWindowVirtualizer({
-    count: rows.length,
-    estimateSize: (index) => rows[index]!.height + GAP,
+    count: items.length,
+    estimateSize: (index) => items[index]!.height,
     overscan: 4,
     scrollMargin: top,
   });
-  // Row heights are computed, not measured: drop cached sizes when the layout changes.
-  useEffect(() => virtualizer.measure(), [virtualizer, rows]);
+  // Heights are computed, not measured: drop cached sizes when the layout changes.
+  useEffect(() => virtualizer.measure(), [virtualizer, items]);
 
   const virtualRows = virtualizer.getVirtualItems();
   const lastIndex = virtualRows.at(-1)?.index ?? -1;
   useEffect(() => {
-    if (hasNextPage && !isFetchingNextPage && lastIndex >= rows.length - LOOKAHEAD_ROWS) {
+    if (hasNextPage && !isFetchingNextPage && lastIndex >= items.length - LOOKAHEAD_ROWS) {
       void fetchNextPage();
     }
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage, lastIndex, rows.length]);
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage, lastIndex, items.length]);
 
   return (
     <div ref={ref} className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
       {virtualRows.map((virtualRow) => {
-        const row = rows[virtualRow.index]!;
+        const item = items[virtualRow.index]!;
+        const translate = `translateY(${virtualRow.start - virtualizer.options.scrollMargin}px)`;
+        if (item.kind === "month") {
+          return (
+            <h2
+              key={virtualRow.key}
+              className="absolute inset-x-0 top-0 flex items-end pb-2 text-sm font-medium text-foreground"
+              style={{ height: item.height, transform: translate }}
+            >
+              {item.label}
+            </h2>
+          );
+        }
+        const { row } = item;
         return (
           <div
             key={virtualRow.key}
             className="absolute inset-x-0 top-0 flex"
-            style={{
-              gap: GAP,
-              height: row.height,
-              transform: `translateY(${virtualRow.start - virtualizer.options.scrollMargin}px)`,
-            }}
+            style={{ gap: GAP, height: row.height, transform: translate }}
           >
             {row.tiles.map(({ item, width }) => (
               <PhotoTile

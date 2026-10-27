@@ -64,7 +64,7 @@ export function createApi(request: Request) {
       update: (albumId: string, body: UpdateAlbumRequest) =>
         request("PATCH", `/albums/${enc(albumId)}`, { schema: albumSchema, body }),
       delete: (albumId: string) => request("DELETE", `/albums/${enc(albumId)}`),
-      photos: (albumId: string, query: Page = {}, o?: Opts) =>
+      photos: (albumId: string, query: Page & { sort?: PhotoSort } = {}, o?: Opts) =>
         request("GET", `/albums/${enc(albumId)}/photos`, { schema: photoPageSchema, query, ...o }),
       addPhotos: (albumId: string, body: AddAlbumPhotosRequest) =>
         request("POST", `/albums/${enc(albumId)}/photos`, { body }),

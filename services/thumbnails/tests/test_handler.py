@@ -391,3 +391,65 @@ def test_photos_without_stored_etag_are_skipped(aws: tuple[Any, Any], jpeg_plain
     assert result["results"][0]["reason"] == "already processed"
     item = get(dynamodb, PHOTO_KEY)
     assert item is not None and item["status"]["S"] == "ready"
+
+
+# §12.3: album memberships are sorted by the photo's takenAt (GSI1 `ALBUM#{albumId}`).
+
+
+def put_membership(dynamodb: Any, album_id: str, sort_key: str) -> None:
+    """What the API writes when a still-pending photo is added to an album."""
+    dynamodb.put_item(
+        TableName=TABLE,
+        Item={
+            "PK": {"S": f"ALBUM#{album_id}"},
+            "SK": {"S": f"PHOTO#{PHOTO}"},
+            "GSI1PK": {"S": f"ALBUM#{album_id}"},
+            "GSI1SK": {"S": sort_key},
+            "albumId": {"S": album_id},
+            "photoId": {"S": PHOTO},
+            "ownerId": {"S": USER},
+        },
+    )
+
+
+def test_ready_moves_album_memberships_to_the_real_date(
+    aws: tuple[Any, Any], jpeg_rotated: bytes
+) -> None:
+    s3, dynamodb = aws
+    put_pending(dynamodb, declared=len(jpeg_rotated))
+    albums = ["01JALBUMAAAAAAAAAAAAAAAAAA", "01JALBUMBBBBBBBBBBBBBBBBBB"]
+    dynamodb.update_item(
+        TableName=TABLE,
+        Key=PHOTO_KEY,
+        UpdateExpression="ADD albumIds :a",
+        ExpressionAttributeValues={":a": {"SS": albums}},
+    )
+    provisional = f"TAKEN#{UPLOADED_AT}#{PHOTO}"
+    put_membership(dynamodb, albums[0], provisional)
+    put_membership(dynamodb, albums[1], provisional)
+
+    handler_module.handler(upload(s3, jpeg_rotated))
+
+    for album_id in albums:
+        item = get(dynamodb, {"PK": {"S": f"ALBUM#{album_id}"}, "SK": {"S": f"PHOTO#{PHOTO}"}})
+        assert item is not None
+        assert item["GSI1SK"]["S"] == f"TAKEN#2024-05-01T12:30:15.123Z#{PHOTO}"
+        assert item["GSI1PK"]["S"] == f"ALBUM#{album_id}"
+
+
+def test_membership_removed_meanwhile_is_not_recreated(
+    aws: tuple[Any, Any], jpeg_rotated: bytes
+) -> None:
+    s3, dynamodb = aws
+    put_pending(dynamodb, declared=len(jpeg_rotated))
+    dynamodb.update_item(
+        TableName=TABLE,
+        Key=PHOTO_KEY,
+        UpdateExpression="ADD albumIds :a",
+        ExpressionAttributeValues={":a": {"SS": ["01JALBUMGONEGONEGONEGONEGO"]}},
+    )
+
+    assert handler_module.handler(upload(s3, jpeg_rotated))["results"][0]["status"] == "ready"
+
+    gone = {"PK": {"S": "ALBUM#01JALBUMGONEGONEGONEGONEGO"}, "SK": {"S": f"PHOTO#{PHOTO}"}}
+    assert get(dynamodb, gone) is None

@@ -207,6 +207,13 @@ Dev app resources (table + photo bucket + Cognito + trigger + thumbnail Lambda +
 - [x] **8.14** Quota exceeded + error messages (FR-UP-7)
 - [x] **8.15** "Choose a username" step after the first login (FR-ACC-3): shown once when `GET /me` has `username: null`, skippable ("Later"; remembered so it doesn't come back on every login), same validation and "taken" handling as 8.13
 
+- [~] **8.16** Month sections in gallery and albums (user request 2026-10-27, like Google Photos but by month only; spec v0.14 §12.3)
+  - [x] Web: `monthSections` (local month of `takenAt`) + `PhotoGrid` `months` (heading per month, rows never mix months) in gallery, `?album=` view and album page; sort menu now also for albums
+  - [x] Albums by date taken (user's choice over upload-month sections): memberships carry `GSI1PK = ALBUM#{albumId}` / `GSI1SK = TAKEN#{takenAt}#{photoId}` (existing GSI1, projection ALL, so no infra change); `GET /albums/{id}/photos?sort=`; add is conditional on the photo's takenAt (retry ×3); thumbnail Lambda re-sorts memberships once `ready`
+  - [x] Backfill `services/thumbnails/scripts/backfill_album_order.py` run in dev: 7 memberships updated, re-run finds 0
+  - [x] Tests: months (4), gallery headings + album list (2 + 1 changed), album page heading, API repo (2) + routes (sort both ways, bad sort), Lambda (2); 756 TS + 83 Python pass, build OK
+  - [ ] Deploy (push to `main`) → **re-run the backfill right after** (the old API writes memberships without the keys until then): `cd services/thumbnails && AWS_PROFILE=dev uv run python scripts/backfill_album_order.py photo-app-dev`; then the user checks gallery + an album (headings, order, Oldest first). Prod: nothing to backfill (no data)
+
 ## Phase 9 — PWA (§12.5)
 
 - [x] **9.1** vite-plugin-pwa: manifest, icons 192/512 + maskable, `start_url: /gallery` (FR-PWA-1)
@@ -363,6 +370,7 @@ Moved to the end by the user (2026-10-27): everything about prod and iOS waits u
 
 | Date | Note |
 |---|---|
+| 2026-10-27 | **Albums by date taken** (user, with month sections 8.16): supersedes the 2026-10-24 note below. Memberships use the existing GSI1 (`ALBUM#{albumId}` / `TAKEN#{takenAt}#{photoId}`), so no new index; the sort menu now applies to albums too. |
 | 2026-10-27 | **Plan reorder** (user): everything prod (1.3–1.5 prod parts, 1.7, 10.3, 11.x, 12.4, 12.7) and the iOS test (9.7) moved into Phase 11, placed last after Phase 13. Task IDs kept. Phase 12 runs against dev now. |
 | 2026-10-27 | **Prod last** (user): prod bootstrap, 10.3 (prod deploy job) and Phase 11 wait until everything else is done, Phase 13 features included. |
 | 2026-10-27 | **Deploy trigger (10.2):** `deploy.yml` runs on `workflow_run` after CI **succeeds** for a push to `main`, not directly on push as §14.2 says, so failing tests block the deploy. Lambda zips use `output_file_mode = "0644"` so local and CI builds hash the same. |
@@ -550,3 +558,4 @@ Moved to the end by the user (2026-10-27): everything about prod and iOS waits u
 | 2026-10-27 | 12.2 applied in dev: response headers policy live with the CSP, thumbnail Lambda updated; re-plan clean. |
 | 2026-10-27 | 12.3 measured in dev with 10k seeded photos: PERF-1 p95 2.74 s, PERF-2 server p95 ≤ 194 ms, PERF-3 59.5 fps, PERF-4 SW cache OK; test data deleted. Finding 12.3a: Lambda concurrency limit 10. |
 | 2026-10-27 | 12.3a (Lambda concurrency quota 10 → 1,000) deferred by the user; how-to recorded, due before 13.1; prod step added to Phase 11. |
+| 2026-10-27 | 8.16 month sections in gallery + albums; albums now list by date taken (memberships in GSI1, Lambda re-sorts, sort menu for albums); dev backfill run (7). Spec v0.14. Not deployed yet. |
