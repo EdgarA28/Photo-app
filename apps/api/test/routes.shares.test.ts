@@ -4,6 +4,7 @@ import {
   albumShareSchema,
   apiErrorSchema,
   newId,
+  shareInvitationPageSchema,
   sharedAlbumPageSchema,
 } from "@photo-app/shared";
 import { beforeAll, describe, expect, test } from "vitest";
@@ -42,8 +43,20 @@ async function album(ownerId: string, name = "Trip") {
   return repos.albums.create({ ownerId, albumId: newId(), name, createdAt: nextIso() });
 }
 
+/** The owner shares by email and the recipient accepts (FR-SHR-1, FR-SHR-6). */
+async function shareAccepted(
+  ownerId: string,
+  albumId: string,
+  recipient: { userId: string; email: string },
+) {
+  await api(ownerId, "POST", `/albums/${albumId}/shares`, { email: recipient.email });
+  expect((await api(recipient.userId, "POST", `/shared-albums/${albumId}/accept`)).status).toBe(
+    204,
+  );
+}
+
 describe("POST /albums/{albumId}/shares (FR-SHR-1)", () => {
-  test("shares with the registered user who has the email → 201", async () => {
+  test("shares with the registered user who has the email → 201, as an invitation", async () => {
     const owner = register("Owner");
     const friend = register("Friend");
     const a = await album(owner.userId);
@@ -54,9 +67,10 @@ describe("POST /albums/{albumId}/shares (FR-SHR-1)", () => {
 
     expect(res.status).toBe(201);
     const share = albumShareSchema.parse(res.body);
-    expect(share).toMatchObject({ userId: friend.userId, email: friend.email });
+    expect(share).toMatchObject({ userId: friend.userId, email: friend.email, status: "pending" });
     expect(await repos.shares.get(a.albumId, friend.userId)).toMatchObject({
       ownerId: owner.userId,
+      status: "pending",
       sharedAt: share.sharedAt,
     });
   });
@@ -264,7 +278,7 @@ describe("GET /shared-albums (FR-SHR-3)", () => {
       [alice, a],
       [bob, b],
     ] as const) {
-      await api(owner.userId, "POST", `/albums/${x.albumId}/shares`, { email: me.email });
+      await shareAccepted(owner.userId, x.albumId, me);
     }
 
     const first = sharedAlbumPageSchema.parse(
@@ -300,7 +314,7 @@ describe("GET /shared-albums (FR-SHR-3)", () => {
       [alice, a],
       [bob, b],
     ] as const) {
-      await api(owner.userId, "POST", `/albums/${x.albumId}/shares`, { email: me.email });
+      await shareAccepted(owner.userId, x.albumId, me);
     }
 
     const { items } = sharedAlbumPageSchema.parse(
@@ -332,7 +346,7 @@ describe("GET /shared-albums (FR-SHR-3)", () => {
     const owner = register();
     const me = register();
     const a = await album(owner.userId);
-    await api(owner.userId, "POST", `/albums/${a.albumId}/shares`, { email: me.email });
+    await shareAccepted(owner.userId, a.albumId, me);
     expect((await api(owner.userId, "DELETE", `/albums/${a.albumId}`)).status).toBe(204);
 
     expect((await api(me.userId, "GET", "/shared-albums")).body).toEqual({
@@ -344,5 +358,189 @@ describe("GET /shared-albums (FR-SHR-3)", () => {
   test("invalid limit → 400, anonymous → 401", async () => {
     expect((await api(newUserId(), "GET", "/shared-albums?limit=0")).status).toBe(400);
     expect((await api(null, "GET", "/shared-albums")).status).toBe(401);
+  });
+});
+
+describe("invitations: accept, decline, leave (FR-SHR-6/7)", () => {
+  test("a new share is an invitation: listed apart, no access until accepted", async () => {
+    const [owner, me] = [register("Owner"), register("Me")];
+    const a = await album(owner.userId, "Summer");
+    const photo = await createPending(repos, newPhoto(owner.userId));
+    await markReady(db, owner.userId, photo.photoId, 1000, "2025-06-01T12:00:00.000Z");
+    await repos.albums.addPhotos(owner.userId, a.albumId, [photo.photoId], nextIso());
+    await api(owner.userId, "POST", `/albums/${a.albumId}/shares`, { email: me.email });
+
+    const invited = shareInvitationPageSchema.parse(
+      (await api(me.userId, "GET", "/share-invitations")).body,
+    );
+    expect(invited).toEqual({
+      items: [
+        {
+          albumId: a.albumId,
+          name: "Summer",
+          photoCount: 1,
+          ownerId: owner.userId,
+          ownerUsername: null,
+          sharedAt: (await repos.shares.get(a.albumId, me.userId))!.sharedAt,
+        },
+      ],
+      nextCursor: null,
+    });
+    expect((await api(me.userId, "GET", "/shared-albums")).body).toEqual({
+      items: [],
+      nextCursor: null,
+    });
+    expect((await api(me.userId, "GET", `/albums/${a.albumId}/photos`)).status).toBe(404);
+    expect(
+      (await api(me.userId, "GET", `/photos/${photo.photoId}?albumId=${a.albumId}`)).status,
+    ).toBe(404);
+    expect(
+      (await api(me.userId, "GET", `/photos/${photo.photoId}/download-url?albumId=${a.albumId}`))
+        .status,
+    ).toBe(404);
+  });
+
+  test("accepting → 204: the album moves to Shared with me and opens; accepting again → 204", async () => {
+    const [owner, me] = [register(), register()];
+    const a = await album(owner.userId);
+    await api(owner.userId, "POST", `/albums/${a.albumId}/shares`, { email: me.email });
+
+    const path = `/shared-albums/${a.albumId}/accept`;
+    expect((await api(me.userId, "POST", path)).status).toBe(204);
+    expect((await api(me.userId, "POST", path)).status).toBe(204);
+
+    expect((await api(me.userId, "GET", "/share-invitations")).body).toEqual({
+      items: [],
+      nextCursor: null,
+    });
+    const shared = sharedAlbumPageSchema.parse(
+      (await api(me.userId, "GET", "/shared-albums")).body,
+    );
+    expect(shared.items.map((x) => x.albumId)).toEqual([a.albumId]);
+    expect((await api(me.userId, "GET", `/albums/${a.albumId}/photos`)).status).toBe(200);
+    expect(await repos.shares.get(a.albumId, me.userId)).toMatchObject({
+      status: "accepted",
+      acceptedAt: expect.any(String),
+    });
+
+    // The owner sees it accepted.
+    const list = albumShareListSchema.parse(
+      (await api(owner.userId, "GET", `/albums/${a.albumId}/shares`)).body,
+    );
+    expect(list.items.map((x) => x.status)).toEqual(["accepted"]);
+  });
+
+  test("shares made before invitations (no status) count as accepted", async () => {
+    const [owner, me] = [register(), register()];
+    const a = await album(owner.userId);
+    await repos.shares.create({
+      albumId: a.albumId,
+      ownerId: owner.userId,
+      userId: me.userId,
+      sharedAt: nextIso(),
+    });
+    const shared = sharedAlbumPageSchema.parse(
+      (await api(me.userId, "GET", "/shared-albums")).body,
+    );
+    expect(shared.items.map((x) => x.albumId)).toEqual([a.albumId]);
+    expect((await api(me.userId, "GET", `/albums/${a.albumId}/photos`)).status).toBe(200);
+    expect((await api(me.userId, "POST", `/shared-albums/${a.albumId}/accept`)).status).toBe(204);
+    const list = albumShareListSchema.parse(
+      (await api(owner.userId, "GET", `/albums/${a.albumId}/shares`)).body,
+    );
+    expect(list.items[0]?.status).toBe("accepted");
+  });
+
+  test("declining → 204: the invitation and the owner's share are gone", async () => {
+    const [owner, me] = [register(), register()];
+    const a = await album(owner.userId);
+    await api(owner.userId, "POST", `/albums/${a.albumId}/shares`, { email: me.email });
+
+    expect((await api(me.userId, "DELETE", `/shared-albums/${a.albumId}`)).status).toBe(204);
+    expect((await api(me.userId, "GET", "/share-invitations")).body).toEqual({
+      items: [],
+      nextCursor: null,
+    });
+    expect((await api(owner.userId, "GET", `/albums/${a.albumId}/shares`)).body).toEqual({
+      items: [],
+    });
+    expect((await api(me.userId, "POST", `/shared-albums/${a.albumId}/accept`)).status).toBe(404);
+  });
+
+  test("leaving an accepted album → 204: access ends at once; again → 404", async () => {
+    const [owner, me] = [register(), register()];
+    const a = await album(owner.userId);
+    await shareAccepted(owner.userId, a.albumId, me);
+
+    const path = `/shared-albums/${a.albumId}`;
+    expect((await api(me.userId, "DELETE", path)).status).toBe(204);
+    expect((await api(me.userId, "GET", `/albums/${a.albumId}/photos`)).status).toBe(404);
+    expect((await api(me.userId, "GET", "/shared-albums")).body).toEqual({
+      items: [],
+      nextCursor: null,
+    });
+    expect((await api(me.userId, "DELETE", path)).status).toBe(404);
+    // The album itself is untouched.
+    expect(await repos.albums.get(owner.userId, a.albumId)).not.toBeNull();
+  });
+
+  test("after a decline the owner can share again: a new invitation (201)", async () => {
+    const [owner, me] = [register(), register()];
+    const a = await album(owner.userId);
+    const path = `/albums/${a.albumId}/shares`;
+    await api(owner.userId, "POST", path, { email: me.email });
+    await api(me.userId, "DELETE", `/shared-albums/${a.albumId}`);
+
+    const again = await api(owner.userId, "POST", path, { email: me.email });
+    expect(again.status).toBe(201);
+    expect(albumShareSchema.parse(again.body).status).toBe("pending");
+    const invited = shareInvitationPageSchema.parse(
+      (await api(me.userId, "GET", "/share-invitations")).body,
+    );
+    expect(invited.items.map((x) => x.albumId)).toEqual([a.albumId]);
+  });
+
+  test("sharing an accepted album again keeps it accepted (200)", async () => {
+    const [owner, me] = [register(), register()];
+    const a = await album(owner.userId);
+    await shareAccepted(owner.userId, a.albumId, me);
+    const res = await api(owner.userId, "POST", `/albums/${a.albumId}/shares`, {
+      email: me.email,
+    });
+    expect(res.status).toBe(200);
+    expect(albumShareSchema.parse(res.body).status).toBe("accepted");
+  });
+
+  test("invitations are paginated; an album deleted meanwhile is skipped", async () => {
+    const [alice, bob, me] = [register(), register(), register()];
+    const a = await album(alice.userId, "A");
+    const b = await album(bob.userId, "B");
+    const gone = await album(bob.userId, "Gone");
+    for (const [owner, x] of [
+      [alice, a],
+      [bob, b],
+      [bob, gone],
+    ] as const) {
+      await api(owner.userId, "POST", `/albums/${x.albumId}/shares`, { email: me.email });
+    }
+    expect((await api(bob.userId, "DELETE", `/albums/${gone.albumId}`)).status).toBe(204);
+
+    const first = shareInvitationPageSchema.parse(
+      (await api(me.userId, "GET", "/share-invitations?limit=1")).body,
+    );
+    const second = shareInvitationPageSchema.parse(
+      (await api(me.userId, "GET", `/share-invitations?limit=1&cursor=${first.nextCursor}`)).body,
+    );
+    expect(second.nextCursor).toBeNull();
+    expect([...first.items, ...second.items].map((x) => x.name).sort()).toEqual(["A", "B"]);
+  });
+
+  test("invalid album ID → 400, anonymous → 401", async () => {
+    expect((await api(newUserId(), "POST", "/shared-albums/nope/accept")).status).toBe(400);
+    expect((await api(newUserId(), "DELETE", "/shared-albums/nope")).status).toBe(400);
+    expect((await api(newUserId(), "GET", "/share-invitations?limit=0")).status).toBe(400);
+    expect((await api(null, "GET", "/share-invitations")).status).toBe(401);
+    expect((await api(null, "POST", `/shared-albums/${newId()}/accept`)).status).toBe(401);
+    expect((await api(null, "DELETE", `/shared-albums/${newId()}`)).status).toBe(401);
   });
 });

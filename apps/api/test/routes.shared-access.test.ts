@@ -89,6 +89,7 @@ async function setup() {
     ownerId: owner,
     userId: friend,
     email: "friend@example.com",
+    status: "accepted",
     sharedAt: nextIso(),
   });
   return { owner, friend, shared, hidden, ready, pending, failed, privatePhoto };

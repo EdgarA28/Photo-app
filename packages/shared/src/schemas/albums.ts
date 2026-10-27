@@ -40,6 +40,13 @@ export const addAlbumPhotosRequestSchema = z.object({
 export type AddAlbumPhotosRequest = z.infer<typeof addAlbumPhotosRequestSchema>;
 
 /**
+ * A share starts as an invitation (`pending`) and gives access only once the recipient accepts
+ * it (FR-SHR-6).
+ */
+export const shareStatusSchema = z.enum(["pending", "accepted"]);
+export type ShareStatus = z.infer<typeof shareStatusSchema>;
+
+/**
  * A share of an album with another user (owner's view). `email` only for shares made by email:
  * sharing by username never reveals it (FR-SHR-5). `username` is the recipient's current one.
  */
@@ -47,6 +54,7 @@ export const albumShareSchema = z.object({
   userId: userIdSchema,
   email: z.email().nullable(),
   username: z.string().nullable(),
+  status: shareStatusSchema,
   sharedAt: isoDateTimeSchema,
 });
 export type AlbumShare = z.infer<typeof albumShareSchema>;
@@ -77,3 +85,22 @@ export type SharedAlbum = z.infer<typeof sharedAlbumSchema>;
 /** GET /shared-albums */
 export const sharedAlbumPageSchema = pageSchema(sharedAlbumSchema);
 export type SharedAlbumPage = z.infer<typeof sharedAlbumPageSchema>;
+
+/**
+ * An album someone invited me to that I haven't accepted yet (FR-SHR-6): its name and who shared
+ * it, no photos or cover until I accept.
+ */
+export const shareInvitationSchema = z.object({
+  albumId: idSchema,
+  name: z.string(),
+  photoCount: z.number().int().nonnegative(),
+  ownerId: userIdSchema,
+  /** The owner's current username, null if they have none. */
+  ownerUsername: z.string().nullable(),
+  sharedAt: isoDateTimeSchema,
+});
+export type ShareInvitation = z.infer<typeof shareInvitationSchema>;
+
+/** GET /share-invitations */
+export const shareInvitationPageSchema = pageSchema(shareInvitationSchema);
+export type ShareInvitationPage = z.infer<typeof shareInvitationPageSchema>;

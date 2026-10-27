@@ -1,4 +1,4 @@
-import type { Album } from "@photo-app/shared";
+import type { Album, ShareInvitation } from "@photo-app/shared";
 import { useInfiniteQuery, useSuspenseQuery } from "@tanstack/react-query";
 import {
   createFileRoute,
@@ -7,7 +7,7 @@ import {
   useRouter,
   type ErrorComponentProps,
 } from "@tanstack/react-router";
-import { BookImage, Plus } from "lucide-react";
+import { BookImage, Check, Mail, Plus, X } from "lucide-react";
 import { useState } from "react";
 import { useImageFailed } from "@/components/useImageFailed";
 import { CreateAlbumDialog } from "@/albums/AlbumDialogs";
@@ -15,9 +15,15 @@ import { sharedBy } from "@/albums/sharedBy";
 import { errorMessage } from "@/api/errors";
 import { Button } from "@/components/ui/button";
 import { albumsQuery } from "@/queries/albums";
-import { sharedAlbumsQuery } from "@/queries/shares";
+import {
+  shareInvitationsQuery,
+  sharedAlbumsQuery,
+  useAcceptInvitation,
+  useLeaveSharedAlbum,
+} from "@/queries/shares";
 
-// My albums (FR-ALB-1, 8.11) and albums shared with me (FR-SHR-3, 8.12).
+// My albums (FR-ALB-1, 8.11), invitations to albums (FR-SHR-6) and albums shared with me
+// (FR-SHR-3, 8.12).
 export const Route = createFileRoute("/_authenticated/albums/")({
   loader: ({ context }) =>
     context.queryClient.query({ ...albumsQuery(context.api), staleTime: "static" }),
@@ -42,6 +48,8 @@ function Albums() {
           New album
         </Button>
       </header>
+
+      <Invitations />
 
       {albums.length === 0 ? (
         <div className="flex flex-col items-center gap-3 py-16 text-center">
@@ -117,6 +125,106 @@ function SharedWithMe() {
     </section>
   );
 }
+
+/**
+ * Albums others invited me to (FR-SHR-6): accept to see them under Shared with me, or decline
+ * (FR-SHR-7). Hidden while there are none; a failed load stays quiet (the nav count is gone too).
+ */
+function Invitations() {
+  const { api } = Route.useRouteContext();
+  const { data, hasNextPage, isFetchingNextPage, fetchNextPage } = useInfiniteQuery(
+    shareInvitationsQuery(api),
+  );
+  const accept = useAcceptInvitation();
+  const decline = useLeaveSharedAlbum();
+  const [status, setStatus] = useState<string | null>(null);
+  const invitations = data?.pages.flatMap((page) => page.items) ?? [];
+  const error = accept.error ?? decline.error;
+  if (invitations.length === 0 && !status && !error) return null;
+  const busy = accept.isPending || decline.isPending;
+
+  return (
+    <section aria-labelledby="invitations" className="space-y-3">
+      <h2 id="invitations" className="text-lg font-semibold tracking-tight">
+        Invitations
+      </h2>
+      {invitations.length > 0 && (
+        <ul className="divide-y rounded-lg border">
+          {invitations.map((invitation) => (
+            <li
+              key={`${invitation.ownerId}/${invitation.albumId}`}
+              className="flex flex-wrap items-center gap-3 p-3"
+            >
+              <Mail aria-hidden className="size-5 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">{invitation.name}</p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {invitedBy(invitation)} ·{" "}
+                  {invitation.photoCount === 1 ? "1 photo" : `${invitation.photoCount} photos`}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => {
+                    setStatus(null);
+                    decline.reset();
+                    accept.mutate(invitation.albumId, {
+                      onSuccess: () => setStatus(`“${invitation.name}” is now in Shared with me.`),
+                    });
+                  }}
+                >
+                  <Check aria-hidden />
+                  Accept
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => {
+                    setStatus(null);
+                    accept.reset();
+                    decline.mutate(invitation.albumId, {
+                      onSuccess: () => setStatus(`Declined “${invitation.name}”.`),
+                    });
+                  }}
+                >
+                  <X aria-hidden />
+                  Decline
+                </Button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {errorMessage(error)}
+        </p>
+      ) : (
+        status && (
+          <p role="status" className="text-sm text-muted-foreground">
+            {status}
+          </p>
+        )
+      )}
+      {hasNextPage && (
+        <Button
+          variant="outline"
+          disabled={isFetchingNextPage}
+          onClick={() => void fetchNextPage()}
+        >
+          {isFetchingNextPage ? "Loading…" : "Show more"}
+        </Button>
+      )}
+    </section>
+  );
+}
+
+/** The API never exposes the owner's email (FR-SHR-5). */
+const invitedBy = (invitation: ShareInvitation) =>
+  invitation.ownerUsername ? `From @${invitation.ownerUsername}` : "Shared with you";
 
 function AlbumCard({ album, subtitle }: { album: Album; subtitle?: string }) {
   const [broken, onError] = useImageFailed(album.coverThumbUrl);

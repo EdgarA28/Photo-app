@@ -21,7 +21,10 @@ export const PLACE_SK_PREFIX = "PLACE#";
 
 /** GSI1 sort key of a photo: gallery order by date taken, ties broken by ID (FR-GAL-1). */
 export const takenSk = (takenAt: string, photoId: string) => `TAKEN#${takenAt}#${photoId}`;
+/** GSI1PK of an accepted share: the recipient's "Shared with me" list (FR-SHR-3). */
 export const sharedWithPk = (userId: string) => `SHAREDWITH#${userId}`;
+/** GSI1PK of a share the recipient hasn't accepted yet: their invitations (FR-SHR-6). */
+export const invitedPk = (userId: string) => `INVITED#${userId}`;
 /** A user's photos taken at one place (13.2c): table PK and GSI1PK of its place photo items. */
 export const placePhotosPk = (userId: string, placeId: string) => `PLACE#${userId}#${placeId}`;
 

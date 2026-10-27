@@ -43,7 +43,8 @@ export function ShareDialog({
         <DialogHeader>
           <DialogTitle>Share “{album.name}”</DialogTitle>
           <DialogDescription>
-            People you share with can view and download the photos, but not change anything.
+            People you share with get an invitation. Once they accept, they can view and download
+            the photos, but not change anything.
           </DialogDescription>
         </DialogHeader>
         {/* Remounted per opening: empty field, no old messages. */}
@@ -82,7 +83,7 @@ function ShareForm({ album }: { album: Album }) {
               setStatus(
                 alreadyShared
                   ? `Already shared with ${target.label}.`
-                  : `Shared with ${target.label}.`,
+                  : `Invited ${target.label}. They'll see the album once they accept.`,
               );
               setValue("");
               setSubmitted(false);
@@ -146,18 +147,30 @@ function ShareForm({ album }: { album: Album }) {
                   <p className="truncate font-medium">{nameOf(s)}</p>
                   <p className="truncate text-xs text-muted-foreground">
                     {s.username && s.email ? `${s.email} · ` : ""}
-                    Shared {dateFormat.format(new Date(s.sharedAt))}
+                    {/* FR-SHR-6: no access until they accept. */}
+                    {s.status === "pending" ? "Invited" : "Shared"}{" "}
+                    {dateFormat.format(new Date(s.sharedAt))}
+                    {s.status === "pending" && " · not accepted yet"}
                   </p>
                 </div>
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  aria-label={`Stop sharing with ${nameOf(s)}`}
+                  aria-label={
+                    s.status === "pending"
+                      ? `Withdraw the invitation to ${nameOf(s)}`
+                      : `Stop sharing with ${nameOf(s)}`
+                  }
                   disabled={revoke.isPending}
                   onClick={() => {
                     setStatus(null);
                     revoke.mutate(s, {
-                      onSuccess: () => setStatus(`${nameOf(s)} no longer has access.`),
+                      onSuccess: () =>
+                        setStatus(
+                          s.status === "pending"
+                            ? `Invitation to ${nameOf(s)} withdrawn.`
+                            : `${nameOf(s)} no longer has access.`,
+                        ),
                     });
                   }}
                 >

@@ -253,6 +253,7 @@ describe("sharing by username (FR-SHR-5)", () => {
     await api(friend, "PUT", "/me/username", { username: friendOld });
     const album = await albumOf(owner);
     await api(owner, "POST", `/albums/${album.albumId}/shares`, { username: friendOld });
+    await api(friend, "POST", `/shared-albums/${album.albumId}/accept`);
 
     await api(friend, "PUT", "/me/username", { username: friendNew });
     const list = albumShareListSchema.parse(
@@ -273,6 +274,7 @@ describe("sharing by username (FR-SHR-5)", () => {
     await api(owner, "POST", `/albums/${album.albumId}/shares`, {
       email: profiles.get(friend)!.email,
     });
+    await api(friend, "POST", `/shared-albums/${album.albumId}/accept`);
     const shared = sharedAlbumPageSchema.parse((await api(friend, "GET", "/shared-albums")).body);
     expect(shared.items[0]?.ownerUsername).toBeNull();
   });

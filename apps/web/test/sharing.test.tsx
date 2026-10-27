@@ -34,10 +34,16 @@ function sharedAlbum(n: number, overrides: Record<string, unknown> = {}) {
   };
 }
 
-const share = (userId: string, email: string | null, username: string | null) => ({
+const share = (
+  userId: string,
+  email: string | null,
+  username: string | null,
+  status: "pending" | "accepted" = "accepted",
+) => ({
   userId,
   email,
   username,
+  status,
   sharedAt: "2026-10-20T10:00:00.000Z",
 });
 
@@ -57,8 +63,8 @@ function ownerSetup(responses: Record<string, unknown> = {}) {
         "email" in body
           ? body.email === "ben@example.com"
             ? shares[0]!
-            : share(ANA, body.email!, null)
-          : share(ANA, null, body.username!);
+            : share(ANA, body.email!, null, "pending")
+          : share(ANA, null, body.username!, "pending");
       shares = [...shares.filter((s) => s.userId !== created.userId), created];
       return created;
     },
@@ -133,6 +139,26 @@ describe("share dialog (owner, FR-SHR-1/2/5)", () => {
     expect(rows[1]).not.toContain("@example.com");
   });
 
+  it("marks invitations that weren't accepted yet (FR-SHR-6)", async () => {
+    const { api } = ownerSetup({
+      [`GET /albums/${MINE}/shares`]: {
+        items: [share(BEN, "ben@example.com", "ben"), share(ANA, null, "ana", "pending")],
+      },
+    });
+    await renderAt(`/albums/${MINE}`, { api });
+    const dialog = await openShareDialog();
+    const rows = within(await within(dialog).findByRole("list"))
+      .getAllByRole("listitem")
+      .map((li) => li.textContent);
+    expect(rows[0]).toContain("Shared");
+    expect(rows[0]).not.toContain("not accepted yet");
+    expect(rows[1]).toContain("Invited");
+    expect(rows[1]).toContain("not accepted yet");
+    expect(
+      within(dialog).getByRole("button", { name: "Withdraw the invitation to @ana" }),
+    ).toBeTruthy();
+  });
+
   it("says when the album isn't shared with anyone", async () => {
     const { api } = ownerSetup({ [`GET /albums/${MINE}/shares`]: { items: [] } });
     await renderAt(`/albums/${MINE}`, { api });
@@ -148,7 +174,7 @@ describe("share dialog (owner, FR-SHR-1/2/5)", () => {
     shareWith(dialog, "Ana@Example.com");
 
     expect((await within(dialog).findByRole("status")).textContent).toBe(
-      "Shared with ana@example.com.",
+      "Invited ana@example.com. They'll see the album once they accept.",
     );
     expect(posts(request)).toEqual([{ email: "ana@example.com" }]);
     expect(within(dialog).getByText("ana@example.com")).toBeTruthy();
@@ -165,7 +191,9 @@ describe("share dialog (owner, FR-SHR-1/2/5)", () => {
     expect(within(dialog).getByText("Share with @ana")).toBeTruthy();
     fireEvent.click(within(dialog).getByRole("button", { name: "Share" }));
 
-    expect((await within(dialog).findByRole("status")).textContent).toBe("Shared with @ana.");
+    expect((await within(dialog).findByRole("status")).textContent).toBe(
+      "Invited @ana. They'll see the album once they accept.",
+    );
     expect(posts(request)).toEqual([{ username: "ana" }]);
   });
 
@@ -283,10 +311,44 @@ describe("albums shared with me (FR-SHR-3/4)", () => {
     expect(screen.getByText("Shared by @ana · view only")).toBeTruthy();
     const link = await screen.findByRole("link", { name: "IMG_0.jpg" });
     expect(link.getAttribute("href")).toBe(`/photos/${testId(0)}?album=${SHARED}&sort=taken-desc`);
-    for (const name of ["Select", "Add photos", "Share", "Album actions"]) {
+    for (const name of ["Select", "Add photos", "Share"]) {
       expect(screen.queryByRole("button", { name })).toBeNull();
     }
     expect(screen.queryByRole("link", { name: /Add photos/ })).toBeNull();
+  });
+
+  it("removes a shared album from my albums after confirming (FR-SHR-7)", async () => {
+    let shared = [sharedAlbum(0), sharedAlbum(1)];
+    const { api, request } = recipientSetup({
+      "GET /shared-albums": () => ({ items: shared, nextCursor: null }),
+      [`DELETE /shared-albums/${SHARED}`]: () => {
+        shared = shared.filter((a) => a.albumId !== SHARED);
+        return undefined;
+      },
+    });
+    const { router } = await renderAt(`/albums/${SHARED}`, { api });
+    await screen.findByRole("heading", { name: "From Ana 0" });
+    // Radix menus open from the keyboard in jsdom (no pointer events).
+    fireEvent.keyDown(await screen.findByRole("button", { name: "Album actions" }), {
+      key: "Enter",
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Remove from my albums" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Remove this shared album?" });
+    expect(dialog.textContent).toContain("“From Ana 0”");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe("/albums"));
+    const section = await screen.findByRole("region", { name: "Shared with me" });
+    await waitFor(() =>
+      expect(
+        within(section)
+          .getAllByRole("link")
+          .map((l) => l.textContent),
+      ).toEqual(["From Ana 12 photosShared by @ana"]),
+    );
+    expect(
+      request.mock.calls.some(([m, p]) => m === "DELETE" && p === `/shared-albums/${SHARED}`),
+    ).toBe(true);
   });
 
   it("finds a shared album beyond the first page of the list", async () => {
@@ -311,5 +373,89 @@ describe("albums shared with me (FR-SHR-3/4)", () => {
     expect(screen.getByRole("button", { name: "Download original" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Delete photo" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Album actions" })).toBeNull();
+  });
+});
+
+describe("invitations (FR-SHR-6/7)", () => {
+  const invitation = (n: number, overrides: Record<string, unknown> = {}) => ({
+    albumId: testId(950 + n),
+    name: `Invite ${n}`,
+    photoCount: 4,
+    ownerId: ANA,
+    ownerUsername: "ana",
+    sharedAt: "2026-10-26T10:00:00.000Z",
+    ...overrides,
+  });
+
+  /** Invitations and shared albums that accept/decline change, like the API. */
+  function inviteeSetup() {
+    let invitations = [invitation(0), invitation(1, { ownerUsername: null })];
+    let shared: ReturnType<typeof sharedAlbum>[] = [];
+    const fake = fakeApi({
+      ...defaultResponses,
+      "GET /share-invitations": () => ({ items: invitations, nextCursor: null }),
+      "GET /shared-albums": () => ({ items: shared, nextCursor: null }),
+      [`POST /shared-albums/${testId(950)}/accept`]: () => {
+        invitations = invitations.filter((i) => i.albumId !== testId(950));
+        shared = [sharedAlbum(40, { name: "Invite 0" })];
+        return undefined;
+      },
+      [`DELETE /shared-albums/${testId(951)}`]: () => {
+        invitations = invitations.filter((i) => i.albumId !== testId(951));
+        return undefined;
+      },
+    });
+    return fake;
+  }
+
+  it("lists invitations with who sent them, and counts them in the nav", async () => {
+    const { api } = inviteeSetup();
+    await renderAt("/albums", { api });
+    const section = await screen.findByRole("region", { name: "Invitations" });
+    const rows = within(section)
+      .getAllByRole("listitem")
+      .map((li) => li.textContent);
+    expect(rows[0]).toContain("Invite 0");
+    expect(rows[0]).toContain("From @ana · 4 photos");
+    expect(rows[1]).toContain("Shared with you");
+    expect(screen.getAllByLabelText("2 album invitations").length).toBeGreaterThan(0);
+    // Not openable before accepting.
+    expect(within(section).queryByRole("link")).toBeNull();
+  });
+
+  it("accepting moves the album to Shared with me", async () => {
+    const { api } = inviteeSetup();
+    await renderAt("/albums", { api });
+    const section = await screen.findByRole("region", { name: "Invitations" });
+    const row = within(section).getAllByRole("listitem")[0]!;
+    fireEvent.click(within(row).getByRole("button", { name: "Accept" }));
+
+    expect((await within(section).findByRole("status")).textContent).toBe(
+      "“Invite 0” is now in Shared with me.",
+    );
+    const sharedSection = await screen.findByRole("region", { name: "Shared with me" });
+    expect(await within(sharedSection).findByRole("link", { name: /Invite 0/ })).toBeTruthy();
+    await waitFor(() => expect(within(section).getAllByRole("listitem")).toHaveLength(1));
+  });
+
+  it("declining removes the invitation", async () => {
+    const { api, request } = inviteeSetup();
+    await renderAt("/albums", { api });
+    const section = await screen.findByRole("region", { name: "Invitations" });
+    const row = within(section).getAllByRole("listitem")[1]!;
+    fireEvent.click(within(row).getByRole("button", { name: "Decline" }));
+
+    expect((await within(section).findByRole("status")).textContent).toBe("Declined “Invite 1”.");
+    await waitFor(() => expect(within(section).getAllByRole("listitem")).toHaveLength(1));
+    expect(
+      request.mock.calls.some(([m, p]) => m === "DELETE" && p === `/shared-albums/${testId(951)}`),
+    ).toBe(true);
+  });
+
+  it("hides the section and the nav count without invitations", async () => {
+    await renderAt("/albums");
+    await screen.findByRole("heading", { name: "Albums" });
+    expect(screen.queryByRole("region", { name: "Invitations" })).toBeNull();
+    expect(screen.queryByLabelText(/album invitation/)).toBeNull();
   });
 });

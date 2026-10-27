@@ -19,6 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useCreateAlbum, useDeleteAlbum, useUpdateAlbum } from "@/queries/albums";
+import { useLeaveSharedAlbum } from "@/queries/shares";
 import { AlbumNameForm } from "./AlbumNameForm";
 
 interface DialogProps {
@@ -149,6 +150,62 @@ export function DeleteAlbumDialog({
             }}
           >
             {remove.isPending ? "Deleting…" : "Delete album"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+/**
+ * Removes an album someone shared with me from my albums (FR-SHR-7): my access ends, the owner's
+ * album and photos stay. Only the owner can give it back, by sharing again.
+ */
+export function LeaveSharedAlbumDialog({
+  albumId,
+  name,
+  open,
+  onOpenChange,
+  onLeft,
+}: DialogProps & {
+  albumId: string;
+  name: string | undefined;
+  onLeft: () => Promise<void> | void;
+}) {
+  const leave = useLeaveSharedAlbum({ beforeCacheUpdate: onLeft });
+  return (
+    <AlertDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (leave.isPending) return;
+        onOpenChange(next);
+        if (!next) leave.reset();
+      }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Remove this shared album?</AlertDialogTitle>
+          <AlertDialogDescription>
+            {name ? `“${name}”` : "This album"} will no longer appear in your albums and you won't
+            be able to open it. The owner's album isn't changed; they would have to share it again.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {leave.isError && (
+          <p role="alert" className="text-sm text-destructive">
+            {errorMessage(leave.error)}
+          </p>
+        )}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={leave.isPending}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={leave.isPending}
+            onClick={(event) => {
+              event.preventDefault(); // stay open until the API answers
+              leave.mutate(albumId);
+            }}
+          >
+            {leave.isPending ? "Removing…" : "Remove"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

@@ -12,6 +12,7 @@ export type { AddResult } from "./memberships";
 export type { NewPhoto, PhotoRecord } from "./photos";
 export type { PlacePhotoRecord, PlaceRecord } from "./places";
 export type { CreateShareResult, ShareRecord } from "./shares";
+export { isAccepted, shareStatus } from "./shares";
 export type { UsageRecord } from "./usage";
 export type { ProfileRecord, SetUsernameResult } from "./usernames";
 

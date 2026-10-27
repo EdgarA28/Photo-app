@@ -1,7 +1,15 @@
-import type { AlbumShare, AlbumShareList, CreateShareRequest } from "@photo-app/shared";
+import type {
+  AlbumShare,
+  AlbumShareList,
+  CreateShareRequest,
+  ShareInvitationPage,
+  SharedAlbumPage,
+} from "@photo-app/shared";
 import {
   infiniteQueryOptions,
   queryOptions,
+  type InfiniteData,
+  type QueryClient,
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
@@ -30,6 +38,16 @@ export const sharedAlbumsQuery = (api: Api) =>
       signedUrlRefreshInterval(
         data?.pages.flatMap((page) => page.items.map((a) => a.coverThumbUrl)) ?? [],
       ),
+  });
+
+/** GET /share-invitations: albums I was invited to and haven't accepted (FR-SHR-6). */
+export const shareInvitationsQuery = (api: Api) =>
+  infiniteQueryOptions({
+    queryKey: ["share-invitations"],
+    queryFn: ({ pageParam, signal }) =>
+      api.shareInvitations.list({ cursor: pageParam ?? undefined }, { signal }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page) => page.nextCursor ?? undefined,
   });
 
 function useApi() {
@@ -71,6 +89,66 @@ export function useRevokeShare(albumId: string) {
         data ? { items: data.items.filter((s) => s.userId !== share.userId) } : data,
       );
       return queryClient.invalidateQueries({ queryKey: key });
+    },
+  });
+}
+
+/** Drops an album from a cached infinite list of invitations or shared albums at once. */
+function dropFromPages<T extends ShareInvitationPage | SharedAlbumPage>(
+  queryClient: QueryClient,
+  queryKey: readonly unknown[],
+  albumId: string,
+) {
+  queryClient.setQueryData<InfiniteData<T>>(queryKey, (data) =>
+    data
+      ? {
+          ...data,
+          pages: data.pages.map((page) => ({
+            ...page,
+            items: page.items.filter((a) => a.albumId !== albumId),
+          })),
+        }
+      : data,
+  );
+}
+
+/** Accepts an invitation (FR-SHR-6): it leaves the invitations and shows up in Shared with me. */
+export function useAcceptInvitation() {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (albumId: string) => api.sharedAlbums.accept(albumId),
+    onSuccess: (_data, albumId) => {
+      dropFromPages(queryClient, shareInvitationsQuery(api).queryKey, albumId);
+      return Promise.all([
+        queryClient.invalidateQueries({ queryKey: shareInvitationsQuery(api).queryKey }),
+        queryClient.invalidateQueries({ queryKey: sharedAlbumsQuery(api).queryKey }),
+      ]);
+    },
+  });
+}
+
+/**
+ * Declines an invitation or removes an album shared with me (FR-SHR-7). Access ends at once, so
+ * its cached photos go too.
+ */
+export function useLeaveSharedAlbum({
+  beforeCacheUpdate,
+}: { beforeCacheUpdate?: () => Promise<void> | void } = {}) {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (albumId: string) => api.sharedAlbums.leave(albumId),
+    onSuccess: async (_data, albumId) => {
+      // e.g. leave the album page first, so it doesn't refetch the photos it no longer may see.
+      await beforeCacheUpdate?.();
+      dropFromPages(queryClient, shareInvitationsQuery(api).queryKey, albumId);
+      dropFromPages(queryClient, sharedAlbumsQuery(api).queryKey, albumId);
+      queryClient.removeQueries({ queryKey: ["photos", { album: albumId }] });
+      return Promise.all([
+        queryClient.invalidateQueries({ queryKey: shareInvitationsQuery(api).queryKey }),
+        queryClient.invalidateQueries({ queryKey: sharedAlbumsQuery(api).queryKey }),
+      ]);
     },
   });
 }

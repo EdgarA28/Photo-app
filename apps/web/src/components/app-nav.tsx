@@ -1,7 +1,9 @@
-import { Link } from "@tanstack/react-router";
+import { useInfiniteQuery } from "@tanstack/react-query";
+import { Link, useRouteContext } from "@tanstack/react-router";
 import { BookImage, ImageUp, Images, Settings, type LucideIcon } from "lucide-react";
 import { Viewfinder } from "@/components/viewfinder";
 import { cn } from "@/lib/utils";
+import { shareInvitationsQuery } from "@/queries/shares";
 import { isActive, useUploads } from "@/upload/useUploads";
 
 interface NavItem {
@@ -25,16 +27,46 @@ const linkBase =
 /** Uploads still waiting or running (8.10), on the Upload item. */
 function UploadCount({ className }: { className?: string }) {
   const count = useUploads().filter(isActive).length;
+  return <CountBadge count={count} label={`${count} uploading`} className={className} />;
+}
+
+/** Album invitations waiting for an answer (FR-SHR-6), on the Albums item. */
+function InvitationCount({ className }: { className?: string }) {
+  const api = useRouteContext({ from: "__root__", select: (context) => context.api });
+  const { data, hasNextPage } = useInfiniteQuery(shareInvitationsQuery(api));
+  const count = data?.pages.reduce((sum, page) => sum + page.items.length, 0) ?? 0;
+  const shown = hasNextPage ? `${count}+` : `${count}`;
+  return (
+    <CountBadge
+      count={count}
+      text={shown}
+      label={`${shown} album ${count === 1 && !hasNextPage ? "invitation" : "invitations"}`}
+      className={className}
+    />
+  );
+}
+
+function CountBadge({
+  count,
+  text = `${count}`,
+  label,
+  className,
+}: {
+  count: number;
+  text?: string;
+  label: string;
+  className?: string;
+}) {
   if (count === 0) return null;
   return (
     <span
-      aria-label={`${count} uploading`}
+      aria-label={label}
       className={cn(
         "min-w-4 rounded-full bg-primary px-1 text-center text-[0.625rem] leading-4 font-medium text-primary-foreground tabular-nums",
         className,
       )}
     >
-      {count}
+      {text}
     </span>
   );
 }
@@ -61,6 +93,7 @@ export function BottomNav() {
               <Icon aria-hidden className="size-5" />
               {label}
               {to === "/upload" && <UploadCount className="absolute top-0.5 right-2" />}
+              {to === "/albums" && <InvitationCount className="absolute top-0.5 right-2" />}
             </Link>
           </li>
         ))}
@@ -95,6 +128,7 @@ export function SideNav({ email }: { email: string | undefined }) {
                 <Icon aria-hidden className="size-4" />
                 {label}
                 {to === "/upload" && <UploadCount className="ml-auto" />}
+                {to === "/albums" && <InvitationCount className="ml-auto" />}
               </Link>
             </li>
           ))}

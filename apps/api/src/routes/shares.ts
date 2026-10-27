@@ -6,13 +6,20 @@ import {
   type AlbumShare,
   type AlbumShareList,
   type SharedAlbumPage,
+  type ShareInvitationPage,
 } from "@photo-app/shared";
 import type { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../env";
 import { AppError, notFound, orNotFound, validationError } from "../lib/errors";
 import { validate } from "../lib/validation";
-import type { AlbumRecord, PhotoRecord, Repositories, ShareRecord } from "../repo";
+import {
+  shareStatus,
+  type AlbumRecord,
+  type PhotoRecord,
+  type Repositories,
+  type ShareRecord,
+} from "../repo";
 import type { Deps } from ".";
 import { isVisibleToRecipient } from "./access";
 import { toSharedAlbum } from "./present";
@@ -25,6 +32,7 @@ const toShare = (share: ShareRecord, usernames: Map<string, string>): AlbumShare
   userId: share.userId,
   email: share.email ?? null,
   username: usernames.get(share.userId) ?? null,
+  status: shareStatus(share),
   sharedAt: share.sharedAt,
 });
 
@@ -32,6 +40,8 @@ const toShare = (share: ShareRecord, usernames: Map<string, string>): AlbumShare
  * Sharing albums read-only by email or username (FR-SHR-1..5). Managing shares is owner-only: every
  * `/albums/{id}/shares` route first looks the album up under the caller's partition, so
  * recipients and everyone else get 404 and can't re-share or revoke (FR-SHR-4, NFR-SEC-2).
+ * A new share is an invitation the recipient accepts or declines (FR-SHR-6); the recipient's routes
+ * (`/share-invitations`, `/shared-albums/{id}`) only ever touch the share addressed to the caller.
  */
 export function shareRoutes(app: Hono<AppEnv>, { repos, users, media }: Deps): void {
   /** Who the album is shared with, oldest share first. */
@@ -47,8 +57,10 @@ export function shareRoutes(app: Hono<AppEnv>, { repos, users, media }: Deps): v
 
   /**
    * Shares the album with the registered user who has this email (FR-SHR-1) or username
-   * (FR-SHR-5): 201 with the new share, 200 with the existing one if it was already shared with
-   * them. A share made by username stores no email, so the owner never learns it.
+   * (FR-SHR-5): 201 with the new share, a pending invitation (FR-SHR-6); 200 with the existing
+   * one if it was already shared with them. After a decline or leave there is none, so sharing
+   * again invites them again. A share made by username stores no email, so the owner never
+   * learns it.
    */
   app.post(
     "/albums/:albumId/shares",
@@ -84,6 +96,7 @@ export function shareRoutes(app: Hono<AppEnv>, { repos, users, media }: Deps): v
         ownerId,
         userId: recipient.userId,
         ...(recipient.email ? { email: recipient.email } : {}),
+        status: "pending",
         sharedAt: new Date().toISOString(),
       });
       // Deleted between our check and the write.
@@ -99,6 +112,60 @@ export function shareRoutes(app: Hono<AppEnv>, { repos, users, media }: Deps): v
     const { albumId, userId } = c.req.valid("param");
     orNotFound(await repos.albums.get(c.get("userId"), albumId), "Album not found");
     if (!(await repos.shares.delete(albumId, userId))) throw notFound("Share not found");
+    return c.body(null, 204);
+  });
+
+  /**
+   * Invitations to albums the caller hasn't accepted yet (FR-SHR-6), paginated: name, photo count
+   * and who shared it, no cover until accepted.
+   */
+  app.get("/share-invitations", validate("query", pageQuerySchema), async (c) => {
+    const { limit, cursor } = c.req.valid("query");
+    const page = await repos.shares.listInvitations(c.get("userId"), { limit, cursor });
+    const [albums, ownerNames] = await Promise.all([
+      repos.albums.getMany(page.items),
+      repos.usernames.getMany(page.items.map((share) => share.ownerId)),
+    ]);
+    const byKey = new Map(albums.map((album) => [`${album.ownerId}/${album.albumId}`, album]));
+    const body: ShareInvitationPage = {
+      // Skips invitations whose album is being deleted, as GET /shared-albums does.
+      items: page.items.flatMap((share) => {
+        const album = byKey.get(`${share.ownerId}/${share.albumId}`);
+        if (!album) return [];
+        return [
+          {
+            albumId: album.albumId,
+            name: album.name,
+            photoCount: album.photoCount,
+            ownerId: album.ownerId,
+            ownerUsername: ownerNames.get(share.ownerId) ?? null,
+            sharedAt: share.sharedAt,
+          },
+        ];
+      }),
+      nextCursor: page.nextCursor,
+    };
+    return c.json(body);
+  });
+
+  /** Accepts an invitation (FR-SHR-6): the album moves to "Shared with me". Repeatable. */
+  app.post("/shared-albums/:albumId/accept", validate("param", albumParam), async (c) => {
+    const { albumId } = c.req.valid("param");
+    const result = await repos.shares.accept(albumId, c.get("userId"), new Date().toISOString());
+    if (result === "not-found") throw notFound("Invitation not found");
+    return c.body(null, 204);
+  });
+
+  /**
+   * The recipient declines an invitation or removes an accepted album (FR-SHR-7): the share is
+   * deleted, so access ends at once and the owner's list no longer shows them. The owner can
+   * share again, which sends a new invitation.
+   */
+  app.delete("/shared-albums/:albumId", validate("param", albumParam), async (c) => {
+    const { albumId } = c.req.valid("param");
+    if (!(await repos.shares.delete(albumId, c.get("userId")))) {
+      throw notFound("Shared album not found");
+    }
     return c.body(null, 204);
   });
 

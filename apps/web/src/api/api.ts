@@ -11,6 +11,7 @@ import {
   photoSchema,
   setUsernameResponseSchema,
   sharedAlbumPageSchema,
+  shareInvitationPageSchema,
   uploadUrlResponseSchema,
   type AddAlbumPhotosRequest,
   type CreateAlbumRequest,
@@ -87,6 +88,15 @@ export function createApi(request: Request) {
     sharedAlbums: {
       list: (query: Page = {}, o?: Opts) =>
         request("GET", "/shared-albums", { schema: sharedAlbumPageSchema, query, ...o }),
+      /** Accepts an invitation (FR-SHR-6). */
+      accept: (albumId: string) => request("POST", `/shared-albums/${enc(albumId)}/accept`),
+      /** Declines an invitation or removes an accepted album (FR-SHR-7). */
+      leave: (albumId: string) => request("DELETE", `/shared-albums/${enc(albumId)}`),
+    },
+
+    shareInvitations: {
+      list: (query: Page = {}, o?: Opts) =>
+        request("GET", "/share-invitations", { schema: shareInvitationPageSchema, query, ...o }),
     },
 
     /** CloudFront cookies for own images (7.3); set by the response's Set-Cookie headers. */

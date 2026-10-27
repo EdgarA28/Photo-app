@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.16 |
+| **Version** | 0.17 |
 | **Date** | 2026-10-27 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -262,6 +262,8 @@ IDs are stable — reference them in issues, PRs and tests.
 | FR-SHR-3 | Users see albums shared with them in a separate "Shared with me" section. |
 | FR-SHR-4 | Recipients can view and download, but not modify, delete or re-share. |
 | FR-SHR-5 | Owners can also share with a user by their username instead of their email; sharing by username never reveals the recipient's email to the owner. |
+| FR-SHR-6 | A new share is an invitation: the recipient sees the album's name, photo count and who shared it, and gets access only after accepting it. Owners see which shares are not accepted yet. |
+| FR-SHR-7 | Recipients can decline an invitation, or remove an accepted shared album from their albums; access ends at once. The owner's album is unchanged; the person simply drops off the owner's share list (no "declined" state), and the owner can share again, which sends a new invitation. |
 
 ### 6.6 Account & quota
 
@@ -358,7 +360,7 @@ Initial design; refine during implementation.
 | Photo | `USER#{userId}` | `PHOTO#{photoId}` | `USER#{userId}` | `TAKEN#{takenAt}#{photoId}` | status (`pending`/`ready`/`failed`), fileName, contentType, sizeBytes, width, height, takenAt, uploadedAt, originalKey, originalETag, latitude, longitude, place `{city, region, country, countryCode}`, placeIds |
 | Album | `USER#{ownerId}` | `ALBUM#{albumId}` | — | — | name, createdAt, coverPhotoId, photoCount |
 | Album membership | `ALBUM#{albumId}` | `PHOTO#{photoId}` | `ALBUM#{albumId}` | `TAKEN#{takenAt}#{photoId}` (the photo's) | ownerId, addedAt |
-| Album share | `ALBUM#{albumId}` | `SHARE#{userId}` | `SHAREDWITH#{userId}` | `ALBUM#{albumId}` | ownerId, sharedAt |
+| Album share | `ALBUM#{albumId}` | `SHARE#{userId}` | `INVITED#{userId}` while pending, `SHAREDWITH#{userId}` once accepted | `ALBUM#{albumId}` | ownerId, email (shares by email only), status (`pending`/`accepted`; absent = accepted, shares from before v0.17), sharedAt, acceptedAt |
 | Usage | `USER#{userId}` | `USAGE` | — | — | bytesUsed, photoCount, quotaBytes |
 | Profile | `USER#{userId}` | `PROFILE` | — | — | username, usernameChangedAt |
 | Place (list entry) | `USER#{userId}` | `PLACE#{placeId}` | — | — | kind (`city`/`region`/`country`), name, context, photoCount |
@@ -374,12 +376,13 @@ Access patterns:
 | List my albums | `PK = USER#{id}, SK begins_with ALBUM#` |
 | Photos in album (by date taken) | GSI1: `GSI1PK = ALBUM#{albumId}`, descending (or ascending), paginated |
 | Who an album is shared with | `PK = ALBUM#{albumId}, SK begins_with SHARE#` |
-| Albums shared with me | GSI1: `GSI1PK = SHAREDWITH#{id}` |
+| Albums shared with me (accepted) | GSI1: `GSI1PK = SHAREDWITH#{id}` |
+| My invitations | GSI1: `GSI1PK = INVITED#{id}` |
 | My places (search) | `PK = USER#{id}, SK begins_with PLACE#` |
 | Photos at a place (by date taken) | GSI1: `GSI1PK = PLACE#{id}#{placeId}`, descending (or ascending), paginated |
 | User by username | `PK = USERNAME#{username}, SK = USERNAME` (ignored while `heldUntil` is set) |
 | My username | `PK = USER#{id}, SK = PROFILE` |
-| Can user X see photo P? | Owner check, else any share of an album containing P (resolved via album membership + share) |
+| Can user X see photo P? | Owner check, else an accepted share of an album containing P (resolved via album membership + share) |
 
 `takenAt` = EXIF `DateTimeOriginal`, falling back to upload time.
 
@@ -414,9 +417,12 @@ Access patterns:
 | `POST` | `/albums/{albumId}/photos` | Add photos `{photoIds: []}` |
 | `DELETE` | `/albums/{albumId}/photos/{photoId}` | Remove photo from album |
 | `GET` | `/albums/{albumId}/shares` | List shares (owner only) |
-| `POST` | `/albums/{albumId}/shares` | Share with `{email}` or `{username}` |
+| `POST` | `/albums/{albumId}/shares` | Share with `{email}` or `{username}`: creates a pending invitation (FR-SHR-6) |
 | `DELETE` | `/albums/{albumId}/shares/{userId}` | Revoke share |
-| `GET` | `/shared-albums` | Albums shared with me |
+| `GET` | `/shared-albums` | Albums shared with me (accepted) |
+| `GET` | `/share-invitations` | Invitations I haven't answered `?cursor&limit` (FR-SHR-6) |
+| `POST` | `/shared-albums/{albumId}/accept` | Accept an invitation (FR-SHR-6) |
+| `DELETE` | `/shared-albums/{albumId}` | Decline an invitation or remove an accepted shared album (FR-SHR-7) |
 
 Image URLs in responses:
 - Own photos: stable CloudFront paths (`/users/{userId}/thumbs/{photoId}.jpg`), authorized by the media cookie.
@@ -504,7 +510,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 | `/_authenticated` (layout) | `beforeLoad` guard → redirect to `/login` if no session |
 | `/gallery` | Main gallery; search params `album`, `place` (not both), `sort` (Zod-validated); place search box at the top (FR-SRCH-2) |
 | `/photos/$photoId` | Full-screen viewer |
-| `/albums` | My albums + shared with me |
+| `/albums` | Invitations (accept / decline) + my albums + shared with me |
 | `/albums/$albumId` | Album view |
 | `/upload` | Upload page / queue status |
 | `/settings` | Usage, quota, logout |
@@ -735,6 +741,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.17 | 2026-10-27 | Share invitations: FR-SHR-6 (accept), FR-SHR-7 (decline / remove a shared album); share status + `INVITED#` GSI1 key (§8.2); `/share-invitations`, `/shared-albums/{id}/accept`, `DELETE /shared-albums/{id}` (§9); Albums page (§12.1) |
 | 0.16 | 2026-10-27 | Viewer zoom, loading the original for deep zoom (FR-GAL-7) |
 | 0.15 | 2026-10-27 | §12.6: location removed before upload (Google Photos direct share). Search by place in scope: FR-SRCH-1–4 (§6.8), place items (§8.2), `/places` routes and `place` on photos (§9), place lookup in the thumbnail Lambda (§10), NFR-SEC-5 note |
 | 0.14 | 2026-10-27 | Month sections in gallery and albums (§12.3); album photos listed by date taken with `sort` (§9), memberships in GSI1 (§8.2) |

@@ -11,9 +11,13 @@ import {
   useRouter,
   type ErrorComponentProps,
 } from "@tanstack/react-router";
-import { ChevronLeft, Ellipsis, ImagePlus, Pencil, Share2, Trash2 } from "lucide-react";
+import { ChevronLeft, Ellipsis, ImagePlus, LogOut, Pencil, Share2, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { DeleteAlbumDialog, RenameAlbumDialog } from "@/albums/AlbumDialogs";
+import {
+  DeleteAlbumDialog,
+  LeaveSharedAlbumDialog,
+  RenameAlbumDialog,
+} from "@/albums/AlbumDialogs";
 import { ShareDialog } from "@/albums/ShareDialog";
 import { sharedBy } from "@/albums/sharedBy";
 import { ApiRequestError, errorMessage } from "@/api/errors";
@@ -238,11 +242,14 @@ function AlbumView({ album }: { album: Album }) {
 }
 
 /**
- * An album someone shared with me (FR-SHR-3/4): view and download only. Its name and owner come
- * from `GET /shared-albums` (there is no single-album route), paged through until it turns up.
+ * An album someone shared with me (FR-SHR-3/4): view and download only, or remove it from my
+ * albums (FR-SHR-7). Its name and owner come from `GET /shared-albums` (there is no single-album
+ * route), paged through until it turns up.
  */
 function SharedAlbumView({ albumId }: { albumId: string }) {
   const { api } = Route.useRouteContext();
+  const navigate = useNavigate();
+  const [leaving, setLeaving] = useState(false);
   const search = listOf(albumId);
   const { data: photoPages, ...photos } = useSuspenseInfiniteQuery(galleryQuery(api, search));
   const shared = useInfiniteQuery(sharedAlbumsQuery(api));
@@ -264,13 +271,28 @@ function SharedAlbumView({ albumId }: { albumId: string }) {
           <ChevronLeft aria-hidden className="size-4" />
           Albums
         </Link>
-        <div>
-          <h1 className="truncate text-2xl font-semibold tracking-tight">
-            {album?.name ?? (searching ? "\u00a0" : "Shared album")}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {album ? sharedBy(album) : "Shared with you"} · view only
-          </p>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="truncate text-2xl font-semibold tracking-tight">
+              {album?.name ?? (searching ? "\u00a0" : "Shared album")}
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              {album ? sharedBy(album) : "Shared with you"} · view only
+            </p>
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" aria-label="Album actions">
+                <Ellipsis aria-hidden />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem variant="destructive" onSelect={() => setLeaving(true)}>
+                <LogOut aria-hidden />
+                Remove from my albums
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
       {items.length === 0 ? (
@@ -293,6 +315,13 @@ function SharedAlbumView({ albumId }: { albumId: string }) {
           </Button>
         </div>
       )}
+      <LeaveSharedAlbumDialog
+        albumId={albumId}
+        name={album?.name}
+        open={leaving}
+        onOpenChange={setLeaving}
+        onLeft={() => navigate({ to: "/albums", replace: true })}
+      />
     </main>
   );
 }

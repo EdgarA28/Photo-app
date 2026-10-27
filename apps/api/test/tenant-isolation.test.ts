@@ -2,12 +2,17 @@
  * Tenant-isolation suite (task 5.14, NFR-SEC-1/2): every route, called with IDs of resources the
  * caller may not touch, answers exactly like it does for IDs that don't exist (same status, same
  * body), and changes nothing. Recipients of a share count as outsiders for everything except
- * reading that album (FR-SHR-4).
+ * reading that album (FR-SHR-4), and only once they accepted it (FR-SHR-6).
  *
  * The route list is checked against the app's registered routes, so a new route without a case
  * here (or an explicit exemption) fails the suite.
  */
-import { newId, photoPageSchema, sharedAlbumPageSchema } from "@photo-app/shared";
+import {
+  newId,
+  photoPageSchema,
+  shareInvitationPageSchema,
+  sharedAlbumPageSchema,
+} from "@photo-app/shared";
 import { beforeAll, describe, expect, test } from "vitest";
 import type { Repositories } from "../src/repo";
 import {
@@ -27,8 +32,9 @@ let repos: Repositories;
 
 /**
  * The world: Alice owns everything interesting. Album A (photos p1 + pending p3, cover p1) is
- * shared with Bob; album B (photo p2) is private. Mallory is a stranger with her own photo and
- * album, so she can also try to mix her IDs with Alice's.
+ * shared with Bob; album B (photo p2) is private; album C (photo p2 too) is an invitation Bob
+ * hasn't accepted (FR-SHR-6), so it gives him nothing yet. Mallory is a stranger with her own
+ * photo and album, so she can also try to mix her IDs with Alice's.
  */
 const w = {
   alice: newUserId(),
@@ -39,6 +45,7 @@ const w = {
   p3: "",
   albumA: "",
   albumB: "",
+  albumC: "",
   malloryPhoto: "",
   malloryAlbum: "",
   aliceCursor: "",
@@ -70,12 +77,21 @@ beforeAll(async () => {
   w.albumB = await album(w.alice, "Private");
   await repos.albums.addPhotos(w.alice, w.albumA, [w.p1, w.p3], nextIso());
   await repos.albums.addPhotos(w.alice, w.albumB, [w.p2], nextIso());
+  w.albumC = await album(w.alice, "Invited");
+  await repos.albums.addPhotos(w.alice, w.albumC, [w.p2], nextIso());
   await repos.albums.update(w.alice, w.albumA, { coverPhotoId: w.p1 });
   await repos.shares.create({
     albumId: w.albumA,
     ownerId: w.alice,
     userId: w.bob,
     email: "bob@example.com",
+    sharedAt: nextIso(),
+  });
+  await repos.shares.create({
+    albumId: w.albumC,
+    ownerId: w.alice,
+    userId: w.bob,
+    status: "pending",
     sharedAt: nextIso(),
   });
 
@@ -102,11 +118,13 @@ async function snapshot() {
     membersB: await repos.albums.listMemberships(w.albumB, { sort: "taken-desc", limit: 100 }),
     sharesA: await repos.shares.listForAlbum(w.albumA),
     sharesB: await repos.shares.listForAlbum(w.albumB),
+    sharesC: await repos.shares.listForAlbum(w.albumC),
     usage: await repos.usage.get(w.alice),
     places: await repos.places.list(w.alice),
     profile: await repos.usernames.getProfile(w.alice),
     bobShared: await repos.shares.listForRecipient(w.bob, { limit: 100 }),
     malloryShared: await repos.shares.listForRecipient(w.mallory, { limit: 100 }),
+    bobInvited: await repos.shares.listInvitations(w.bob, { limit: 100 }),
   };
 }
 let before: Awaited<ReturnType<typeof snapshot>>;
@@ -187,6 +205,26 @@ const cases: Case[] = [
     }),
     missing: () => ({
       as: w.mallory,
+      method: "GET",
+      path: `/photos/${id()}/download-url?albumId=${id()}`,
+    }),
+  },
+  {
+    route: "GET /api/photos/:photoId",
+    name: "invitee reads a photo through an album he hasn't accepted (FR-SHR-6)",
+    foreign: () => ({ as: w.bob, method: "GET", path: `/photos/${w.p2}?albumId=${w.albumC}` }),
+    missing: () => ({ as: w.bob, method: "GET", path: `/photos/${id()}?albumId=${id()}` }),
+  },
+  {
+    route: "GET /api/photos/:photoId/download-url",
+    name: "invitee downloads through an album he hasn't accepted (FR-SHR-6)",
+    foreign: () => ({
+      as: w.bob,
+      method: "GET",
+      path: `/photos/${w.p2}/download-url?albumId=${w.albumC}`,
+    }),
+    missing: () => ({
+      as: w.bob,
       method: "GET",
       path: `/photos/${id()}/download-url?albumId=${id()}`,
     }),
@@ -323,6 +361,12 @@ const cases: Case[] = [
     missing: () => ({ as: w.bob, method: "GET", path: `/albums/${id()}/photos` }),
   },
   {
+    route: "GET /api/albums/:albumId/photos",
+    name: "invitee lists an album he hasn't accepted (FR-SHR-6)",
+    foreign: () => ({ as: w.bob, method: "GET", path: `/albums/${w.albumC}/photos` }),
+    missing: () => ({ as: w.bob, method: "GET", path: `/albums/${id()}/photos` }),
+  },
+  {
     route: "POST /api/albums/:albumId/photos",
     name: "stranger adds her photo to someone else's album",
     foreign: () => ({
@@ -452,6 +496,32 @@ const cases: Case[] = [
     foreign: () => ({ as: w.bob, method: "DELETE", path: `/albums/${w.albumA}/shares/${w.bob}` }),
     missing: () => ({ as: w.bob, method: "DELETE", path: `/albums/${id()}/shares/${w.bob}` }),
   },
+
+  // ---- the recipient's side of shares (FR-SHR-6/7): only the caller's own share counts ----
+  {
+    route: "POST /api/shared-albums/:albumId/accept",
+    name: "stranger accepts an invitation addressed to someone else",
+    foreign: () => ({ as: w.mallory, method: "POST", path: `/shared-albums/${w.albumC}/accept` }),
+    missing: () => ({ as: w.mallory, method: "POST", path: `/shared-albums/${id()}/accept` }),
+  },
+  {
+    route: "POST /api/shared-albums/:albumId/accept",
+    name: "owner accepts her own album's invitation",
+    foreign: () => ({ as: w.alice, method: "POST", path: `/shared-albums/${w.albumC}/accept` }),
+    missing: () => ({ as: w.alice, method: "POST", path: `/shared-albums/${id()}/accept` }),
+  },
+  {
+    route: "DELETE /api/shared-albums/:albumId",
+    name: "stranger removes someone else's share",
+    foreign: () => ({ as: w.mallory, method: "DELETE", path: `/shared-albums/${w.albumA}` }),
+    missing: () => ({ as: w.mallory, method: "DELETE", path: `/shared-albums/${id()}` }),
+  },
+  {
+    route: "DELETE /api/shared-albums/:albumId",
+    name: "owner removes her own album as if shared with her",
+    foreign: () => ({ as: w.alice, method: "DELETE", path: `/shared-albums/${w.albumA}` }),
+    missing: () => ({ as: w.alice, method: "DELETE", path: `/shared-albums/${id()}` }),
+  },
 ];
 
 /**
@@ -467,6 +537,7 @@ const exempt: Record<string, string> = {
   "GET /api/albums": "caller's albums",
   "POST /api/albums": "creates under the caller",
   "GET /api/shared-albums": "caller's shares; foreign cursor case below",
+  "GET /api/share-invitations": "caller's invitations; foreign cursor case below",
   "GET /api/places": "caller's own places (keyed by sub); checked below",
   "POST /api/session/media-cookie": "caller's own prefix from the JWT sub (routes.session)",
   "DELETE /api/session/media-cookie": "caller's own prefix from the JWT sub (routes.session)",
@@ -511,6 +582,10 @@ describe("list routes only return the caller's data", () => {
       (await t.api(w.mallory, "GET", "/shared-albums")).body,
     );
     expect(shared.items).toEqual([]);
+    const invited = shareInvitationPageSchema.parse(
+      (await t.api(w.mallory, "GET", "/share-invitations")).body,
+    );
+    expect(invited.items).toEqual([]);
   });
 
   test("places are the owner's: a stranger and the recipient have none of Alice's", async () => {
@@ -536,6 +611,12 @@ describe("list routes only return the caller's data", () => {
     expect((await t.api(w.bob, "GET", "/albums")).body).toEqual({ items: [] });
     const shared = sharedAlbumPageSchema.parse((await t.api(w.bob, "GET", "/shared-albums")).body);
     expect(shared.items.map((a) => a.albumId)).toEqual([w.albumA]);
+    // The invitation is listed apart, without a cover (FR-SHR-6).
+    const invited = shareInvitationPageSchema.parse(
+      (await t.api(w.bob, "GET", "/share-invitations")).body,
+    );
+    expect(invited.items.map((a) => a.albumId)).toEqual([w.albumC]);
+    expect(invited.items[0]).not.toHaveProperty("coverThumbUrl");
   });
 
   test("another user's cursor is rejected on every paginated route", async () => {
@@ -543,6 +624,7 @@ describe("list routes only return the caller's data", () => {
       `/photos?cursor=${w.aliceCursor}`,
       `/albums/${w.malloryAlbum}/photos?cursor=${w.aliceCursor}`,
       `/shared-albums?cursor=${w.aliceCursor}`,
+      `/share-invitations?cursor=${w.aliceCursor}`,
     ]) {
       const res = await t.api(w.mallory, "GET", path);
       expect(res.status, path).toBe(400);

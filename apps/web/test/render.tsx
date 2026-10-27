@@ -26,6 +26,7 @@ export const defaultResponses = {
   "GET /photos": emptyPage,
   "GET /albums": { items: [] },
   "GET /shared-albums": emptyPage,
+  "GET /share-invitations": emptyPage,
   "GET /places": { items: [] },
 };
 
