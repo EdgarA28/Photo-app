@@ -207,6 +207,10 @@ Dev app resources (table + photo bucket + Cognito + trigger + thumbnail Lambda +
 - [x] **8.14** Quota exceeded + error messages (FR-UP-7)
 - [x] **8.15** "Choose a username" step after the first login (FR-ACC-3): shown once when `GET /me` has `username: null`, skippable ("Later"; remembered so it doesn't come back on every login), same validation and "taken" handling as 8.13
 
+- [x] **8.18** Sticky gallery header (user request 2026-10-27): title, place search, filters and Select (and the place filter line) stay at the top while scrolling. Checked in Chrome on localhost
+- [~] **8.17** Viewer zoom (user request 2026-10-27; FR-GAL-7, spec v0.16): pinch / double tap / drag on touch, wheel / trackpad pinch / double click / drag / `+ - 0` on a computer; swipe still changes photo at 1×. Deep zoom loads the original (user's choice over preview-only) via the download link, shown from a `blob:` URL; HEIC only where the browser decodes it (Safari), otherwise the preview stays. Web only. 13 tests (geometry, wheel, double click, keys, pan without changing photo, pinch, original loading, HEIC fallback); 790 TS pass
+  - [x] Fix after the user's laptop check: black horizontal lines at high zoom (GPU tile seams of the CSS-scaled, `will-change` image, which was also rasterised at its unzoomed size) → the image is now laid out at the zoomed size and only translated; user confirmed it's clean
+  - [ ] User checks on the phone (pinch, double tap, pan, swipe at 1×) after the push
 - [~] **8.16** Month sections in gallery and albums (user request 2026-10-27, like Google Photos but by month only; spec v0.14 §12.3)
   - [x] Web: `monthSections` (local month of `takenAt`) + `PhotoGrid` `months` (heading per month, rows never mix months) in gallery, `?album=` view and album page; sort menu now also for albums
   - [x] Albums by date taken (user's choice over upload-month sections): memberships carry `GSI1PK = ALBUM#{albumId}` / `GSI1SK = TAKEN#{takenAt}#{photoId}` (existing GSI1, projection ALL, so no infra change); `GET /albums/{id}/photos?sort=`; add is conditional on the photo's takenAt (retry ×3); thumbnail Lambda re-sorts memberships once `ready`
@@ -568,3 +572,5 @@ Moved to the end by the user (2026-10-27): everything about prod and iOS waits u
 | 2026-10-27 | 8.16 month sections in gallery + albums; albums now list by date taken (memberships in GSI1, Lambda re-sorts, sort menu for albums); dev backfill run (7). Spec v0.14. Not deployed yet. |
 | 2026-10-27 | 13.2 search by place built (Lambda GPS + offline GeoNames lookup, place items, `/places` API, place search UI, viewer line); spec v0.15; backfill dry-run on dev (7 photos). Not deployed yet. |
 | 2026-10-27 | 13.2 backend deployed to dev by hand + backfills (3 photos). User check: search works for photos downloaded from Google Photos and then shared; direct shares from Google Photos arrive with blanked GPS (spec §12.6). |
+| 2026-10-27 | 8.17 viewer zoom (pinch/wheel/double tap/keys, original loaded for deep zoom); spec v0.16. Not committed yet. |
+| 2026-10-27 | 8.17 zoom fix (no tile seams: image sized, not scaled); 8.18 sticky gallery header. |

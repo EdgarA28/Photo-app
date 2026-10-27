@@ -68,37 +68,40 @@ function Gallery() {
 
   return (
     <main className="space-y-5">
-      {addTo ? (
-        <AddToHeader albumId={addTo} />
-      ) : (
-        <header className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight">Gallery</h1>
-          <PlaceSearch
-            api={api}
-            className="order-last w-full md:order-none md:w-64"
-            // A place replaces an album filter (they don't combine).
-            onPick={(picked) =>
-              void navigate({
-                search: (prev) => ({ ...prev, album: undefined, place: picked.placeId }),
-              })
-            }
-          />
-          <div className="flex flex-wrap gap-2">
-            <GalleryFilters album={album} sort={sort} />
-            {(photos.length > 0 || selection.active) && (
-              <SelectButton
-                active={selection.active}
-                onSelect={() => {
-                  setStatus(null);
-                  selection.start();
-                }}
-                onUnselect={selection.stop}
-              />
-            )}
-          </div>
-        </header>
-      )}
-      {place && !addTo && <PlaceFilter placeId={place} />}
+      {/* Stays at the top while the photos scroll under it; full width over the page padding. */}
+      <div className="sticky top-0 z-20 -mx-4 space-y-3 bg-background/95 px-4 py-3 backdrop-blur md:-mx-8 md:px-8">
+        {addTo ? (
+          <AddToHeader albumId={addTo} />
+        ) : (
+          <header className="flex flex-wrap items-center justify-between gap-3">
+            <h1 className="text-2xl font-semibold tracking-tight">Gallery</h1>
+            <PlaceSearch
+              api={api}
+              className="order-last w-full md:order-none md:w-64"
+              // A place replaces an album filter (they don't combine).
+              onPick={(picked) =>
+                void navigate({
+                  search: (prev) => ({ ...prev, album: undefined, place: picked.placeId }),
+                })
+              }
+            />
+            <div className="flex flex-wrap gap-2">
+              <GalleryFilters album={album} sort={sort} />
+              {(photos.length > 0 || selection.active) && (
+                <SelectButton
+                  active={selection.active}
+                  onSelect={() => {
+                    setStatus(null);
+                    selection.start();
+                  }}
+                  onUnselect={selection.stop}
+                />
+              )}
+            </div>
+          </header>
+        )}
+        {place && !addTo && <PlaceFilter placeId={place} />}
+      </div>
       {status && (
         <p role="status" className="text-sm text-muted-foreground">
           {status}

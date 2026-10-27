@@ -55,6 +55,7 @@ import { startDownload } from "@/lib/download";
 import { albumsQuery, useRemoveFromAlbum, useUpdateAlbum } from "@/queries/albums";
 import { galleryQuery, needsOwnFetch, photoQuery, removePhotoFromCache } from "@/queries/photos";
 import { sharedAlbumsQuery } from "@/queries/shares";
+import { ZoomableImage } from "@/viewer/ZoomableImage";
 
 /** Horizontal travel that counts as a swipe; it must also be mostly sideways. */
 const SWIPE_MIN_PX = 50;
@@ -205,7 +206,13 @@ function Viewer() {
         className="relative flex min-h-0 flex-1 touch-pan-y items-center justify-center select-none"
         {...swipe}
       >
-        <PhotoView key={photo.photoId} photo={photo} loadingPreview={loadingPreview} />
+        <PhotoView
+          key={photo.photoId}
+          photo={photo}
+          album={album}
+          loadingPreview={loadingPreview}
+          keys={!confirming && !overlay}
+        />
         <NavButton label="Previous photo" target={prev} side="left" />
         <NavButton label="Next photo" target={next} side="right" />
       </div>
@@ -436,7 +443,18 @@ function AlbumActions({
  * Preview, or a state for photos without one (FR-GAL-5) or whose preview can't load. While a
  * shared photo's preview URL is on its way (7.4), its thumbnail stands in.
  */
-function PhotoView({ photo, loadingPreview }: { photo: Photo; loadingPreview: boolean }) {
+function PhotoView({
+  photo,
+  album,
+  loadingPreview,
+  keys,
+}: {
+  photo: Photo;
+  album: string | undefined;
+  loadingPreview: boolean;
+  keys: boolean;
+}) {
+  const { api } = Route.useRouteContext();
   const [broken, onError] = useImageFailed(photo.previewUrl);
   if (photo.status === "pending") {
     return (
@@ -466,14 +484,13 @@ function PhotoView({ photo, loadingPreview }: { photo: Photo; loadingPreview: bo
     return <Message icon={<ImageOff className="size-8" />}>The preview can't be shown.</Message>;
   }
   return (
-    <img
+    <ZoomableImage
+      api={api}
+      photo={photo}
+      album={album}
       src={photo.previewUrl}
-      alt={photo.fileName}
-      width={photo.width ?? undefined}
-      height={photo.height ?? undefined}
-      draggable={false}
+      keys={keys}
       onError={onError}
-      className="size-full object-contain"
     />
   );
 }

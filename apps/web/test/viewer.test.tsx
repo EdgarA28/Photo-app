@@ -70,7 +70,8 @@ describe("photo viewer (FR-GAL-4)", () => {
   it("moves with horizontal swipes and ignores mostly vertical ones", async () => {
     await renderAt(`/photos/${testId(1)}`, { api: setup().api });
     await screen.findByRole("heading", { name: "IMG_1.jpg" });
-    const stage = preview().parentElement!;
+    // The swipe area around the photo (the zoom box inside it is replaced with each photo).
+    const stage = screen.getByTestId("zoom-box").parentElement!;
 
     swipe(stage, -120);
     await waitFor(() => expect(heading()).toBe("IMG_2.jpg"));

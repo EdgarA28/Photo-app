@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.15 |
+| **Version** | 0.16 |
 | **Date** | 2026-10-27 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -238,6 +238,7 @@ IDs are stable — reference them in issues, PRs and tests.
 | FR-GAL-2 | The gallery loads more photos automatically while scrolling (infinite scroll) and stays smooth with 10,000+ photos. |
 | FR-GAL-3 | Gallery filters (album, sort order) are reflected in the URL and bookmarkable. |
 | FR-GAL-4 | Clicking a photo opens a full-screen viewer showing the preview image, with next/previous navigation. |
+| FR-GAL-7 | The viewer zooms: pinch, double tap and drag on touch; wheel or trackpad pinch, double click, drag and + / − / 0 on a computer. Zoomed past the preview's detail, the full-resolution original loads and replaces it (where the browser can show its format). |
 | FR-GAL-5 | Photos still processing show a placeholder; photos that failed processing show an error state. |
 | FR-GAL-6 | Correct orientation for all photos (EXIF orientation applied). |
 
@@ -734,6 +735,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.16 | 2026-10-27 | Viewer zoom, loading the original for deep zoom (FR-GAL-7) |
 | 0.15 | 2026-10-27 | §12.6: location removed before upload (Google Photos direct share). Search by place in scope: FR-SRCH-1–4 (§6.8), place items (§8.2), `/places` routes and `place` on photos (§9), place lookup in the thumbnail Lambda (§10), NFR-SEC-5 note |
 | 0.14 | 2026-10-27 | Month sections in gallery and albums (§12.3); album photos listed by date taken with `sort` (§9), memberships in GSI1 (§8.2) |
 | 0.13 | 2026-10-27 | Security review 12.2: Content-Security-Policy on the site (§13.1 `frontend`); replaced originals fail the photo, `originalETag` on Photo items (§8.2, §10) |
