@@ -16,6 +16,9 @@ data "archive_file" "pre_sign_up" {
   type        = "zip"
   source_dir  = var.pre_sign_up_source_dir
   output_path = "${path.root}/.build/${local.pre_sign_up_name}.zip"
+  # Same zip on any machine: file modes otherwise follow the builder's umask (664 locally, 644 in
+  # CI), which changes the hash and redeploys an unchanged function (10.2).
+  output_file_mode = "0644"
 }
 
 data "aws_iam_policy_document" "pre_sign_up_trust" {

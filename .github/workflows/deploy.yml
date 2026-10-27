@@ -1,0 +1,120 @@
+# Deploy (spec §14.2, task 10.2): once CI has passed for a push to main, apply dev with the
+# deploy role, build the web app against the applied outputs, upload it, invalidate, smoke test.
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  # Redeploy by hand (Actions → Deploy → Run workflow); the deploy role only accepts main.
+  workflow_dispatch:
+
+# One deploy at a time. A newer waiting run replaces an older waiting one, which is fine: it
+# deploys a later commit of main.
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-dev:
+    name: Deploy dev
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The commit CI passed, not whatever main points to by now.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.1"
+          enable-cache: true
+          cache-dependency-glob: services/thumbnails/uv.lock
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.13.1
+          tofu_wrapper: false
+
+      - run: pnpm install --frozen-lockfile
+      # The web app is built after the apply, from its outputs.
+      - name: Build Lambdas
+        run: |
+          pnpm --filter @photo-app/api --filter @photo-app/auth-triggers build
+          pnpm build:py
+
+      # Deploy role (spec §14.1): dev trusts only main.
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::063359189013:role/photo-app-ci-deploy
+          aws-region: us-east-1
+
+      - name: tofu init
+        working-directory: infra/envs/dev
+        run: tofu init -input=false
+
+      - name: tofu plan
+        working-directory: infra/envs/dev
+        env:
+          TF_VAR_google_client_secret: ${{ secrets.TF_VAR_GOOGLE_CLIENT_SECRET }}
+          TF_VAR_allowed_emails: ${{ secrets.TF_VAR_ALLOWED_EMAILS }}
+        run: |
+          # Without these the apply would turn Google sign-in off and open sign-up.
+          if [ -z "$TF_VAR_google_client_secret" ] || [ -z "$TF_VAR_allowed_emails" ]; then
+            echo "::error::Repository secrets TF_VAR_GOOGLE_CLIENT_SECRET and TF_VAR_ALLOWED_EMAILS are required"
+            exit 1
+          fi
+          tofu plan -input=false -no-color -lock-timeout=10m -var-file=env.tfvars -out=dev.tfplan | tee plan.log
+          { echo "### Deploy dev"; grep -E '^(Plan:|No changes\.)' plan.log || true; } >> "$GITHUB_STEP_SUMMARY"
+
+      # Exactly the plan above; it carries the variables, so no secrets here.
+      - name: tofu apply
+        working-directory: infra/envs/dev
+        run: tofu apply -input=false -no-color -lock-timeout=10m dev.tfplan
+
+      - name: Read outputs
+        working-directory: infra/envs/dev
+        run: |
+          tofu output -json > outputs.json
+          {
+            echo "SITE_BUCKET=$(jq -r .site_bucket_name.value outputs.json)"
+            echo "DISTRIBUTION_ID=$(jq -r .cloudfront_distribution_id.value outputs.json)"
+            echo "APP_URL=$(jq -r .app_url.value outputs.json)"
+            echo "VITE_COGNITO_USER_POOL_ID=$(jq -r .user_pool_id.value outputs.json)"
+            echo "VITE_COGNITO_CLIENT_ID=$(jq -r .web_client_id.value outputs.json)"
+            echo "VITE_COGNITO_DOMAIN=$(jq -r .cognito_domain_url.value outputs.json)"
+            echo "VITE_GOOGLE_LOGIN=$(jq -r .google_login.value outputs.json)"
+          } >> "$GITHUB_ENV"
+
+      # Public client config only (apps/web/src/config.ts), baked in at build time.
+      - name: Build web
+        run: pnpm --filter @photo-app/web build
+
+      - name: Upload site
+        run: apps/web/scripts/upload-site.sh "$SITE_BUCKET" "$DISTRIBUTION_ID"
+
+      - name: Smoke test
+        run: |
+          curl -fsS --retry 3 "$APP_URL/api/health" | grep -q '"status":"ok"'
+          # CloudFront serves the build just uploaded.
+          for file in index.html sw.js; do
+            curl -fsS --retry 3 -o "served-$file" "$APP_URL/$file"
+            cmp "served-$file" "apps/web/dist/$file"
+          done
+          curl -fsS -o /dev/null "$APP_URL/"
+          echo "Deployed $APP_URL" >> "$GITHUB_STEP_SUMMARY"

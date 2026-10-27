@@ -18,6 +18,10 @@ output "cognito_domain_url" {
   value = module.auth.domain_url
 }
 
+output "google_login" {
+  value = module.auth.google_login
+}
+
 output "google_redirect_uri" {
   value = module.auth.google_redirect_uri
 }
