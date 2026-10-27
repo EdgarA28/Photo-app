@@ -7,6 +7,7 @@ import type { Repositories } from "../repo";
 import { albumRoutes } from "./albums";
 import { meRoutes } from "./me";
 import { photoRoutes } from "./photos";
+import { placeRoutes } from "./places";
 import { sessionRoutes } from "./session";
 import { shareRoutes } from "./shares";
 
@@ -25,6 +26,7 @@ export function registerRoutes(deps: Deps): (app: Hono<AppEnv>) => void {
     meRoutes(app, deps);
     photoRoutes(app, deps);
     albumRoutes(app, deps);
+    placeRoutes(app, deps);
     shareRoutes(app, deps);
     sessionRoutes(app, deps);
   };

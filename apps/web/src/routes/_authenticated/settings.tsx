@@ -61,6 +61,21 @@ function Settings() {
       </Section>
 
       <p className="text-xs text-muted-foreground">Version {APP_VERSION}</p>
+      {/* CC BY 4.0 attribution for the place names (13.2b). */}
+      <p className="text-xs text-muted-foreground">
+        Place names from{" "}
+        <a href="https://www.geonames.org" className="underline underline-offset-2">
+          GeoNames
+        </a>
+        , licensed under{" "}
+        <a
+          href="https://creativecommons.org/licenses/by/4.0/"
+          className="underline underline-offset-2"
+        >
+          CC BY 4.0
+        </a>
+        .
+      </p>
     </main>
   );
 }

@@ -10,7 +10,16 @@
 import { newId, photoPageSchema, sharedAlbumPageSchema } from "@photo-app/shared";
 import { beforeAll, describe, expect, test } from "vitest";
 import type { Repositories } from "../src/repo";
-import { createPending, createTestApi, markReady, newPhoto, newUserId, nextIso } from "./helpers";
+import {
+  addPlaces,
+  BERLIN,
+  createPending,
+  createTestApi,
+  markReady,
+  newPhoto,
+  newUserId,
+  nextIso,
+} from "./helpers";
 
 type TestApi = Awaited<ReturnType<typeof createTestApi>>;
 let t: TestApi;
@@ -70,6 +79,10 @@ beforeAll(async () => {
     sharedAt: nextIso(),
   });
 
+  // Alice took p1 and p2 in Berlin (13.2); places are hers only, also for Bob (13.2g).
+  await addPlaces(t.db, w.alice, w.p1, BERLIN);
+  await addPlaces(t.db, w.alice, w.p2, BERLIN);
+
   w.malloryPhoto = await readyPhoto(w.mallory);
   w.malloryAlbum = await album(w.mallory, "Mine");
 
@@ -90,6 +103,7 @@ async function snapshot() {
     sharesA: await repos.shares.listForAlbum(w.albumA),
     sharesB: await repos.shares.listForAlbum(w.albumB),
     usage: await repos.usage.get(w.alice),
+    places: await repos.places.list(w.alice),
     profile: await repos.usernames.getProfile(w.alice),
     bobShared: await repos.shares.listForRecipient(w.bob, { limit: 100 }),
     malloryShared: await repos.shares.listForRecipient(w.mallory, { limit: 100 }),
@@ -119,6 +133,19 @@ const json = (body: unknown) => body;
 
 /** Cases for a stranger (Mallory) and for the recipient (Bob) outside his read-only access. */
 const cases: Case[] = [
+  // ---- places (13.2) ----
+  {
+    route: "GET /api/places/:placeId/photos",
+    name: "stranger lists photos of a place only the owner has",
+    foreign: () => ({ as: w.mallory, method: "GET", path: `/places/${BERLIN[0]!.placeId}/photos` }),
+    missing: () => ({ as: w.mallory, method: "GET", path: "/places/city:1/photos" }),
+  },
+  {
+    route: "GET /api/places/:placeId/photos",
+    name: "recipient lists the owner's place of a shared photo",
+    foreign: () => ({ as: w.bob, method: "GET", path: `/places/${BERLIN[2]!.placeId}/photos` }),
+    missing: () => ({ as: w.bob, method: "GET", path: "/places/country:ZZ/photos" }),
+  },
   // ---- photos ----
   {
     route: "GET /api/photos/:photoId",
@@ -440,6 +467,7 @@ const exempt: Record<string, string> = {
   "GET /api/albums": "caller's albums",
   "POST /api/albums": "creates under the caller",
   "GET /api/shared-albums": "caller's shares; foreign cursor case below",
+  "GET /api/places": "caller's own places (keyed by sub); checked below",
   "POST /api/session/media-cookie": "caller's own prefix from the JWT sub (routes.session)",
   "DELETE /api/session/media-cookie": "caller's own prefix from the JWT sub (routes.session)",
 };
@@ -483,6 +511,24 @@ describe("list routes only return the caller's data", () => {
       (await t.api(w.mallory, "GET", "/shared-albums")).body,
     );
     expect(shared.items).toEqual([]);
+  });
+
+  test("places are the owner's: a stranger and the recipient have none of Alice's", async () => {
+    expect((await t.api(w.mallory, "GET", "/places")).body).toEqual({ items: [] });
+    expect((await t.api(w.bob, "GET", "/places")).body).toEqual({ items: [] });
+    const own = (await t.api(w.alice, "GET", "/places")).body as { items: { placeId: string }[] };
+    expect(own.items.map((p) => p.placeId).sort()).toEqual(BERLIN.map((p) => p.placeId).sort());
+  });
+
+  test("a shared photo comes without its place (13.2g)", async () => {
+    const shared = photoPageSchema.parse(
+      (await t.api(w.bob, "GET", `/albums/${w.albumA}/photos`)).body,
+    );
+    expect(shared.items.map((p) => [p.photoId, p.place])).toEqual([[w.p1, null]]);
+    const one = (await t.api(w.bob, "GET", `/photos/${w.p1}?albumId=${w.albumA}`)).body as {
+      place: unknown;
+    };
+    expect(one.place).toBeNull();
   });
 
   test("the recipient's own gallery and albums don't include shared ones", async () => {

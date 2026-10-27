@@ -6,3 +6,4 @@ export * from "./schemas/errors";
 export * from "./schemas/photos";
 export * from "./schemas/albums";
 export * from "./schemas/account";
+export * from "./schemas/places";

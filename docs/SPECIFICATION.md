@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.14 |
+| **Version** | 0.15 |
 | **Date** | 2026-10-27 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -61,6 +61,7 @@ A private photo storage and gallery app, similar in spirit to Google Photos, bui
 - Share albums (read-only) with other registered users
 - Per-user storage quota
 - PWA: installable, cached app shell, cached thumbnails, resilient upload queue
+- Search photos by place (town, region, country from EXIF GPS; owner only)
 
 ### 2.2 Out of scope for v1
 
@@ -68,7 +69,7 @@ A private photo storage and gallery app, similar in spirit to Google Photos, bui
 - Video files
 - Public share links for people without an account
 - Album download as ZIP
-- Search, tags, face/object recognition
+- Search other than by place (dates, tags), face/object recognition, map view
 - Native mobile apps
 - Photo editing
 
@@ -278,6 +279,15 @@ IDs are stable — reference them in issues, PRs and tests.
 | FR-PWA-3 | When a new version is deployed, the user sees an "Update available — reload" prompt. |
 | FR-PWA-4 | (Android) The app appears in the system share sheet to receive shared photos (`share_target`). |
 
+### 6.8 Search by place
+
+| ID | Requirement |
+|---|---|
+| FR-SRCH-1 | Photos with EXIF GPS get the nearest town (1,000+ inhabitants, within 50 km), its region and country, looked up offline when they are processed. |
+| FR-SRCH-2 | Users can search their places by name (case- and accent-insensitive) and see a place's photos by date taken, like an album. |
+| FR-SRCH-3 | The viewer shows where an own photo was taken (town, country). |
+| FR-SRCH-4 | Places are the owner's only: share recipients see no place, and coordinates never leave the backend (the API returns names only). |
+
 ---
 
 ## 7. Non-functional requirements
@@ -290,7 +300,7 @@ IDs are stable — reference them in issues, PRs and tests.
 | NFR-SEC-2 | Requests for another user's resources return **404**, not 403 (no existence leaks). |
 | NFR-SEC-3 | Both S3 buckets block all public access; photos are reachable only via CloudFront (Origin Access Control) or short-lived pre-signed URLs. |
 | NFR-SEC-4 | Encryption at rest for S3 (SSE-S3) and DynamoDB (default); TLS everywhere. |
-| NFR-SEC-5 | Derived images (thumbs/previews) have **all metadata stripped**, including GPS. Originals are stored unchanged. |
+| NFR-SEC-5 | Derived images (thumbs/previews) have **all metadata stripped**, including GPS. Originals are stored unchanged. GPS read for places (FR-SRCH-1) is stored on the photo item but never returned by the API. |
 | NFR-SEC-6 | Upload URLs are constrained by content type (`image/*`) and max size. |
 | NFR-SEC-7 | IAM least privilege per function (e.g. thumbnail Lambda can only read `originals/` and write `thumbs/`, `previews/`). |
 | NFR-SEC-8 | No long-lived AWS credentials in CI (GitHub OIDC). Secrets (Google client secret) stored outside git. |
@@ -344,12 +354,14 @@ Initial design; refine during implementation.
 
 | Entity | PK | SK | GSI1PK | GSI1SK | Attributes |
 |---|---|---|---|---|---|
-| Photo | `USER#{userId}` | `PHOTO#{photoId}` | `USER#{userId}` | `TAKEN#{takenAt}#{photoId}` | status (`pending`/`ready`/`failed`), fileName, contentType, sizeBytes, width, height, takenAt, uploadedAt, originalKey, originalETag |
+| Photo | `USER#{userId}` | `PHOTO#{photoId}` | `USER#{userId}` | `TAKEN#{takenAt}#{photoId}` | status (`pending`/`ready`/`failed`), fileName, contentType, sizeBytes, width, height, takenAt, uploadedAt, originalKey, originalETag, latitude, longitude, place `{city, region, country, countryCode}`, placeIds |
 | Album | `USER#{ownerId}` | `ALBUM#{albumId}` | — | — | name, createdAt, coverPhotoId, photoCount |
 | Album membership | `ALBUM#{albumId}` | `PHOTO#{photoId}` | `ALBUM#{albumId}` | `TAKEN#{takenAt}#{photoId}` (the photo's) | ownerId, addedAt |
 | Album share | `ALBUM#{albumId}` | `SHARE#{userId}` | `SHAREDWITH#{userId}` | `ALBUM#{albumId}` | ownerId, sharedAt |
 | Usage | `USER#{userId}` | `USAGE` | — | — | bytesUsed, photoCount, quotaBytes |
 | Profile | `USER#{userId}` | `PROFILE` | — | — | username, usernameChangedAt |
+| Place (list entry) | `USER#{userId}` | `PLACE#{placeId}` | — | — | kind (`city`/`region`/`country`), name, context, photoCount |
+| Place photo | `PLACE#{userId}#{placeId}` | `PHOTO#{photoId}` | `PLACE#{userId}#{placeId}` | `TAKEN#{takenAt}#{photoId}` | ownerId, placeId |
 | Username claim | `USERNAME#{username}` | `USERNAME` | — | — | userId, claimedAt; when released: releasedAt, heldUntil |
 
 Access patterns:
@@ -362,6 +374,8 @@ Access patterns:
 | Photos in album (by date taken) | GSI1: `GSI1PK = ALBUM#{albumId}`, descending (or ascending), paginated |
 | Who an album is shared with | `PK = ALBUM#{albumId}, SK begins_with SHARE#` |
 | Albums shared with me | GSI1: `GSI1PK = SHAREDWITH#{id}` |
+| My places (search) | `PK = USER#{id}, SK begins_with PLACE#` |
+| Photos at a place (by date taken) | GSI1: `GSI1PK = PLACE#{id}#{placeId}`, descending (or ascending), paginated |
 | User by username | `PK = USERNAME#{username}, SK = USERNAME` (ignored while `heldUntil` is set) |
 | My username | `PK = USER#{id}, SK = PROFILE` |
 | Can user X see photo P? | Owner check, else any share of an album containing P (resolved via album membership + share) |
@@ -388,7 +402,9 @@ Access patterns:
 | `GET` | `/photos` | List own photos `?cursor&limit&sort` |
 | `GET` | `/photos/{photoId}` | Photo metadata; with `?albumId=` a photo of an album shared with the caller, with signed image URLs |
 | `GET` | `/photos/{photoId}/download-url` | 5-min pre-signed GET with `attachment` disposition |
-| `DELETE` | `/photos/{photoId}` | Delete files + metadata + memberships; update usage |
+| `DELETE` | `/photos/{photoId}` | Delete files + metadata + memberships + place entries; update usage |
+| `GET` | `/places` | Own places with photo counts, most photos first (FR-SRCH-2) |
+| `GET` | `/places/{placeId}/photos` | Photos at an own place by date taken `?sort&cursor&limit`; 404 for a place the caller doesn't have |
 | `GET` | `/albums` | List own albums |
 | `POST` | `/albums` | Create album `{name}` |
 | `PATCH` | `/albums/{albumId}` | Rename / set cover |
@@ -433,6 +449,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 | Output headers | `Content-Type: image/jpeg`, `Cache-Control: public, max-age=31536000, immutable`, storage class STANDARD |
 | Limits | Skip sources > 50 MB; memory 1536 MB; timeout 60 s |
 | Errors — permanent (corrupt / unsupported) | Log, set DynamoDB status `failed`, return success (no retry) |
+| Places | EXIF GPS → nearest town (population-weighted, ≤ 50 km) from a bundled GeoNames list (CC BY 4.0), with region and country; written in the `ready` transaction: coordinates and place on the photo, place list counts, place photo items (FR-SRCH-1) |
 | Album order | Once `ready`, the photo's album memberships get its final takenAt in `GSI1SK` (they were sorted by the upload time while pending) |
 | Replaced original | The item stores the processed bytes' ETag (`originalETag`). If the original is overwritten after processing (the upload POST is valid 15 min), the photo becomes `failed` and its thumb/preview are deleted, so recipients can't download other bytes than they were shown |
 | Errors — transient | Raise → Lambda async retries (2×) → SQS DLQ (14-day retention) |
@@ -484,7 +501,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 | `/login` | Login page (Google + email) |
 | `/auth/callback` | OAuth code exchange |
 | `/_authenticated` (layout) | `beforeLoad` guard → redirect to `/login` if no session |
-| `/gallery` | Main gallery; search params `album`, `sort` (Zod-validated) |
+| `/gallery` | Main gallery; search params `album`, `place` (not both), `sort` (Zod-validated); place search box at the top (FR-SRCH-2) |
 | `/photos/$photoId` | Full-screen viewer |
 | `/albums` | My albums + shared with me |
 | `/albums/$albumId` | Album view |
@@ -534,6 +551,7 @@ Caching strategies:
 - No background access to the device photo library → **no automatic camera-roll backup** in a PWA (future: Capacitor, §17).
 - iOS: installation only via Share → Add to Home Screen; storage may be evicted for unused sites; Web Push only for installed PWAs; no `share_target`.
 - **Test Google/Cognito login in installed (standalone) mode on iOS early.**
+- **Location can be removed before upload** (FR-SRCH-1): sharing a photo directly from Google Photos (Android) sends a copy with the GPS fields blanked (seen 2026-10-27: tags present, values 0/0, empty refs); downloading it first and sharing the file keeps the location, and so does taking the photo with the camera from the app (FR-UP-1). Some photos picked on the phone arrived with no GPS tags at all. Such photos simply get no place; the app can't recover it.
 
 ---
 
@@ -689,7 +707,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | B-5 | "Available offline" albums | Cache previews of selected albums in the service worker | Idea |
 | B-6 | Public share links | Time-limited CloudFront signed URLs for people without an account | Idea |
 | B-7 | Video support | Needs transcoding (e.g. MediaConvert) and different storage/egress planning | Idea |
-| B-8 | Search & metadata | Date ranges, places, tags | Idea |
+| B-8 | Search & metadata | Date ranges, tags (places done: §6.8); location off switch; map view | Idea |
 | B-9 | On-the-fly image resizing | Only if many sizes are needed; current fixed sizes are simpler | Idea |
 | | | | |
 
@@ -716,6 +734,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.15 | 2026-10-27 | §12.6: location removed before upload (Google Photos direct share). Search by place in scope: FR-SRCH-1–4 (§6.8), place items (§8.2), `/places` routes and `place` on photos (§9), place lookup in the thumbnail Lambda (§10), NFR-SEC-5 note |
 | 0.14 | 2026-10-27 | Month sections in gallery and albums (§12.3); album photos listed by date taken with `sort` (§9), memberships in GSI1 (§8.2) |
 | 0.13 | 2026-10-27 | Security review 12.2: Content-Security-Policy on the site (§13.1 `frontend`); replaced originals fail the photo, `originalETag` on Photo items (§8.2, §10) |
 | 0.10 | 2026-10-25 | Optional sign-up allowlist in the pre sign-up trigger (§11.3), limiting FR-AUTH-1/2 to listed emails until launch |

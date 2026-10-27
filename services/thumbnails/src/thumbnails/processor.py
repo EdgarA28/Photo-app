@@ -20,6 +20,11 @@ Contract with the API (§8.2):
   photo is `ready` with its real takenAt, the memberships made while it was pending (sorted by the
   provisional upload time) are moved to match. The API writes a membership with the photo's takenAt
   at that moment, conditional on it, so one added meanwhile is right already.
+- Places (13.2): a photo with EXIF GPS gets the nearest town, its region and country (offline
+  lookup, `places.py`), written in the same transaction as `ready`: the place on the photo, one
+  item per place in the owner's place list (`USER#{userId}` / `PLACE#{placeId}`, with a photo
+  count, for search) and one per place and photo, sorted by takenAt in GSI1
+  (`PLACE#{userId}#{placeId}` / `PHOTO#{photoId}`). The API removes them with the photo.
 
 Errors: corrupt/unsupported images are permanent (mark `failed`, return normally). Everything
 else (S3/DynamoDB/network) is transient and raised, so Lambda retries and then uses the DLQ.
@@ -32,6 +37,7 @@ from typing import Any
 
 from botocore.exceptions import ClientError
 
+from . import places
 from .imaging import MAX_SOURCE_BYTES, PermanentImageError, process_image, to_iso
 from .s3_keys import parse_original_key, preview_key, thumb_key
 
@@ -106,13 +112,17 @@ class Processor:
 
         uploaded_at = item.get("uploadedAt", {}).get("S")
         taken_at = to_iso(image.taken_at) if image.taken_at else uploaded_at or to_iso(event_time)
+        place = places.lookup(*image.gps) if image.gps else None
+        place_set, place_values, place_items = self._place_writes(
+            user_id, photo_id, taken_at, image.gps, place
+        )
         updated = self._finish(
             user_id,
             photo_id,
             size,
             declared,
             "SET #status = :ready, width = :w, height = :h, takenAt = :t, GSI1SK = :gsi, "
-            "sizeBytes = :size, processedAt = :now" + _etag_set(processed_etag),
+            "sizeBytes = :size, processedAt = :now" + _etag_set(processed_etag) + place_set,
             {
                 ":ready": {"S": "ready"},
                 ":w": {"N": str(image.width)},
@@ -120,7 +130,9 @@ class Processor:
                 ":t": {"S": taken_at},
                 ":gsi": {"S": f"TAKEN#{taken_at}#{photo_id}"},
                 **_etag_value(processed_etag),
+                **place_values,
             },
+            place_items,
         )
         if not updated:
             # Lost a race: the photo was deleted (or processed by a duplicate event) meanwhile.
@@ -220,6 +232,81 @@ class Processor:
         logger.warning("Original replaced after processing", extra=log)
         return Outcome("failed", reason)
 
+    def _place_writes(
+        self,
+        user_id: str,
+        photo_id: str,
+        taken_at: str,
+        gps: tuple[float, float] | None,
+        place: places.Place | None,
+    ) -> tuple[str, dict[str, Any], list[dict[str, Any]]]:
+        """The photo item's place attributes (SET clause + values) and the place list and place
+        photo items for the `ready` transaction (13.2c). GPS is kept even without a town nearby."""
+        if gps is None:
+            return "", {}, []
+        set_clause = ", latitude = :lat, longitude = :lon"
+        values: dict[str, Any] = {":lat": {"N": f"{gps[0]:.6f}"}, ":lon": {"N": f"{gps[1]:.6f}"}}
+        if place is None:
+            return set_clause, values, []
+
+        # (kind, id, name, context shown under the name in search: "Bavaria, Germany")
+        context = ", ".join(x for x in (place.region, place.country) if x)
+        entries = [("city", f"city:{place.city_id}", place.city, context)]
+        if place.region and place.region_id:
+            entries.append(("region", f"region:{place.region_id}", place.region, place.country))
+        entries.append(("country", f"country:{place.country_code}", place.country, ""))
+
+        stored_place = {"city": {"S": place.city}, "country": {"S": place.country}}
+        stored_place["countryCode"] = {"S": place.country_code}
+        if place.region:
+            stored_place["region"] = {"S": place.region}
+        set_clause += ", place = :place, placeIds = :placeIds"
+        values[":place"] = {"M": stored_place}
+        values[":placeIds"] = {"SS": [place_id for _, place_id, _, _ in entries]}
+
+        items: list[dict[str, Any]] = []
+        for kind, place_id, name, place_context in entries:
+            partition = f"PLACE#{user_id}#{place_id}"
+            # An Update creates the item too, and the role only has GetItem/UpdateItem (NFR-SEC-7).
+            items.append(
+                {
+                    "Update": {
+                        "TableName": self._table,
+                        "Key": {"PK": {"S": partition}, "SK": {"S": f"PHOTO#{photo_id}"}},
+                        "UpdateExpression": "SET GSI1PK = :pk, GSI1SK = :sk, entity = :entity, "
+                        "ownerId = :owner, placeId = :id, photoId = :photo",
+                        "ExpressionAttributeValues": {
+                            ":pk": {"S": partition},
+                            ":sk": {"S": f"TAKEN#{taken_at}#{photo_id}"},
+                            ":entity": {"S": "placePhoto"},
+                            ":owner": {"S": user_id},
+                            ":id": {"S": place_id},
+                            ":photo": {"S": photo_id},
+                        },
+                    }
+                }
+            )
+            items.append(
+                {
+                    "Update": {
+                        "TableName": self._table,
+                        "Key": {"PK": {"S": f"USER#{user_id}"}, "SK": {"S": f"PLACE#{place_id}"}},
+                        "UpdateExpression": "SET entity = :entity, placeId = :id, kind = :kind, "
+                        "#name = :name, context = :context ADD photoCount :one",
+                        "ExpressionAttributeNames": {"#name": "name"},
+                        "ExpressionAttributeValues": {
+                            ":entity": {"S": "place"},
+                            ":id": {"S": place_id},
+                            ":kind": {"S": kind},
+                            ":name": {"S": name},
+                            ":context": {"S": place_context},
+                            ":one": {"N": "1"},
+                        },
+                    }
+                }
+            )
+        return set_clause, values, items
+
     def _sync_memberships(self, user_id: str, photo_id: str) -> None:
         """Re-sorts the photo's album memberships by its final takenAt (§12.3). Read after the
         status update, so an album added in between is either in `albumIds` here or was written
@@ -271,6 +358,7 @@ class Processor:
         declared: int,
         update_expression: str,
         values: dict[str, Any],
+        extra_items: list[dict[str, Any]] | None = None,
     ) -> bool:
         """Applies the final status and counts the original in Usage, atomically: `size` is the
         stored size, `declared` the size the API reserved when it created the item.
@@ -311,6 +399,7 @@ class Processor:
                             },
                         }
                     },
+                    *(extra_items or []),
                 ]
             )
         except ClientError as e:

@@ -1,7 +1,23 @@
-import { GetCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, GetCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import type { AllowedContentType, Page, PhotoSort, PhotoStatus } from "@photo-app/shared";
-import { batchGet, conditionFailedAt, queryPage, stripKeys, type Db } from "./db";
-import { GSI1, GSI1_KEY_ATTRIBUTES, photoKey, takenSk, usageKey, userPk } from "./keys";
+import {
+  batchGet,
+  conditionFailedAt,
+  isConditionalCheckFailed,
+  queryPage,
+  stripKeys,
+  type Db,
+} from "./db";
+import {
+  GSI1,
+  GSI1_KEY_ATTRIBUTES,
+  photoKey,
+  placeKey,
+  placePhotoKey,
+  takenSk,
+  usageKey,
+  userPk,
+} from "./keys";
 import { removeMembership } from "./memberships";
 
 /** Photo item without key attributes (spec §8.2). */
@@ -22,6 +38,12 @@ export interface PhotoRecord {
   failureReason?: string;
   /** Albums containing this photo: reverse index for deletes and share checks (§8.2). */
   albumIds?: Set<string>;
+  /** Where it was taken (13.2), set by the thumbnail Lambda from EXIF GPS. Never sent out. */
+  latitude?: number;
+  longitude?: number;
+  place?: { city: string; region?: string; country: string; countryCode: string };
+  /** The place list entries it counts in (`city:…`, `region:…`, `country:…`); removed with it. */
+  placeIds?: Set<string>;
 }
 
 export interface NewPhoto {
@@ -158,6 +180,19 @@ export function photosRepo(db: Db) {
                     ExpressionAttributeValues: { ":status": record.status },
                   },
                 },
+                // Its place entries (13.2c). The status condition above covers them too: places
+                // are written with `ready`, so a photo that changes status is re-read first.
+                ...[...(record.placeIds ?? [])].flatMap((placeId) => [
+                  { Delete: { TableName: db.table, Key: placePhotoKey(userId, placeId, photoId) } },
+                  {
+                    Update: {
+                      TableName: db.table,
+                      Key: placeKey(userId, placeId),
+                      UpdateExpression: "ADD photoCount :minusOne",
+                      ExpressionAttributeValues: { ":minusOne": -1 },
+                    },
+                  },
+                ]),
                 {
                   Update: {
                     TableName: db.table,
@@ -173,6 +208,7 @@ export function photosRepo(db: Db) {
               ],
             }),
           );
+          await dropEmptyPlaces(db, userId, record.placeIds);
           return record;
         } catch (err) {
           // Status changed or photo deleted concurrently: re-read and try again.
@@ -198,4 +234,22 @@ async function getPhoto(
     }),
   );
   return output.Item ? stripKeys<PhotoRecord>(output.Item) : null;
+}
+
+/** Removes place list entries left without photos; one that gained a photo meanwhile stays. */
+async function dropEmptyPlaces(db: Db, userId: string, placeIds: Set<string> | undefined) {
+  for (const placeId of placeIds ?? []) {
+    try {
+      await db.client.send(
+        new DeleteCommand({
+          TableName: db.table,
+          Key: placeKey(userId, placeId),
+          ConditionExpression: "photoCount <= :zero",
+          ExpressionAttributeValues: { ":zero": 0 },
+        }),
+      );
+    } catch (err) {
+      if (!isConditionalCheckFailed(err)) throw err;
+    }
+  }
 }

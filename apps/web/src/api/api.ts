@@ -7,6 +7,7 @@ import {
   mediaCookieResponseSchema,
   meResponseSchema,
   photoPageSchema,
+  placeListSchema,
   photoSchema,
   setUsernameResponseSchema,
   sharedAlbumPageSchema,
@@ -57,6 +58,11 @@ export function createApi(request: Request) {
       delete: (photoId: string) => request("DELETE", `/photos/${enc(photoId)}`),
     },
 
+    places: {
+      list: (o?: Opts) => request("GET", "/places", { schema: placeListSchema, ...o }),
+      photos: (placeId: string, query: Page & { sort?: PhotoSort } = {}, o?: Opts) =>
+        request("GET", `/places/${enc(placeId)}/photos`, { schema: photoPageSchema, query, ...o }),
+    },
     albums: {
       list: (o?: Opts) => request("GET", "/albums", { schema: albumListSchema, ...o }),
       create: (body: CreateAlbumRequest) =>

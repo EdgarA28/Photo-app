@@ -63,11 +63,11 @@ const LOOKAHEAD_PHOTOS = 3;
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
-// Full-screen viewer (FR-GAL-4, §12.1). `album`/`sort` say which gallery list prev/next walk.
+// Full-screen viewer (FR-GAL-4, §12.1). `album`/`place`/`sort` say which gallery list prev/next walk.
 export const Route = createFileRoute("/_authenticated/photos/$photoId")({
   staticData: { fullScreen: true },
   validateSearch: gallerySearchSchema,
-  loaderDeps: ({ search: { album, sort } }) => ({ album, sort }),
+  loaderDeps: ({ search: { album, place, sort } }) => ({ album, place, sort }),
   loader: async ({ context: { queryClient, api }, params: { photoId }, deps }) => {
     // Usually cached from the gallery. A photo beyond the loaded pages (deep link) is fetched on
     // its own; then there is no prev/next. 404 for other users' photos (NFR-SEC-2).
@@ -86,12 +86,12 @@ export const Route = createFileRoute("/_authenticated/photos/$photoId")({
 function Viewer() {
   const { api } = Route.useRouteContext();
   const { photoId } = Route.useParams();
-  const { album, sort } = Route.useSearch();
+  const { album, place, sort } = Route.useSearch();
   const navigate = Route.useNavigate();
   const close = useClose();
 
   const { data, hasNextPage, isFetchingNextPage, fetchNextPage } = useSuspenseInfiniteQuery(
-    galleryQuery(api, { album, sort }),
+    galleryQuery(api, { album, place, sort }),
   );
   const photos = useMemo(() => data.pages.flatMap((page) => page.items), [data]);
   const index = photos.findIndex((p) => p.photoId === photoId);
@@ -181,6 +181,12 @@ function Viewer() {
           <h1 className="truncate text-sm font-medium">{photo.fileName}</h1>
           {photo.status === "ready" && (
             <p className="text-xs text-white/60">{dateFormat.format(new Date(photo.takenAt))}</p>
+          )}
+          {photo.place && (
+            // Own photos only: the API leaves the place out for share recipients (13.2g).
+            <p className="truncate text-xs text-white/60">
+              {[photo.place.city, photo.place.country].join(", ")}
+            </p>
           )}
           {album && <SharedByLine album={album} />}
         </div>

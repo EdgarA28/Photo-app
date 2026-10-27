@@ -11,7 +11,9 @@ import {
   setUsernameRequestSchema,
   usernameSchema,
   listPhotosQuerySchema,
+  photoPlaceSchema,
   photoSchema,
+  placeIdSchema,
   updateAlbumRequestSchema,
   uploadUrlRequestSchema,
 } from "../index";
@@ -90,7 +92,19 @@ describe("photoSchema", () => {
       thumbUrl: null,
       previewUrl: null,
     };
-    expect(photoSchema.parse(pending)).toEqual(pending);
+    // Without `place` (an API from before 13.2) it reads as null.
+    expect(photoSchema.parse(pending)).toEqual({ ...pending, place: null });
+  });
+
+  test("takes a place name, and rejects place IDs in the wrong shape (13.2)", () => {
+    const place = { city: "Berlin", region: null, country: "Germany" };
+    expect(photoPlaceSchema.parse(place)).toEqual(place);
+    for (const ok of ["city:2950159", "region:DE.16", "region:US.NY", "country:DE"]) {
+      expect(placeIdSchema.safeParse(ok).success).toBe(true);
+    }
+    for (const bad of ["Berlin", "city:", "city:12a", "country:de", "region:DE", "x:DE"]) {
+      expect(placeIdSchema.safeParse(bad).success).toBe(false);
+    }
   });
 });
 

@@ -17,10 +17,13 @@ export const USERNAME_SK = "USERNAME";
 export const PHOTO_SK_PREFIX = "PHOTO#";
 export const ALBUM_SK_PREFIX = "ALBUM#";
 export const SHARE_SK_PREFIX = "SHARE#";
+export const PLACE_SK_PREFIX = "PLACE#";
 
 /** GSI1 sort key of a photo: gallery order by date taken, ties broken by ID (FR-GAL-1). */
 export const takenSk = (takenAt: string, photoId: string) => `TAKEN#${takenAt}#${photoId}`;
 export const sharedWithPk = (userId: string) => `SHAREDWITH#${userId}`;
+/** A user's photos taken at one place (13.2c): table PK and GSI1PK of its place photo items. */
+export const placePhotosPk = (userId: string, placeId: string) => `PLACE#${userId}#${placeId}`;
 
 export const photoKey = (userId: string, photoId: string) => ({
   PK: userPk(userId),
@@ -39,6 +42,15 @@ export const shareKey = (albumId: string, userId: string) => ({
   SK: shareSk(userId),
 });
 export const usageKey = (userId: string) => ({ PK: userPk(userId), SK: USAGE_SK });
+/** An entry of the user's place list (13.2c). */
+export const placeKey = (userId: string, placeId: string) => ({
+  PK: userPk(userId),
+  SK: `${PLACE_SK_PREFIX}${placeId}`,
+});
+export const placePhotoKey = (userId: string, placeId: string, photoId: string) => ({
+  PK: placePhotosPk(userId, placeId),
+  SK: photoSk(photoId),
+});
 export const profileKey = (userId: string) => ({ PK: userPk(userId), SK: PROFILE_SK });
 /** One item per username: the key itself makes names unique (FR-ACC-3). */
 export const usernameKey = (username: string) => ({ PK: usernamePk(username), SK: USERNAME_SK });

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ALLOWED_CONTENT_TYPES, MAX_FILE_NAME_LENGTH, MAX_UPLOAD_BYTES } from "../constants";
 import { idSchema, isoDateTimeSchema, pageQuerySchema, pageSchema } from "./common";
+import { photoPlaceSchema } from "./places";
 
 export const photoStatusSchema = z.enum(["pending", "ready", "failed"]);
 export type PhotoStatus = z.infer<typeof photoStatusSchema>;
@@ -19,6 +20,11 @@ export const photoSchema = z.object({
   /** EXIF DateTimeOriginal, falling back to upload time (§8.2). */
   takenAt: isoDateTimeSchema,
   uploadedAt: isoDateTimeSchema,
+  /**
+   * Where it was taken (13.2); null without GPS, and always for share recipients. Missing (an API
+   * from before 13.2) reads as null.
+   */
+  place: photoPlaceSchema.nullable().default(null),
   /** Stable CloudFront path for own photos, signed URL for shared ones (§9). */
   thumbUrl: z.string().nullable(),
   previewUrl: z.string().nullable(),

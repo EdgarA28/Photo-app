@@ -25,6 +25,8 @@ export function useRemoteChanges(api: Api) {
     if (seen.current) {
       void queryClient.invalidateQueries({ queryKey: ["photos"] });
       void queryClient.invalidateQueries({ queryKey: ["albums"] });
+      // A processed photo may have brought a new place (13.2).
+      void queryClient.invalidateQueries({ queryKey: ["places"] });
     }
     seen.current = true;
   }, [usage, queryClient]);

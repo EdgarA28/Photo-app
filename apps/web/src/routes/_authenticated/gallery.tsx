@@ -1,6 +1,7 @@
 import { photoSortSchema, type PhotoSort } from "@photo-app/shared";
 import { useQuery, useSuspenseInfiniteQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useRouter, type ErrorComponentProps } from "@tanstack/react-router";
+import { MapPin, X } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { AddToAlbumDialog } from "@/albums/AddToAlbumDialog";
 import { errorMessage } from "@/api/errors";
@@ -23,18 +24,20 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { PhotoGrid } from "@/gallery/PhotoGrid";
+import { PlaceSearch } from "@/gallery/PlaceSearch";
 import { gallerySearchSchema } from "@/gallery/search";
 import { SelectButton } from "@/gallery/SelectButton";
 import { SelectionBar } from "@/gallery/SelectionBar";
 import { useSelection } from "@/gallery/useSelection";
 import { albumsQuery, useAddToAlbum } from "@/queries/albums";
 import { galleryQuery, useDeletePhotos } from "@/queries/photos";
+import { placesQuery } from "@/queries/places";
 import { GalleryUploads } from "@/upload/GalleryUploads";
 import { useUploads } from "@/upload/useUploads";
 
 export const Route = createFileRoute("/_authenticated/gallery")({
   validateSearch: gallerySearchSchema,
-  loaderDeps: ({ search: { album, sort } }) => ({ album, sort }),
+  loaderDeps: ({ search: { album, place, sort } }) => ({ album, place, sort }),
   // `staleTime: "static"` = use cached pages as they are (the replacement for the deprecated
   // ensureInfiniteQueryData); the component's query refetches stale data in the background.
   loader: ({ context, deps }) =>
@@ -45,15 +48,16 @@ export const Route = createFileRoute("/_authenticated/gallery")({
 
 function Gallery() {
   const { api } = Route.useRouteContext();
-  const { album, sort, addTo } = Route.useSearch();
+  const { album, place, sort, addTo } = Route.useSearch();
+  const navigate = Route.useNavigate();
   const { data, hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } =
-    useSuspenseInfiniteQuery(galleryQuery(api, { album, sort }));
+    useSuspenseInfiniteQuery(galleryQuery(api, { album, place, sort }));
   const photos = useMemo(() => data.pages.flatMap((page) => page.items), [data]);
-  // Not-yet-uploaded files (FR-UP-6); uploads go to all photos, not to the album being viewed.
+  // Not-yet-uploaded files (FR-UP-6); uploads go to all photos, not to the album or place viewed.
   const entries = useUploads();
   const uploads = useMemo(
-    () => (album || addTo ? [] : entries.filter((entry) => entry.status !== "done")),
-    [album, addTo, entries],
+    () => (album || place || addTo ? [] : entries.filter((entry) => entry.status !== "done")),
+    [album, place, addTo, entries],
   );
 
   const selection = useSelection({ forced: addTo !== undefined });
@@ -69,6 +73,16 @@ function Gallery() {
       ) : (
         <header className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-semibold tracking-tight">Gallery</h1>
+          <PlaceSearch
+            api={api}
+            className="order-last w-full md:order-none md:w-64"
+            // A place replaces an album filter (they don't combine).
+            onPick={(picked) =>
+              void navigate({
+                search: (prev) => ({ ...prev, album: undefined, place: picked.placeId }),
+              })
+            }
+          />
           <div className="flex flex-wrap gap-2">
             <GalleryFilters album={album} sort={sort} />
             {(photos.length > 0 || selection.active) && (
@@ -84,6 +98,7 @@ function Gallery() {
           </div>
         </header>
       )}
+      {place && !addTo && <PlaceFilter placeId={place} />}
       {status && (
         <p role="status" className="text-sm text-muted-foreground">
           {status}
@@ -91,7 +106,9 @@ function Gallery() {
       )}
       {uploads.length > 0 && <GalleryUploads entries={uploads} />}
       {photos.length === 0 ? (
-        uploads.length === 0 && <EmptyGallery inAlbum={album !== undefined} />
+        uploads.length === 0 && (
+          <EmptyGallery inAlbum={album !== undefined || place !== undefined} />
+        )
       ) : (
         <PhotoGrid
           photos={photos}
@@ -338,7 +355,11 @@ function GalleryFilters({ album, sort }: { album: string | undefined; sort: Phot
         value={album ?? ALL_PHOTOS}
         onValueChange={(value) =>
           void navigate({
-            search: (prev) => ({ ...prev, album: value === ALL_PHOTOS ? undefined : value }),
+            search: (prev) => ({
+              ...prev,
+              album: value === ALL_PHOTOS ? undefined : value,
+              place: undefined,
+            }),
           })
         }
       >
@@ -376,6 +397,31 @@ function GalleryFilters({ album, sort }: { album: string | undefined; sort: Phot
   );
 }
 
+/** The place the gallery is filtered to (13.2f), with a way back to all photos. */
+function PlaceFilter({ placeId }: { placeId: string }) {
+  const { api } = Route.useRouteContext();
+  const { data } = useQuery(placesQuery(api));
+  const place = data?.items.find((p) => p.placeId === placeId);
+  return (
+    <div className="flex items-center gap-2">
+      <MapPin aria-hidden className="size-4 text-muted-foreground" />
+      <p className="text-sm">
+        <span className="font-medium">{place?.name ?? "Selected place"}</span>
+        {place?.context && <span className="text-muted-foreground"> · {place.context}</span>}
+      </p>
+      <Button asChild variant="ghost" size="icon" className="size-7">
+        <Link
+          to="/gallery"
+          search={(prev) => ({ ...prev, place: undefined })}
+          aria-label="Show all photos"
+        >
+          <X className="size-4" />
+        </Link>
+      </Button>
+    </div>
+  );
+}
+
 function EmptyGallery({ inAlbum }: { inAlbum: boolean }) {
   return (
     <div className="flex flex-col items-center gap-4 py-24 text-center">
@@ -391,17 +437,17 @@ function EmptyGallery({ inAlbum }: { inAlbum: boolean }) {
   );
 }
 
-// e.g. an album that was deleted or is no longer shared (404), or no network.
+// e.g. an album that was deleted or is no longer shared, a place without photos (404), or no network.
 function GalleryError({ error }: ErrorComponentProps) {
-  const { album } = Route.useSearch();
+  const { album, place } = Route.useSearch();
   const router = useRouter();
   return (
     <main className="space-y-3">
       <h1 className="text-2xl font-semibold tracking-tight">Gallery</h1>
       <p className="text-muted-foreground">{errorMessage(error)}</p>
-      {album ? (
+      {album || place ? (
         <Button asChild variant="outline">
-          <Link to="/gallery" search={(prev) => ({ ...prev, album: undefined })}>
+          <Link to="/gallery" search={(prev) => ({ ...prev, album: undefined, place: undefined })}>
             Show all photos
           </Link>
         </Button>

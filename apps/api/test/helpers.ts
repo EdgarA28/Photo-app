@@ -147,6 +147,90 @@ export async function markReady(
   );
 }
 
+export interface TestPlace {
+  placeId: string;
+  kind: "city" | "region" | "country";
+  name: string;
+  context: string;
+}
+
+export const BERLIN: TestPlace[] = [
+  { placeId: "city:2950159", kind: "city", name: "Berlin", context: "State of Berlin, Germany" },
+  { placeId: "region:DE.16", kind: "region", name: "State of Berlin", context: "Germany" },
+  { placeId: "country:DE", kind: "country", name: "Germany", context: "" },
+];
+
+/**
+ * What the thumbnail Lambda writes for a ready photo with GPS (13.2c): the place on the photo, a
+ * place list entry per place (count +1) and a place photo item per place, by takenAt in GSI1.
+ */
+export async function addPlaces(db: Db, userId: string, photoId: string, places: TestPlace[]) {
+  const photo = await db.client.send(
+    new GetCommand({ TableName: db.table, Key: { PK: `USER#${userId}`, SK: `PHOTO#${photoId}` } }),
+  );
+  const takenAt = photo.Item!.takenAt as string;
+  const [city, region, country] = places;
+  await db.client.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Update: {
+            TableName: db.table,
+            Key: { PK: `USER#${userId}`, SK: `PHOTO#${photoId}` },
+            UpdateExpression:
+              "SET latitude = :lat, longitude = :lon, place = :place, placeIds = :ids",
+            ExpressionAttributeValues: {
+              ":lat": 52.52,
+              ":lon": 13.41,
+              ":place": {
+                city: city!.name,
+                ...(region && region.kind === "region" && { region: region.name }),
+                country: (country ?? region)!.name,
+                countryCode: "DE",
+              },
+              ":ids": new Set(places.map((p) => p.placeId)),
+            },
+          },
+        },
+        ...places.flatMap((place) => [
+          {
+            Put: {
+              TableName: db.table,
+              Item: {
+                PK: `PLACE#${userId}#${place.placeId}`,
+                SK: `PHOTO#${photoId}`,
+                GSI1PK: `PLACE#${userId}#${place.placeId}`,
+                GSI1SK: `TAKEN#${takenAt}#${photoId}`,
+                entity: "placePhoto",
+                ownerId: userId,
+                placeId: place.placeId,
+                photoId,
+              },
+            },
+          },
+          {
+            Update: {
+              TableName: db.table,
+              Key: { PK: `USER#${userId}`, SK: `PLACE#${place.placeId}` },
+              UpdateExpression:
+                "SET entity = :e, placeId = :id, kind = :k, #name = :n, context = :c ADD photoCount :one",
+              ExpressionAttributeNames: { "#name": "name" },
+              ExpressionAttributeValues: {
+                ":e": "place",
+                ":id": place.placeId,
+                ":k": place.kind,
+                ":n": place.name,
+                ":c": place.context,
+                ":one": 1,
+              },
+            },
+          },
+        ]),
+      ],
+    }),
+  );
+}
+
 export const TEST_DEFAULT_QUOTA = 2 * 1024 ** 3;
 
 /** A real RSA key pair, so tests can verify the media cookie signatures (7.3). */

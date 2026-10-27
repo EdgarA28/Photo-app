@@ -19,6 +19,13 @@ export function toPhoto(record: PhotoRecord): Photo {
     height: record.height ?? null,
     takenAt: record.takenAt,
     uploadedAt: record.uploadedAt,
+    place: record.place
+      ? {
+          city: record.place.city,
+          region: record.place.region ?? null,
+          country: record.place.country,
+        }
+      : null,
     // Derived images exist only once the thumbnail Lambda is done (FR-GAL-5).
     thumbUrl: ready ? `/${thumbKey(record.userId, record.photoId)}` : null,
     previewUrl: ready ? `/${previewKey(record.userId, record.photoId)}` : null,
@@ -57,7 +64,8 @@ export async function toSharedPhoto(
     photo.thumbUrl ? media.signUrl(photo.thumbUrl, now) : null,
     preview && photo.previewUrl ? media.signUrl(photo.previewUrl, now) : null,
   ]);
-  return { ...photo, thumbUrl, previewUrl };
+  // Places are the owner's (13.2g): recipients don't learn where a photo was taken.
+  return { ...photo, place: null, thumbUrl, previewUrl };
 }
 
 /**

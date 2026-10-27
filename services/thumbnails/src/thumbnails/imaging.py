@@ -5,6 +5,7 @@ original can never be processed (corrupt, unsupported, too large) and must not b
 """
 
 import io
+import math
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
@@ -46,6 +47,9 @@ class ProcessedImage:
     height: int
     taken_at: datetime | None
     """EXIF DateTimeOriginal in UTC, or None if absent/invalid (caller falls back, §8.2)."""
+    gps: tuple[float, float] | None
+    """EXIF GPS (latitude, longitude) in degrees, or None if absent/invalid (13.2a). Read for the
+    place lookup only: derived images stay stripped (NFR-SEC-5)."""
     thumb: bytes
     preview: bytes
 
@@ -73,6 +77,7 @@ def _process(data: bytes) -> ProcessedImage:
         exif = img.getexif()
         orientation = exif.get(ExifTags.Base.Orientation, 1)
         taken_at = _taken_at(exif)
+        gps = _gps(exif)
         width, height = (
             (source_height, source_width)
             if orientation in _SWAPPING_ORIENTATIONS
@@ -95,6 +100,7 @@ def _process(data: bytes) -> ProcessedImage:
         width=width,
         height=height,
         taken_at=taken_at,
+        gps=gps,
         thumb=_encode_jpeg(thumb, THUMB_QUALITY),
         preview=_encode_jpeg(preview, PREVIEW_QUALITY),
     )
@@ -167,6 +173,37 @@ def _taken_at(exif: Image.Exif) -> datetime | None:
     if parsed > datetime.now(UTC) + timedelta(days=1):
         return None  # Camera clock clearly wrong.
     return parsed
+
+
+def _gps(exif: Image.Exif) -> tuple[float, float] | None:
+    """EXIF GPSLatitude/GPSLongitude (degrees, minutes, seconds + N/S, E/W refs) as signed degrees.
+    Missing, malformed, out-of-range and 0/0 (what some apps write for "no fix") give None."""
+    gps_ifd = exif.get_ifd(ExifTags.IFD.GPSInfo)
+    lat = _degrees(gps_ifd.get(ExifTags.GPS.GPSLatitude), gps_ifd.get(ExifTags.GPS.GPSLatitudeRef))
+    lon = _degrees(
+        gps_ifd.get(ExifTags.GPS.GPSLongitude), gps_ifd.get(ExifTags.GPS.GPSLongitudeRef)
+    )
+    if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
+    if lat == 0 and lon == 0:
+        return None
+    return lat, lon
+
+
+def _degrees(dms: object, ref: object) -> float | None:
+    if not isinstance(dms, tuple) or len(dms) != 3 or not isinstance(ref, str):
+        return None
+    try:
+        degrees, minutes, seconds = (float(part) for part in dms)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None  # e.g. a rational with a zero denominator
+    if any(math.isnan(v) or v < 0 for v in (degrees, minutes, seconds)):
+        return None
+    value = degrees + minutes / 60 + seconds / 3600
+    ref = ref.strip("\x00 ").upper()
+    if ref in ("S", "W"):
+        return -value
+    return value if ref in ("N", "E") else None
 
 
 def to_iso(dt: datetime) -> str:

@@ -254,6 +254,7 @@ export function testPhoto(n: number, overrides: Record<string, unknown> = {}) {
     height: 3024,
     takenAt: "2026-10-01T10:00:00.000Z",
     uploadedAt: "2026-10-02T10:00:00.000Z",
+    place: null,
     thumbUrl: `/users/${testUser.sub}/thumbs/${photoId}.jpg`,
     previewUrl: `/users/${testUser.sub}/previews/${photoId}.jpg`,
     ...overrides,

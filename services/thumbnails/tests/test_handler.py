@@ -7,8 +7,9 @@ from typing import Any
 import boto3
 import pytest
 from botocore.exceptions import ClientError
+from conftest import encode, make_exif, two_tone
 from moto import mock_aws
-from PIL import Image
+from PIL import ExifTags, Image
 
 from thumbnails import handler as handler_module
 from thumbnails.processor import DERIVED_CACHE_CONTROL, Processor
@@ -453,3 +454,108 @@ def test_membership_removed_meanwhile_is_not_recreated(
 
     gone = {"PK": {"S": "ALBUM#01JALBUMGONEGONEGONEGONEGO"}, "SK": {"S": f"PHOTO#{PHOTO}"}}
     assert get(dynamodb, gone) is None
+
+
+# 13.2: places from EXIF GPS, written with `ready` (jpeg_rotated was taken in central Berlin).
+
+BERLIN = ["city:2950159", "region:DE.16", "country:DE"]
+
+
+def place_item(dynamodb: Any, place_id: str) -> dict[str, Any] | None:
+    return get(dynamodb, {"PK": {"S": f"USER#{USER}"}, "SK": {"S": f"PLACE#{place_id}"}})
+
+
+def place_photo(dynamodb: Any, place_id: str, photo_id: str = PHOTO) -> dict[str, Any] | None:
+    key = {"PK": {"S": f"PLACE#{USER}#{place_id}"}, "SK": {"S": f"PHOTO#{photo_id}"}}
+    return get(dynamodb, key)
+
+
+def test_ready_stores_the_place_and_lists_it(aws: tuple[Any, Any], jpeg_rotated: bytes) -> None:
+    s3, dynamodb = aws
+    put_pending(dynamodb, declared=len(jpeg_rotated))
+    handler_module.handler(upload(s3, jpeg_rotated))
+
+    item = get(dynamodb, PHOTO_KEY)
+    assert item is not None
+    assert (float(item["latitude"]["N"]), float(item["longitude"]["N"])) == (52.52, 13.41)
+    assert item["place"]["M"] == {
+        "city": {"S": "Berlin"},
+        "region": {"S": "State of Berlin"},
+        "country": {"S": "Germany"},
+        "countryCode": {"S": "DE"},
+    }
+    assert sorted(item["placeIds"]["SS"]) == sorted(BERLIN)
+
+    city = place_item(dynamodb, BERLIN[0])
+    assert city is not None
+    assert {k: next(iter(v.values())) for k, v in city.items() if k not in ("PK", "SK")} == {
+        "entity": "place",
+        "placeId": "city:2950159",
+        "kind": "city",
+        "name": "Berlin",
+        "context": "State of Berlin, Germany",
+        "photoCount": "1",
+    }
+    region, country = place_item(dynamodb, BERLIN[1]), place_item(dynamodb, BERLIN[2])
+    assert region is not None and region["context"]["S"] == "Germany"
+    assert country is not None and (country["name"]["S"], country["context"]["S"]) == (
+        "Germany",
+        "",
+    )
+
+    for place_id in BERLIN:
+        member = place_photo(dynamodb, place_id)
+        assert member is not None
+        assert member["GSI1PK"]["S"] == f"PLACE#{USER}#{place_id}"
+        assert member["GSI1SK"]["S"] == f"TAKEN#2024-05-01T12:30:15.123Z#{PHOTO}"
+        assert member["ownerId"]["S"] == USER
+
+
+def test_place_counts_add_up(aws: tuple[Any, Any], jpeg_rotated: bytes) -> None:
+    s3, dynamodb = aws
+    put_pending(dynamodb, declared=len(jpeg_rotated))
+    handler_module.handler(upload(s3, jpeg_rotated))
+    other = "01JABCDEFGHJKMNPQRSTVWXYZ1"
+    dynamodb.put_item(
+        TableName=TABLE,
+        Item={
+            "PK": {"S": f"USER#{USER}"},
+            "SK": {"S": f"PHOTO#{other}"},
+            "status": {"S": "pending"},
+            "uploadedAt": {"S": UPLOADED_AT},
+            "sizeBytes": {"N": str(len(jpeg_rotated))},
+        },
+    )
+    handler_module.handler(upload(s3, jpeg_rotated, f"users/{USER}/originals/{other}.jpg"))
+
+    for place_id in BERLIN:
+        item = place_item(dynamodb, place_id)
+        assert item is not None and item["photoCount"]["N"] == "2"
+        assert place_photo(dynamodb, place_id, other) is not None
+
+
+def test_no_gps_no_place(aws: tuple[Any, Any], jpeg_plain: bytes) -> None:
+    s3, dynamodb = aws
+    put_pending(dynamodb, declared=len(jpeg_plain))
+    handler_module.handler(upload(s3, jpeg_plain))
+    item = get(dynamodb, PHOTO_KEY)
+    assert item is not None and item["status"]["S"] == "ready"
+    assert not {"latitude", "place", "placeIds"} & item.keys()
+    assert place_item(dynamodb, BERLIN[0]) is None
+
+
+def test_gps_far_from_any_town_keeps_coordinates_only(aws: tuple[Any, Any]) -> None:
+    s3, dynamodb = aws
+    exif = make_exif(taken="2024:01:01 00:00:00", gps=True)
+    gps = exif.get_ifd(ExifTags.IFD.GPSInfo)
+    gps[ExifTags.GPS.GPSLatitude] = (30.0, 0.0, 0.0)  # mid Atlantic
+    gps[ExifTags.GPS.GPSLongitudeRef] = "W"
+    gps[ExifTags.GPS.GPSLongitude] = (40.0, 0.0, 0.0)
+    data = encode(two_tone((200, 100)), "JPEG", exif=exif)
+    put_pending(dynamodb, declared=len(data))
+
+    assert handler_module.handler(upload(s3, data))["results"][0]["status"] == "ready"
+    item = get(dynamodb, PHOTO_KEY)
+    assert item is not None
+    assert (float(item["latitude"]["N"]), float(item["longitude"]["N"])) == (30.0, -40.0)
+    assert not {"place", "placeIds"} & item.keys()

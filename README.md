@@ -86,3 +86,7 @@ AWS_PROFILE=dev tofu plan -var-file=env.tfvars
 ```
 
 Deployment via GitHub Actions comes in Phase 10 (see `PROGRESS.md`).
+
+## Third-party data
+
+Place names for search by place (13.2) come from [GeoNames](https://www.geonames.org) (`cities1000`, `admin1CodesASCII`, `countryInfo`), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The compact list `services/thumbnails/src/thumbnails/data/places.tsv.gz` is generated from them by `services/thumbnails/scripts/build_places.py` (download the three files into an empty folder, unzip `cities1000.zip`, run `uv run python scripts/build_places.py <folder>`); the app shows the attribution in Settings.

@@ -15,6 +15,7 @@ import { signedUrlRefreshInterval } from "./signedUrls";
 
 export interface GalleryFilter {
   album?: string | undefined;
+  place?: string | undefined;
   sort: PhotoSort;
 }
 
@@ -40,18 +41,24 @@ export function processingPollInterval(
 
 /**
  * The gallery's photo list, page by page with the API cursor (§12.2, FR-GAL-1/2). With an album
- * it lists that album; both are sorted by date taken (§9, §12.3). Everything sits under ["photos"]
- * for invalidation after uploads/deletes.
+ * it lists that album, with a place that place's photos (13.2); all sorted by date taken (§9,
+ * §12.3). Everything sits under ["photos"] for invalidation after uploads/deletes.
  */
-export const galleryQuery = (api: Api, { album, sort }: GalleryFilter) =>
+export const galleryQuery = (api: Api, { album, place, sort }: GalleryFilter) =>
   infiniteQueryOptions({
-    queryKey: album ? ["photos", { album, sort }] : ["photos", { sort }],
+    queryKey: album
+      ? ["photos", { album, sort }]
+      : place
+        ? ["photos", { place, sort }]
+        : ["photos", { sort }],
     // `?? undefined`: a list restored from the saved cache (9.3) has `null` for the first page,
     // since JSON can't store `undefined`; sent as `?cursor=null`, the API answers 400.
     queryFn: ({ pageParam, signal }) =>
       album
         ? api.albums.photos(album, { sort, cursor: pageParam ?? undefined }, { signal })
-        : api.photos.list({ sort, cursor: pageParam ?? undefined }, { signal }),
+        : place
+          ? api.places.photos(place, { sort, cursor: pageParam ?? undefined }, { signal })
+          : api.photos.list({ sort, cursor: pageParam ?? undefined }, { signal }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
     // Refetches every loaded page, so a finished photo gets its size, thumbnail and date position,
@@ -150,7 +157,7 @@ export function useDeletePhotos() {
     },
     onSettled: () =>
       Promise.all(
-        [["photos"], ["albums"], ["me"]].map((queryKey) =>
+        [["photos"], ["albums"], ["places"], ["me"]].map((queryKey) =>
           queryClient.invalidateQueries({ queryKey }),
         ),
       ),

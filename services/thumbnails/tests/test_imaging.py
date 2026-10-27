@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 from conftest import BLUE, RED, encode, make_exif, two_tone
-from PIL import Image
+from PIL import ExifTags, Image
 
 from thumbnails.imaging import (
     PREVIEW_MAX_EDGE,
@@ -159,3 +159,46 @@ def test_too_large_source_is_permanent(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_to_iso_matches_js_to_iso_string() -> None:
     assert to_iso(datetime(2026, 1, 2, 3, 4, 5, 6000, tzinfo=UTC)) == "2026-01-02T03:04:05.006Z"
+
+
+# 13.2a: GPS is read for the place lookup (derived images stay stripped, see above).
+
+
+def test_gps_is_read(jpeg_rotated: bytes) -> None:
+    # 52°31'12" N, 13°24'36" E
+    assert process_image(jpeg_rotated).gps == pytest.approx((52.52, 13.41))
+
+
+@pytest.mark.parametrize(
+    ("lat_ref", "lon_ref", "expected"),
+    [("S", "W", (-52.52, -13.41)), ("N", "W", (52.52, -13.41)), ("s", "e", (-52.52, 13.41))],
+)
+def test_gps_hemispheres(lat_ref: str, lon_ref: str, expected: tuple[float, float]) -> None:
+    exif = make_exif(gps=True)
+    gps = exif.get_ifd(ExifTags.IFD.GPSInfo)
+    gps[ExifTags.GPS.GPSLatitudeRef] = lat_ref
+    gps[ExifTags.GPS.GPSLongitudeRef] = lon_ref
+    data = encode(two_tone((100, 100)), "JPEG", exif=exif)
+    assert process_image(data).gps == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {ExifTags.GPS.GPSLatitude: (0.0, 0.0, 0.0), ExifTags.GPS.GPSLongitude: (0.0, 0.0, 0.0)},
+        {ExifTags.GPS.GPSLatitude: (95.0, 0.0, 0.0)},
+        {ExifTags.GPS.GPSLatitudeRef: "X"},
+        {ExifTags.GPS.GPSLongitude: (13.0, 24.0)},
+    ],
+    ids=["zero-zero", "out-of-range", "bad-ref", "two-parts"],
+)
+def test_invalid_gps_is_ignored(change: dict[int, object]) -> None:
+    exif = make_exif(gps=True)
+    gps = exif.get_ifd(ExifTags.IFD.GPSInfo)
+    for tag, value in change.items():
+        gps[tag] = value
+    assert process_image(encode(two_tone((100, 100)), "JPEG", exif=exif)).gps is None
+
+
+def test_no_gps(jpeg_plain: bytes) -> None:
+    assert process_image(jpeg_plain).gps is None
