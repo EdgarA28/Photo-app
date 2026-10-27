@@ -89,10 +89,6 @@ jobs:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    # One plan at a time: they take the state lock.
-    concurrency:
-      group: tofu-dev
-      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
@@ -137,8 +133,10 @@ jobs:
           TF_VAR_google_client_secret: ${{ secrets.TF_VAR_GOOGLE_CLIENT_SECRET }}
           TF_VAR_allowed_emails: ${{ secrets.TF_VAR_ALLOWED_EMAILS }}
         run: |
+          # Waits for the state lock instead of a concurrency group: GitHub cancels a pending job
+          # when another one queues in the same group, which could drop a deploy (deploy.yml).
           set +e
-          tofu plan -input=false -no-color -detailed-exitcode -var-file=env.tfvars -out=dev.tfplan > plan.log 2>&1
+          tofu plan -input=false -no-color -detailed-exitcode -lock-timeout=10m -var-file=env.tfvars -out=dev.tfplan > plan.log 2>&1
           code=$?
           set -e
           cat plan.log

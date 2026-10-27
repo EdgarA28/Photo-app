@@ -186,6 +186,11 @@ run "google_off_without_client_id" {
     condition     = aws_cognito_user_pool_client.web.supported_identity_providers == toset(["COGNITO"])
     error_message = "Only email/password sign-in without Google."
   }
+
+  assert {
+    condition     = output.google_login == false
+    error_message = "The web build must not offer Google without it."
+  }
 }
 
 run "google_sign_in" {
@@ -194,6 +199,11 @@ run "google_sign_in" {
   variables {
     google_client_id     = "123-abc.apps.googleusercontent.com"
     google_client_secret = "test-secret"
+  }
+
+  assert {
+    condition     = output.google_login == true
+    error_message = "The web build must offer Google when the app client allows it."
   }
 
   assert {

@@ -19,6 +19,9 @@ data "archive_file" "bundle" {
   type        = "zip"
   source_dir  = var.source_dir
   output_path = "${path.root}/.build/${local.name}.zip"
+  # Same zip on any machine: file modes otherwise follow the builder's umask (664 locally, 644 in
+  # CI), which changes the hash and redeploys an unchanged function (10.2).
+  output_file_mode = "0644"
 }
 
 # --- IAM (NFR-SEC-7) --------------------------------------------------------------------------
