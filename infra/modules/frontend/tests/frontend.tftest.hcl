@@ -35,6 +35,7 @@ variables {
   environment                       = "test"
   photo_bucket_regional_domain_name = "photo-app-photos-test-123456789012.s3.us-east-1.amazonaws.com"
   api_endpoint                      = "https://abc123.execute-api.us-east-1.amazonaws.com"
+  auth_domain_url                   = "https://photo-app-test-123456789012.auth.us-east-1.amazoncognito.com"
 }
 
 run "site_bucket_is_private_and_encrypted" {
@@ -181,4 +182,51 @@ run "private_key_is_a_secure_string" {
     condition     = aws_ssm_parameter.media_private_key.name == "/photo-app/test/cloudfront/media-private-key"
     error_message = "The parameter lives under /photo-app/<env>/."
   }
+}
+
+run "site_sends_a_strict_csp" {
+  command = plan
+
+  assert {
+    condition = (
+      aws_cloudfront_distribution.main.default_cache_behavior[0].response_headers_policy_id == aws_cloudfront_response_headers_policy.site.id
+    )
+    error_message = "The site behavior must use the app's own headers policy with the CSP (12.2a)."
+  }
+
+  assert {
+    condition = alltrue([
+      for directive in [
+        "default-src 'self'",
+        "script-src 'self'",
+        "object-src 'none'",
+        "frame-ancestors 'none'",
+        "connect-src 'self' https://photo-app-test-123456789012.auth.us-east-1.amazoncognito.com https://photo-app-photos-test-123456789012.s3.us-east-1.amazonaws.com",
+      ] : contains(split("; ", one(aws_cloudfront_response_headers_policy.site.security_headers_config).content_security_policy[0].content_security_policy), directive)
+    ])
+    error_message = "The CSP must allow only the app's origin, Cognito and the photo bucket (12.2a)."
+  }
+
+  assert {
+    condition     = !strcontains(one(aws_cloudfront_response_headers_policy.site.security_headers_config).content_security_policy[0].content_security_policy, "unsafe-")
+    error_message = "No unsafe-inline/unsafe-eval: the build has no inline scripts or styles."
+  }
+
+  assert {
+    condition = (
+      one(aws_cloudfront_response_headers_policy.site.security_headers_config).strict_transport_security[0].access_control_max_age_sec >= 31536000 &&
+      one(aws_cloudfront_response_headers_policy.site.security_headers_config).frame_options[0].frame_option == "DENY"
+    )
+    error_message = "Keep the managed security headers (HSTS 1 year, no framing)."
+  }
+}
+
+run "rejects_auth_domain_with_path" {
+  command = plan
+
+  variables {
+    auth_domain_url = "https://photo-app-test.auth.us-east-1.amazoncognito.com/"
+  }
+
+  expect_failures = [var.auth_domain_url]
 }

@@ -68,20 +68,23 @@ def put_pending(dynamodb: Any, declared: int = 1) -> None:
     dynamodb.put_item(TableName=TABLE, Item={**USAGE_KEY, "bytesReserved": {"N": str(declared)}})
 
 
-def s3_event(key: str, size: int) -> dict[str, Any]:
+def s3_event(key: str, size: int, etag: str | None = None) -> dict[str, Any]:
+    obj: dict[str, Any] = {"key": key, "size": size}
+    if etag is not None:
+        obj["eTag"] = etag  # Events carry it without quotes.
     return {
         "Records": [
             {
                 "eventTime": "2026-10-19T08:00:05.000Z",
-                "s3": {"bucket": {"name": BUCKET}, "object": {"key": key, "size": size}},
+                "s3": {"bucket": {"name": BUCKET}, "object": obj},
             }
         ]
     }
 
 
 def upload(s3: Any, data: bytes, key: str = ORIGINAL) -> dict[str, Any]:
-    s3.put_object(Bucket=BUCKET, Key=key, Body=data)
-    return s3_event(key, len(data))
+    etag = s3.put_object(Bucket=BUCKET, Key=key, Body=data)["ETag"].strip('"')
+    return s3_event(key, len(data), etag)
 
 
 def get(dynamodb: Any, key: dict[str, Any]) -> dict[str, Any] | None:
@@ -295,3 +298,96 @@ def test_transient_errors_are_raised(aws: tuple[Any, Any], jpeg_plain: bytes) ->
     item = get(dynamodb, PHOTO_KEY)
     assert item is not None
     assert item["status"]["S"] == "pending"
+
+
+# 12.2b: the upload POST stays valid for 15 min, so the original can be overwritten after it was
+# processed. The photo must not stay `ready` with derived images of other bytes.
+
+
+def same_size_variant(data: bytes) -> bytes:
+    """Other bytes of the same length (the upload policy pins the exact size), still a decodable
+    JPEG: one bit flipped in the middle of the image data."""
+    middle = len(data) // 2
+    return data[:middle] + bytes([data[middle] ^ 0x01]) + data[middle + 1 :]
+
+
+def test_ready_stores_the_processed_etag(aws: tuple[Any, Any], jpeg_plain: bytes) -> None:
+    s3, dynamodb = aws
+    put_pending(dynamodb, declared=len(jpeg_plain))
+    handler_module.handler(upload(s3, jpeg_plain))
+    item = get(dynamodb, PHOTO_KEY)
+    assert item is not None
+    head = s3.head_object(Bucket=BUCKET, Key=ORIGINAL)
+    assert item["originalETag"]["S"] == head["ETag"].strip('"')
+
+
+def test_original_replaced_after_processing_fails_the_photo(
+    aws: tuple[Any, Any], jpeg_plain: bytes
+) -> None:
+    s3, dynamodb = aws
+    put_pending(dynamodb, declared=len(jpeg_plain))
+    handler_module.handler(upload(s3, jpeg_plain))
+    usage_before = get(dynamodb, USAGE_KEY)
+
+    result = handler_module.handler(upload(s3, same_size_variant(jpeg_plain)))
+
+    assert result["results"][0] == {
+        "key": ORIGINAL,
+        "status": "failed",
+        "reason": "original replaced after processing",
+    }
+    item = get(dynamodb, PHOTO_KEY)
+    assert item is not None
+    assert item["status"]["S"] == "failed"
+    assert item["failureReason"]["S"] == "original replaced after processing"
+    current = s3.head_object(Bucket=BUCKET, Key=ORIGINAL)["ETag"].strip('"')
+    assert item["originalETag"]["S"] == current
+    assert not exists(s3, THUMB) and not exists(s3, PREVIEW)
+    # Same size, and failed photos count too: Usage doesn't move.
+    assert get(dynamodb, USAGE_KEY) == usage_before
+
+    # Its own duplicate event changes nothing more.
+    again = handler_module.handler(s3_event(ORIGINAL, len(jpeg_plain), current))
+    assert again["results"][0]["status"] == "skipped"
+
+
+def test_duplicate_event_with_etag_is_skipped(aws: tuple[Any, Any], jpeg_plain: bytes) -> None:
+    s3, dynamodb = aws
+    put_pending(dynamodb, declared=len(jpeg_plain))
+    event = upload(s3, jpeg_plain)
+    handler_module.handler(event)
+    assert handler_module.handler(event)["results"][0]["reason"] == "already processed"
+    item = get(dynamodb, PHOTO_KEY)
+    assert item is not None and item["status"]["S"] == "ready"
+    assert exists(s3, THUMB)
+
+
+def test_older_event_after_processing_newer_bytes_is_skipped(
+    aws: tuple[Any, Any], jpeg_plain: bytes
+) -> None:
+    # Overwritten before the first event was handled: processing read the newer bytes, so the
+    # first event arriving afterwards is stale, not a replacement.
+    s3, dynamodb = aws
+    put_pending(dynamodb, declared=len(jpeg_plain))
+    first = upload(s3, jpeg_plain)
+    second = upload(s3, same_size_variant(jpeg_plain))
+    assert handler_module.handler(first)["results"][0]["status"] == "ready"
+
+    assert handler_module.handler(second)["results"][0]["reason"] == "already processed"
+    item = get(dynamodb, PHOTO_KEY)
+    assert item is not None and item["status"]["S"] == "ready"
+    assert exists(s3, THUMB)
+
+
+def test_photos_without_stored_etag_are_skipped(aws: tuple[Any, Any], jpeg_plain: bytes) -> None:
+    # Processed before 12.2b: no ETag to compare with, and their upload POSTs expired long ago.
+    s3, dynamodb = aws
+    put_pending(dynamodb, declared=len(jpeg_plain))
+    handler_module.handler(upload(s3, jpeg_plain))
+    dynamodb.update_item(TableName=TABLE, Key=PHOTO_KEY, UpdateExpression="REMOVE originalETag")
+
+    result = handler_module.handler(upload(s3, same_size_variant(jpeg_plain)))
+
+    assert result["results"][0]["reason"] == "already processed"
+    item = get(dynamodb, PHOTO_KEY)
+    assert item is not None and item["status"]["S"] == "ready"

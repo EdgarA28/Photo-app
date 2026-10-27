@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Version** | 0.12 |
-| **Date** | 2026-10-26 |
+| **Version** | 0.13 |
+| **Date** | 2026-10-27 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
 
@@ -344,7 +344,7 @@ Initial design; refine during implementation.
 
 | Entity | PK | SK | GSI1PK | GSI1SK | Attributes |
 |---|---|---|---|---|---|
-| Photo | `USER#{userId}` | `PHOTO#{photoId}` | `USER#{userId}` | `TAKEN#{takenAt}#{photoId}` | status (`pending`/`ready`/`failed`), fileName, contentType, sizeBytes, width, height, takenAt, uploadedAt, originalKey |
+| Photo | `USER#{userId}` | `PHOTO#{photoId}` | `USER#{userId}` | `TAKEN#{takenAt}#{photoId}` | status (`pending`/`ready`/`failed`), fileName, contentType, sizeBytes, width, height, takenAt, uploadedAt, originalKey, originalETag |
 | Album | `USER#{ownerId}` | `ALBUM#{albumId}` | — | — | name, createdAt, coverPhotoId, photoCount |
 | Album membership | `ALBUM#{albumId}` | `PHOTO#{photoId}` | — | — | ownerId, addedAt |
 | Album share | `ALBUM#{albumId}` | `SHARE#{userId}` | `SHAREDWITH#{userId}` | `ALBUM#{albumId}` | ownerId, sharedAt |
@@ -433,6 +433,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 | Output headers | `Content-Type: image/jpeg`, `Cache-Control: public, max-age=31536000, immutable`, storage class STANDARD |
 | Limits | Skip sources > 50 MB; memory 1536 MB; timeout 60 s |
 | Errors — permanent (corrupt / unsupported) | Log, set DynamoDB status `failed`, return success (no retry) |
+| Replaced original | The item stores the processed bytes' ETag (`originalETag`). If the original is overwritten after processing (the upload POST is valid 15 min), the photo becomes `failed` and its thumb/preview are deleted, so recipients can't download other bytes than they were shown |
 | Errors — transient | Raise → Lambda async retries (2×) → SQS DLQ (14-day retention) |
 | Packaging | Native wheels for `manylinux` aarch64 (`pip install --platform manylinux2014_aarch64 --only-binary=:all:`) or Docker build |
 | Logs | Structured JSON; 30-day retention |
@@ -547,7 +548,7 @@ OpenTofu, region `us-east-1`. AWS Organization with separate accounts: **dev**, 
 | `api` | API Gateway HTTP API, JWT authorizer, API Lambda, IAM, throttling, log group |
 | `auth` | Cognito user pool, domain, Google IdP, app client, pre-sign-up trigger |
 | `database` | DynamoDB table (on-demand, PITR in prod), GSI1 |
-| `frontend` | Site bucket, CloudFront distribution (OAC; behaviors for `/`, `/api/*`, `/users/*`), SPA fallback (CloudFront Function on the default behavior: extension-less paths → `/index.html`; no distribution-wide error responses, so API/image 403/404 stay real), CloudFront key group for signed cookies/URLs, ACM cert, optional WAF |
+| `frontend` | Site bucket, CloudFront distribution (OAC; behaviors for `/`, `/api/*`, `/users/*`), security headers with a strict Content-Security-Policy on the site (self only, plus Cognito and the photo bucket for `connect-src`), SPA fallback (CloudFront Function on the default behavior: extension-less paths → `/index.html`; no distribution-wide error responses, so API/image 403/404 stay real), CloudFront key group for signed cookies/URLs, ACM cert, optional WAF |
 
 All resources tagged `Project=photo-app`, `Environment={env}`, `ManagedBy=opentofu`.
 
@@ -713,6 +714,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.13 | 2026-10-27 | Security review 12.2: Content-Security-Policy on the site (§13.1 `frontend`); replaced originals fail the photo, `originalETag` on Photo items (§8.2, §10) |
 | 0.10 | 2026-10-25 | Optional sign-up allowlist in the pre sign-up trigger (§11.3), limiting FR-AUTH-1/2 to listed emails until launch |
 | 0.9 | 2026-10-25 | Shared-album photos: album pages carry signed thumbnails, `GET /photos/{id}?albumId=` the signed preview (§9) |
 | 0.8 | 2026-10-25 | Media cookies signed with SHA-256: four cookies incl. `CloudFront-Hash-Algorithm` (§9) |

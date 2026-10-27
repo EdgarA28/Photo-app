@@ -13,6 +13,16 @@ variable "api_endpoint" {
   type        = string
 }
 
+variable "auth_domain_url" {
+  description = "Cognito domain (auth module `domain_url`), https://<prefix>.auth.<region>.amazoncognito.com: the app calls its token and revocation endpoints, so the CSP allows it in connect-src."
+  type        = string
+
+  validation {
+    condition     = can(regex("^https://[a-z0-9.-]+$", var.auth_domain_url))
+    error_message = "auth_domain_url must be https://<host> without a path or trailing slash."
+  }
+}
+
 variable "price_class" {
   description = "CloudFront price class. PriceClass_100 = North America + Europe edges (cheapest)."
   type        = string

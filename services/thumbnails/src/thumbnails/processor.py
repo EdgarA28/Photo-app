@@ -11,6 +11,11 @@ Contract with the API (§8.2):
 - An original without a Photo item is an orphan and gets deleted (task 6.12): the API writes the
   item before it hands out the upload POST, so a missing item means the photo was deleted, e.g.
   while its upload was still in flight (the POST stays valid for 15 min).
+- The same POST can overwrite the original after processing (12.2b). The item keeps the ETag of
+  the bytes that were processed (`originalETag`); when a later event finds other bytes, the photo
+  becomes `failed` and loses its thumb and preview, so share recipients (who see `ready` photos
+  only) can't download something other than what they were shown. Not reprocessed: derived images
+  are cached as immutable under the same URL, so new ones wouldn't reach viewers.
 
 Errors: corrupt/unsupported images are permanent (mark `failed`, return normally). Everything
 else (S3/DynamoDB/network) is transient and raised, so Lambda retries and then uses the DLQ.
@@ -45,7 +50,9 @@ class Processor:
         self._dynamodb = dynamodb
         self._table = table_name
 
-    def process(self, bucket: str, key: str, size: int, event_time: datetime) -> Outcome:
+    def process(
+        self, bucket: str, key: str, size: int, event_time: datetime, etag: str | None = None
+    ) -> Outcome:
         parsed = parse_original_key(key)
         if parsed is None:
             # Loop protection (§10): our own thumbs/previews and anything unexpected.
@@ -61,11 +68,13 @@ class Processor:
             logger.warning("Deleted original without a photo item", extra=log)
             return Outcome("skipped", "orphaned original deleted")
         if item.get("status", {}).get("S") != "pending":
-            return Outcome("skipped", "already processed")
+            return self._check_unchanged(bucket, key, item, _etag(etag), log)
         declared = int(item.get("sizeBytes", {}).get("N", "0"))
 
         if size > MAX_SOURCE_BYTES:
-            return self._fail(user_id, photo_id, size, declared, f"source is {size} bytes", log)
+            return self._fail(
+                user_id, photo_id, size, declared, f"source is {size} bytes", _etag(etag), log
+            )
 
         try:
             obj = self._s3.get_object(Bucket=bucket, Key=key)
@@ -74,14 +83,18 @@ class Processor:
                 return Outcome("skipped", "original no longer exists")
             raise
         size = obj["ContentLength"]
+        # The bytes actually read, which may already be newer than the event's (12.2b).
+        processed_etag = _etag(obj.get("ETag"))
         if size > MAX_SOURCE_BYTES:
-            return self._fail(user_id, photo_id, size, declared, f"source is {size} bytes", log)
+            return self._fail(
+                user_id, photo_id, size, declared, f"source is {size} bytes", processed_etag, log
+            )
         data = obj["Body"].read()
 
         try:
             image = process_image(data)
         except PermanentImageError as e:
-            return self._fail(user_id, photo_id, size, declared, str(e), log)
+            return self._fail(user_id, photo_id, size, declared, str(e), processed_etag, log)
 
         thumb, preview = thumb_key(user_id, photo_id), preview_key(user_id, photo_id)
         self._put_jpeg(bucket, thumb, image.thumb)
@@ -95,13 +108,14 @@ class Processor:
             size,
             declared,
             "SET #status = :ready, width = :w, height = :h, takenAt = :t, GSI1SK = :gsi, "
-            "sizeBytes = :size, processedAt = :now",
+            "sizeBytes = :size, processedAt = :now" + _etag_set(processed_etag),
             {
                 ":ready": {"S": "ready"},
                 ":w": {"N": str(image.width)},
                 ":h": {"N": str(image.height)},
                 ":t": {"S": taken_at},
                 ":gsi": {"S": f"TAKEN#{taken_at}#{photo_id}"},
+                **_etag_value(processed_etag),
             },
         )
         if not updated:
@@ -125,6 +139,7 @@ class Processor:
         size: int,
         declared: int,
         reason: str,
+        etag: str | None,
         log: dict[str, str],
     ) -> Outcome:
         logger.warning("Photo failed", extra={**log, "reason": reason})
@@ -133,10 +148,72 @@ class Processor:
             photo_id,
             size,
             declared,
-            "SET #status = :failed, failureReason = :reason, sizeBytes = :size, processedAt = :now",
-            {":failed": {"S": "failed"}, ":reason": {"S": reason[:500]}},
+            "SET #status = :failed, failureReason = :reason, sizeBytes = :size, processedAt = :now"
+            + _etag_set(etag),
+            {":failed": {"S": "failed"}, ":reason": {"S": reason[:500]}, **_etag_value(etag)},
         )
         return Outcome("failed", reason) if updated else Outcome("skipped", "photo changed")
+
+    def _check_unchanged(
+        self,
+        bucket: str,
+        key: str,
+        item: dict[str, Any],
+        event_etag: str | None,
+        log: dict[str, str],
+    ) -> Outcome:
+        """An event for a photo that is no longer `pending`: a duplicate or retry, or the original
+        was overwritten after processing (12.2b). Photos processed before `originalETag` existed
+        are skipped: their upload POSTs expired long ago."""
+        stored = item.get("originalETag", {}).get("S")
+        if stored is None or event_etag == stored:
+            return Outcome("skipped", "already processed")
+        try:
+            current = _etag(self._s3.head_object(Bucket=bucket, Key=key).get("ETag"))
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+                return Outcome("skipped", "original no longer exists")
+            raise
+        if current == stored:
+            # An older event; the processed bytes are still the stored ones.
+            return Outcome("skipped", "already processed")
+
+        user_id, photo_id = log["userId"], log["photoId"]
+        reason = "original replaced after processing"
+        try:
+            # Usage is unchanged: the upload policy pins the exact size, and failed photos count.
+            self._dynamodb.update_item(
+                TableName=self._table,
+                Key={"PK": {"S": f"USER#{user_id}"}, "SK": {"S": f"PHOTO#{photo_id}"}},
+                UpdateExpression=(
+                    "SET #status = :failed, failureReason = :reason, processedAt = :now"
+                    + _etag_set(current)
+                ),
+                ConditionExpression="originalETag = :stored",
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={
+                    ":failed": {"S": "failed"},
+                    ":reason": {"S": reason},
+                    ":now": {"S": to_iso(datetime.now(UTC))},
+                    ":stored": {"S": stored},
+                    **_etag_value(current),
+                },
+            )
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                return Outcome("skipped", "photo changed")
+            raise
+        self._s3.delete_objects(
+            Bucket=bucket,
+            Delete={
+                "Objects": [
+                    {"Key": thumb_key(user_id, photo_id)},
+                    {"Key": preview_key(user_id, photo_id)},
+                ]
+            },
+        )
+        logger.warning("Original replaced after processing", extra=log)
+        return Outcome("failed", reason)
 
     def _get_photo(self, user_id: str, photo_id: str) -> dict[str, Any] | None:
         response = self._dynamodb.get_item(
@@ -212,3 +289,16 @@ class Processor:
                 return False
             raise
         return True
+
+
+def _etag(value: str | None) -> str | None:
+    """ETags without quotes: S3 events send them bare, GetObject/HeadObject quoted."""
+    return value.strip('"') if value else None
+
+
+def _etag_set(etag: str | None) -> str:
+    return ", originalETag = :etag" if etag else ""
+
+
+def _etag_value(etag: str | None) -> dict[str, Any]:
+    return {":etag": {"S": etag}} if etag else {}

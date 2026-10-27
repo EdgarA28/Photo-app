@@ -86,5 +86,6 @@ module "frontend" {
   environment                       = local.environment
   photo_bucket_regional_domain_name = module.storage.bucket_regional_domain_name
   api_endpoint                      = module.api.api_endpoint
+  auth_domain_url                   = module.auth.domain_url
   force_destroy                     = true
 }

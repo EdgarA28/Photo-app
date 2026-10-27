@@ -18,6 +18,21 @@ locals {
   site_bucket_name = "photo-app-site-${var.environment}-${data.aws_caller_identity.current.account_id}"
 
   api_domain = trimprefix(var.api_endpoint, "https://")
+
+  content_security_policy = join("; ", [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self'",
+    "img-src 'self' blob: data:",
+    "font-src 'self'",
+    "connect-src 'self' ${var.auth_domain_url} https://${var.photo_bucket_regional_domain_name}",
+    "worker-src 'self'",
+    "manifest-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ])
 }
 
 # --- Site bucket (NFR-SEC-3, NFR-SEC-4) -------------------------------------------------------
@@ -136,6 +151,38 @@ data "aws_cloudfront_response_headers_policy" "security_headers" {
   name = "Managed-SecurityHeadersPolicy"
 }
 
+# The app's own headers (12.2a): the managed security headers plus a Content-Security-Policy, so
+# an injected script couldn't run or send the refresh token (IndexedDB) anywhere. The app has no
+# inline scripts or styles and loads everything from its own origin; it calls only the API and
+# images (same origin), Cognito (token refresh/revocation) and the photo bucket (upload POST).
+# Also served with sw.js, so it applies to the service worker's uploads and token refreshes.
+resource "aws_cloudfront_response_headers_policy" "site" {
+  name    = "${local.name}-site"
+  comment = "Security headers + CSP for the web app"
+
+  security_headers_config {
+    content_security_policy {
+      content_security_policy = local.content_security_policy
+      override                = true
+    }
+    content_type_options {
+      override = true
+    }
+    frame_options {
+      frame_option = "DENY"
+      override     = true
+    }
+    referrer_policy {
+      referrer_policy = "strict-origin-when-cross-origin"
+      override        = true
+    }
+    strict_transport_security {
+      access_control_max_age_sec = 31536000
+      override                   = true
+    }
+  }
+}
+
 resource "aws_cloudfront_distribution" "main" {
   comment             = "Photo app (${var.environment})"
   enabled             = true
@@ -204,7 +251,7 @@ resource "aws_cloudfront_distribution" "main" {
     cached_methods             = ["GET", "HEAD"]
     compress                   = true
     cache_policy_id            = data.aws_cloudfront_cache_policy.caching_optimized.id
-    response_headers_policy_id = data.aws_cloudfront_response_headers_policy.security_headers.id
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.site.id
 
     function_association {
       event_type   = "viewer-request"

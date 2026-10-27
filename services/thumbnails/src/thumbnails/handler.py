@@ -35,10 +35,11 @@ def handler(event: dict[str, Any], context: Any = None) -> dict[str, list[dict[s
         bucket = s3["bucket"]["name"]
         key = unquote_plus(s3["object"]["key"])  # Event keys are URL-encoded.
         size = int(s3["object"].get("size", 0))
+        etag = s3["object"].get("eTag")
         event_time = _parse_event_time(record.get("eventTime"))
 
         # Transient errors propagate: Lambda retries the whole event (idempotent per photo).
-        outcome = _processor().process(bucket, key, size, event_time)
+        outcome = _processor().process(bucket, key, size, event_time, etag)
         results.append({"key": key, "status": outcome.status, "reason": outcome.reason})
         if outcome.status == "skipped":
             logger.info("Skipped object", extra={"key": key, "reason": outcome.reason})
