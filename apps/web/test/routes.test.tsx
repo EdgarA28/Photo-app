@@ -31,7 +31,7 @@ describe("routes (§12.1)", () => {
   it("drops invalid gallery search params instead of failing", async () => {
     const { router } = await renderAt("/gallery?album=nope&sort=random");
     expect(router.state.location.search).toEqual({ sort: "taken-desc" });
-    expect((await screen.findByRole("combobox", { name: "Sort order" })).textContent).toBe(
+    expect((await screen.findByRole("combobox", { name: "Sort order" })).textContent).toContain(
       "Newest first",
     );
   });

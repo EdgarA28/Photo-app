@@ -85,7 +85,8 @@ function Gallery() {
                 })
               }
             />
-            <div className="flex flex-wrap gap-2">
+            {/* One row on a phone too: the album picker gives up width (FR-GAL-7). */}
+            <div className="flex w-full gap-2 md:w-auto">
               <GalleryFilters album={album} sort={sort} />
               {(photos.length > 0 || selection.active) && (
                 <SelectButton
@@ -343,6 +344,12 @@ const SORT_LABELS: Record<PhotoSort, string> = {
   "taken-asc": "Oldest first",
 };
 
+/** Shown in the closed picker on a phone, where the full labels don't fit on one row. */
+const SHORT_SORT_LABELS: Record<PhotoSort, string> = {
+  "taken-desc": "Newest",
+  "taken-asc": "Oldest",
+};
+
 function GalleryFilters({ album, sort }: { album: string | undefined; sort: PhotoSort }) {
   const { api } = Route.useRouteContext();
   const navigate = Route.useNavigate();
@@ -353,7 +360,7 @@ function GalleryFilters({ album, sort }: { album: string | undefined; sort: Phot
   const unlisted = album !== undefined && !items.some((a) => a.albumId === album);
 
   return (
-    <div className="flex gap-2">
+    <div className="flex min-w-0 flex-1 gap-2 md:flex-none">
       <Select
         value={album ?? ALL_PHOTOS}
         onValueChange={(value) =>
@@ -366,7 +373,7 @@ function GalleryFilters({ album, sort }: { album: string | undefined; sort: Phot
           })
         }
       >
-        <SelectTrigger aria-label="Album" className="w-44">
+        <SelectTrigger aria-label="Album" className="min-w-0 flex-1 md:w-44 md:flex-none">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -385,8 +392,14 @@ function GalleryFilters({ album, sort }: { album: string | undefined; sort: Phot
           void navigate({ search: (prev) => ({ ...prev, sort: value as PhotoSort }) })
         }
       >
-        <SelectTrigger aria-label="Sort order" className="w-36">
-          <SelectValue />
+        <SelectTrigger aria-label="Sort order" className="shrink-0 md:w-36">
+          <SelectValue>
+            {/* Screen readers always get the full label. */}
+            <span aria-hidden className="md:hidden">
+              {SHORT_SORT_LABELS[sort]}
+            </span>
+            <span className="sr-only md:not-sr-only">{SORT_LABELS[sort]}</span>
+          </SelectValue>
         </SelectTrigger>
         <SelectContent>
           {photoSortSchema.options.map((value) => (

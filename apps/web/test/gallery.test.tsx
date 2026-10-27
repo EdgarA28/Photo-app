@@ -261,7 +261,9 @@ describe("gallery filters in the URL (FR-GAL-3)", () => {
     await renderAt(`/gallery?album=${album.albumId}&sort=taken-asc`, { api });
     expect(await screen.findByText("This album has no photos yet.")).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Upload photos" })).toBeNull();
-    expect(screen.getByRole("combobox", { name: "Sort order" }).textContent).toBe("Oldest first");
+    expect(screen.getByRole("combobox", { name: "Sort order" }).textContent).toContain(
+      "Oldest first",
+    );
     await waitFor(() =>
       expect(screen.getByRole("combobox", { name: "Album" }).textContent).toBe("Holidays"),
     );
