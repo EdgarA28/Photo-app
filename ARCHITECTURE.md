@@ -54,7 +54,7 @@
 | Thumbnail Lambda | `services/thumbnails` | 🚧 | Handler, image pipeline, S3-key mirror, orphan cleanup + 76 pytest tests (6.1–6.7, 6.12); arm64 package `build.sh` → `dist/` (6.8); not deployed yet (6.9–6.10) |
 | Auth trigger Lambda | `services/auth-triggers` | ✅ (dev) | Pre sign-up handler (Google → native account linking, refuses duplicate email sign-ups) + 24 tests (4.5); **deployed in dev** (4.6), linking verified manually |
 | Web app / PWA | `apps/web` | 🚧 | 8.1 scaffold: Vite + React, file routes of spec §12.1 (placeholder pages), Query client, Zod-validated gallery search, `/api` dev proxy. 8.2 Tailwind CSS 4 + shadcn/ui (D-3). 8.3 login (oidc-client-ts, PKCE, refresh, guard, logout). 8.4 API client (bearer, Zod, 401 retry); settings shows `GET /me`. 8.5 app shell (side rail / bottom tab bar, full-screen viewer, system dark mode). 8.6 gallery (infinite query, virtualized justified rows, album/sort filters in the URL). 8.7 processing/failed tiles + polling while photos process. 8.8 full-screen viewer (preview, prev/next through the gallery list, arrow keys, Escape, swipe). 8.9 download original + delete with confirmation in the viewer. 8.10 upload queue (IndexedDB, picker / drag & drop / camera, 3 parallel, progress, automatic retry, one uploading tab, gallery tiles + nav badge). 8.11 albums (list, create, rename, delete, album view, select mode, add/remove photos, cover; album actions in the viewer). 8.12 sharing (share dialog by email or @username, revoke, "Shared with me", read-only shared album view, "Shared by" in the viewer). 8.13 settings (account, quota bar, username set/change, logout clearing the upload queue and Query cache). 8.14 storage-full handling (space warning, grouped banner, Retry all), session-expired and offline messages. 8.15 "choose a username" prompt after login. **Phase 8 complete.** Thumbnails and previews show once Phase 7 serves them. 9.1 web app manifest + icons (installable metadata). 9.2 service worker caching: precached shell, offline navigation fallback, CacheFirst thumbnails. 9.4 service worker registered (`registerType: 'prompt'`) with an "Update available" prompt and hourly update checks. 9.3 Query cache saved to IndexedDB per user and restored on start; offline start with the stored session's `sub`. 9.5 Background Sync: the service worker uploads the queue after the app is closed or frozen (Chromium); refresh token now in IndexedDB. 9.6 Android share target: photos shared to the app land in the upload queue |
-| CI/CD workflows | `.github/workflows` | 🚧 | `ci.yml` (10.1: checks, build, dev `tofu plan` + PR comment); `deploy.yml` (10.2: dev deploy after CI passes on `main`; written, first run pending) |
+| CI/CD workflows | `.github/workflows` | 🚧 | `ci.yml` (10.1: checks, build, dev `tofu plan` + PR comment); `deploy.yml` (10.2: dev deploy after CI passes on `main`; running since `87fbe5c`) |
 
 ---
 
@@ -339,7 +339,7 @@ Photo-app/
 │       ├── api/                 ✅ HTTP API, JWT authorizer, API Lambda, IAM, throttling (+ tests/)
 │       └── frontend/            🚧 site bucket, CloudFront, SPA rewrite function (functions/), media signing keys (media-keys.tf) (+ tests/)
 │
-└── .github/workflows/           🚧 ci.yml ✅ (checks + dev plan), deploy.yml 🚧 (dev; prod job 10.3)
+└── .github/workflows/           🚧 ci.yml ✅ (checks + dev plan), deploy.yml 🚧 (dev ✅; prod job 10.3 📋)
 ```
 
 ---
@@ -970,7 +970,7 @@ Still to come: ACM cert + custom domain (11.1), WAF (11.2), CSP header.
 | GitHub secrets (dev) | ✅ | Repository secrets `TF_VAR_GOOGLE_CLIENT_SECRET`, `TF_VAR_ALLOWED_EMAILS` (the plan needs them; without them it would turn Google off and open sign-up) |
 | `prod` environment + secrets | 📋 | Environment secrets in `prod` with required approval (10.3) |
 | `ci.yml` (lint, typecheck, tests, build, `tofu plan`) | ✅ | See below |
-| `deploy.yml` (build, apply, upload site, invalidate, smoke test) | 🚧 | Dev job written (10.2), first run pending; prod job 10.3 |
+| `deploy.yml` (build, apply, upload site, invalidate, smoke test) | 🚧 | Dev job ✅ (first run `87fbe5c`, 2026-10-27); prod job 10.3 📋 |
 
 **`ci.yml`** (10.1), on every push and pull request, Ubuntu 24.04 runners:
 
@@ -984,7 +984,7 @@ Still to come: ACM cert + custom domain (11.1), WAF (11.2), CSP header.
 - Steps: build the API + auth trigger (esbuild) and thumbnails (`build:py`) → OIDC → `photo-app-ci-deploy` → `tofu plan -out` (secrets only on this step) → `tofu apply` of that plan → read outputs → `vite build` with `VITE_COGNITO_*` / `VITE_GOOGLE_LOGIN` from them (new output `google_login`, from the auth module) → `apps/web/scripts/upload-site.sh` → smoke test.
 - Upload order (`upload-site.sh`): `assets/*` with `public, max-age=31536000, immutable` (old assets kept for open tabs), other root files `no-cache`, `manifest.webmanifest` (`application/manifest+json`), `sw.js`, `index.html` last; invalidation of `/`, `/index.html`, `/sw.js`, `/manifest.webmanifest`, waited for.
 - Smoke test: `GET {app}/api/health` → `{"status":"ok"}`; `index.html` and `sw.js` from CloudFront byte-equal to the build; `/` 200.
-- Reproducible Lambda zips: every `archive_file` sets `output_file_mode = "0644"`; without it the builder's umask (664 locally, 644 on runners) changed the hash and redeployed unchanged code. Checked: same hashes for builds under umask 002 and 022.
+- Reproducible Lambda zips: every `archive_file` sets `output_file_mode = "0644"`; without it the builder's umask (664 locally, 644 on runners) changed the hash and redeployed unchanged code. Checked: same hashes for builds under umask 002 and 022, and a local plan after the first CI deploy is clean.
 
 - Hardening: default `contents: read`; `id-token`/`pull-requests: write` only on `plan-dev`; third-party actions pinned to commit SHAs (tag in a comment), `actions/*` on major tags; the `TF_VAR_*` secrets only on the steps that use them.
 
@@ -1139,3 +1139,4 @@ Target design: spec §12 (TanStack Router file routes with an authenticated layo
 | 2026-10-27 | Bootstrap (dev): `photo-app-ci-plan` may `kms:Decrypt` via SSM for `/photo-app/*` parameters, needed to refresh the SecureString media key in CI plans; applied, checked with the IAM policy simulator (§12). |
 | 2026-10-27 | Bootstrap (dev): CI role trust uses GitHub's current `sub` format with immutable IDs (`repo:EdgarA28@139340405/Photo-app@1424847030:…`); the name-only pattern refused the first CI run (§12). |
 | 2026-10-27 | 10.2: `deploy.yml` (dev deploy after CI succeeds on `main`: build, plan + apply with the deploy role, web build from outputs, `upload-site.sh`, smoke test); `google_login` output (auth module + envs, tested); `archive_file` `output_file_mode = "0644"` for reproducible zips; CI plans use `-lock-timeout` instead of a concurrency group (§13). |
+| 2026-10-27 | First automatic dev deploy (`87fbe5c`): smoke test passed, local re-plan clean, thumbnail Lambda invoke OK (§13). |
