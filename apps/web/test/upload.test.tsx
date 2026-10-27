@@ -347,6 +347,29 @@ describe("photos shared from Android's share sheet (9.6, FR-PWA-4)", () => {
     });
   });
 
+  it("uploads only the photos shown; a share arriving meanwhile is offered on its own (9.8)", async () => {
+    const { api, queue, store } = setup();
+    const shareInbox = inboxWith(testFile("shown.jpg"));
+    await renderAt("/upload", { api, uploads: queue, shareInbox });
+
+    const card = await screen.findByRole("region", { name: "1 photo shared to this app" });
+    expect(within(card).getByTitle("shown.jpg")).toBeTruthy();
+    // Another POST to the share target while the card is up (e.g. from a hostile page).
+    shareInbox.files = [testFile("later-1.jpg"), testFile("later-2.jpg")];
+    fireEvent.click(within(card).getByRole("button", { name: "Upload" }));
+
+    // The shown photo was replaced, so nothing is uploaded; the newer share waits for a decision.
+    expect(await screen.findByRole("region", { name: "2 photos shared to this app" })).toBeTruthy();
+    expect(store.items.size).toBe(0);
+    expect(shareInbox.files.map((file) => file.name)).toEqual(["later-1.jpg", "later-2.jpg"]);
+  });
+
+  it("says how many shared files the service worker left out (9.8)", async () => {
+    const { api, queue } = setup();
+    await renderAt("/upload?shared=received&skipped=2", { api, uploads: queue });
+    expect(await screen.findByText(/2 shared files were left out/)).toBeTruthy();
+  });
+
   it("says so when the service worker couldn't receive them", async () => {
     const { api, queue } = setup();
     await renderAt("/upload?shared=failed", { api, uploads: queue });
