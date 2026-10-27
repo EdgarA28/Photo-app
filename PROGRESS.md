@@ -249,6 +249,7 @@
   - [x] Bootstrap dev: `kms:Decrypt` via SSM for `parameter/photo-app/*` on `photo-app-ci-plan` (applied 2026-10-27 with the user's approval, 1 changed; simulator: app parameter via SSM allowed, other parameter / other service denied)
   - [x] First run (`1c02e97`, 2026-10-27): `checks` green; `plan-dev` refused at OIDC sign-in: GitHub's token `sub` is now `repo:EdgarA28@139340405/Photo-app@1424847030:…` (owner/repo IDs, seen in CloudTrail), the trusts said `repo:EdgarA28/Photo-app:…` → `dev.tfvars`/`prod.tfvars` switched to the ID form, applied in dev with approval (2 changed), re-plan clean
   - [x] First green run (`7ff3d01`, run 40528322253, 2026-10-27): both jobs pass, the plan role signs in via OIDC and plans dev
+  - [x] CI dev plan: `0 to add, 3 to change` = the three Lambdas' `source_code_hash` only (user checked the summary); a local plan of the same commit is clean, so it's CI-built zips differing from local ones (secrets and AWS fine). Recheck in 10.2: once CI deploys, consecutive CI plans should be clean, else make the bundles reproducible
   - [ ] Test PR to see the plan comment; the dev plan in CI should show only Lambda code-hash changes at most (bundles built on the runner)
 - [ ] **10.2** `deploy.yml` (dev on `main`): build all, `tofu apply`, upload site with correct `Cache-Control`, CloudFront invalidation, smoke test
 - [ ] **10.3** Prod deploy job with GitHub `prod` environment + required approval
@@ -479,3 +480,4 @@ Deferred by the user (2026-10-24): done once Phases 7–12 are finished. Until t
 | 2026-10-27 | Security review flagged the share target (9.6): inbox appends across POSTs, cap only per request, shown vs. uploaded files can differ, no size limits. Filed as 9.8 (user's choice: follow-up after 10.1). |
 | 2026-10-27 | First CI run: checks job green, plan job refused by the CI role trust (GitHub `sub` now has owner/repo IDs). Bootstrap tfvars switched to the ID form; applied in dev with approval (2 changed). |
 | 2026-10-27 | Second CI run (`7ff3d01`): both jobs green, dev plan via OIDC works. Left for 10.1: a test PR for the plan comment. |
+| 2026-10-27 | CI plan's 3 changes are the Lambda code hashes only (CI-built zips); local plan of the same commit clean. Determinism of CI builds to check in 10.2. |
