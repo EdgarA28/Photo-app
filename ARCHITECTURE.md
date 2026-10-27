@@ -804,10 +804,10 @@ Local state, one workspace per account (`terraform.tfstate.d/<ws>/`, git-ignored
 | `aws_s3_bucket_lifecycle_configuration.state` | old versions expire after 90 d (keep newest 10); abort multipart after 2 d | ✅ | — | 📋 |
 | `aws_s3_bucket_policy.state` | deny non-TLS | ✅ | — | 📋 |
 | `aws_iam_openid_connect_provider.github` | `token.actions.githubusercontent.com`, aud `sts.amazonaws.com` | ✅ | — | 📋 |
-| `aws_iam_role.ci_plan` | `photo-app-ci-plan`; trust `repo:EdgarA28/Photo-app:*` | ✅ | — | 📋 |
+| `aws_iam_role.ci_plan` | `photo-app-ci-plan`; trust `repo:EdgarA28@139340405/Photo-app@1424847030:*` (GitHub's `sub` carries the owner and repo IDs) | ✅ | — | 📋 |
 | `aws_iam_role_policy_attachment.ci_plan_readonly` | `ReadOnlyAccess` | ✅ | — | 📋 |
 | `aws_iam_role_policy.ci_plan` | inline `state-access`: state read, `*.tflock` write, `kms:Decrypt` only via SSM for `parameter/photo-app/*` (refreshing the SecureString media key), data-read denies | ✅ | — | 📋 |
-| `aws_iam_role.ci_deploy` | `photo-app-ci-deploy`; trust dev `ref:refs/heads/main`, prod `environment:prod`; 1 h sessions | ✅ | — | 📋 |
+| `aws_iam_role.ci_deploy` | `photo-app-ci-deploy`; trust dev `repo:EdgarA28@139340405/Photo-app@1424847030:ref:refs/heads/main`, prod `…:environment:prod`; 1 h sessions | ✅ | — | 📋 |
 | `aws_iam_role_policy_attachment.ci_deploy_admin` | `AdministratorAccess` (to be scoped down) | ✅ | — | 📋 |
 | `aws_budgets_budget.monthly` | `photo-app-monthly`, $5, alerts 80 %/100 % actual, 100 % forecast | — | ✅ | — |
 
@@ -1126,3 +1126,4 @@ Target design: spec §12 (TanStack Router file routes with an authenticated layo
 | 2026-10-26 | Dev site uploaded with 9.6 (share target in the served manifest) (§14). |
 | 2026-10-27 | 10.1: `.github/workflows/ci.yml` (checks + dev `tofu plan` with PR comment); dev repository secrets added (§13). |
 | 2026-10-27 | Bootstrap (dev): `photo-app-ci-plan` may `kms:Decrypt` via SSM for `/photo-app/*` parameters, needed to refresh the SecureString media key in CI plans; applied, checked with the IAM policy simulator (§12). |
+| 2026-10-27 | Bootstrap (dev): CI role trust uses GitHub's current `sub` format with immutable IDs (`repo:EdgarA28@139340405/Photo-app@1424847030:…`); the name-only pattern refused the first CI run (§12). |

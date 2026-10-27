@@ -40,7 +40,7 @@ variable "budget" {
 }
 
 variable "github_oidc" {
-  description = "GitHub Actions OIDC access (spec §14.1). deploy_subjects are the token `sub` values allowed to assume ci-deploy."
+  description = "GitHub Actions OIDC access (spec §14.1). repository as in the token `sub` (`owner@ownerId/repo@repoId`); deploy_subjects are the full `sub` values allowed to assume ci-deploy."
   type = object({
     repository      = string
     deploy_subjects = list(string)

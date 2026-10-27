@@ -247,6 +247,7 @@
   - [x] Workflow written (2026-10-27): `checks` job (all steps pass locally) + `plan-dev` job (OIDC `photo-app-ci-plan`, plan to job summary + one updated PR comment); third-party actions pinned to SHAs, secrets only on the steps that use them
   - [x] Dev repository secrets `TF_VAR_GOOGLE_CLIENT_SECRET`, `TF_VAR_ALLOWED_EMAILS` added by the user
   - [x] Bootstrap dev: `kms:Decrypt` via SSM for `parameter/photo-app/*` on `photo-app-ci-plan` (applied 2026-10-27 with the user's approval, 1 changed; simulator: app parameter via SSM allowed, other parameter / other service denied)
+  - [x] First run (`1c02e97`, 2026-10-27): `checks` green; `plan-dev` refused at OIDC sign-in: GitHub's token `sub` is now `repo:EdgarA28@139340405/Photo-app@1424847030:…` (owner/repo IDs, seen in CloudTrail), the trusts said `repo:EdgarA28/Photo-app:…` → `dev.tfvars`/`prod.tfvars` switched to the ID form, applied in dev with approval (2 changed), re-plan clean
   - [ ] First green run on GitHub (push), then a test PR to see the plan comment; the dev plan in CI should show only Lambda code-hash changes at most (bundles built on the runner)
 - [ ] **10.2** `deploy.yml` (dev on `main`): build all, `tofu apply`, upload site with correct `Cache-Control`, CloudFront invalidation, smoke test
 - [ ] **10.3** Prod deploy job with GitHub `prod` environment + required approval
@@ -475,3 +476,4 @@ Deferred by the user (2026-10-24): done once Phases 7–12 are finished. Until t
 | 2026-10-26 | Dev site uploaded by hand with Unselect all (`28ed0ee`, invalidation `I8C00HV2DWZLC8T30BWOV6TJ25`); served `index.html`, `sw.js`, `manifest.webmanifest` match the build. |
 | 2026-10-27 | 10.1: `.github/workflows/ci.yml` (checks + dev plan + PR comment; all check steps pass locally). Found the CI plan role couldn't decrypt the SecureString media key → bootstrap dev policy change applied with approval, re-plan clean, simulator checked. User added the dev repo secrets. Next: push and watch the first run. |
 | 2026-10-27 | Security review flagged the share target (9.6): inbox appends across POSTs, cap only per request, shown vs. uploaded files can differ, no size limits. Filed as 9.8 (user's choice: follow-up after 10.1). |
+| 2026-10-27 | First CI run: checks job green, plan job refused by the CI role trust (GitHub `sub` now has owner/repo IDs). Bootstrap tfvars switched to the ID form; applied in dev with approval (2 changed). |
