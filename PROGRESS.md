@@ -25,8 +25,8 @@
 1. **Select mode** (user request, on dev since `28ed0ee`): the user checks on Android that a press is one step (no tap highlight before the tick), Unselect all, and Back with the app opened on the gallery; adjustable: hold time `LONG_PRESS_MS` 400 ms and edge auto-scroll speed in `useDragSelect.ts`. Known leftover: leaving the page while selecting leaves the select-mode history entry behind (one extra Back).
 2. **Phase 10 (CI/CD)**: 10.1 done; 10.2 deployed dev automatically for the first time (`87fbe5c`), left: the user's app check + one upload. Then 10.3 (prod job). Merges to `main` now deploy dev by themselves (after CI passes). Then 10.2 `deploy.yml` (use the `photo-app-ci-deploy` role from `main`, no `environment:` for dev since the deploy trust is `ref:refs/heads/main`; join concurrency group `tofu-dev`). Phase 9 is done except 9.7 on iOS: the user has no iOS device for now; when they do: Safari → Share → Add to Home Screen, Google login inside the installed app, restart stays signed in. Risk to watch: the login state (PKCE verifier) is in `sessionStorage`; if iOS opened the Cognito/Google pages outside the app's web view, the callback would fail with a missing state. Pre-checked 2026-10-26: CloudFront serves the manifest, apple-touch-icon, icons and `sw.js` with the right types. 9.1–9.6 and 9.7 (Android) confirmed by the user on dev (2026-10-26). Open suggestion to the user: a "Recently added" sort or a hint after uploads (photos are placed by date taken, so older photos land far down). Check the running build in Settings (`Version <commit> <UTC time>`) before testing; installed apps update on Reload. Hand uploads of the site (only if CI can't; `apps/web/scripts/upload-site.sh <bucket> <distribution>` does the upload + invalidation): build with the dev `VITE_*` vars (`set -a; source apps/web/.env.development.local; set +a`), upload `assets/*` immutable first, then the other root files `no-cache` (`manifest.webmanifest` with `--content-type application/manifest+json`), `sw.js` and `index.html` last, keep old assets, invalidate `/ /index.html /sw.js /workbox-* /manifest.webmanifest`. Run locally: `pnpm --filter @photo-app/web env:dev` once (needs the dev SSO session), then `pnpm --filter @photo-app/web dev`; 6.11 is in Phase 13.
    Dev app resources (table + photo bucket + Cognito + trigger + thumbnail Lambda + DLQ + API + site bucket + CloudFront) are test resources: `AWS_PROFILE=dev tofu destroy -var-file=env.tfvars` in `infra/envs/dev` when the user says testing is done. Dev plans need `pnpm build` (trigger + API bundles), `pnpm build:py` (thumbnails) and `source ~/.config/photo-app/dev.env` (Google secret + sign-up allowlist; without it the plan turns Google off and opens sign-up).
-3. **9.8 share target hardening** (security review follow-up, after 10.1): new share replaces the inbox, upload only what was shown, type/size/total limits.
-4. Prod bootstrap (1.3/1.4/1.5 for prod) whenever the user approves it; it isn't needed until Phase 11.
+3. **9.8 share target hardening**: done in code (branch `fix/share-target`); merge → dev deploy → the user re-checks a share on Android.
+4. **Prod comes last** (user, 2026-10-27): prod bootstrap (1.3/1.4/1.5), 10.3 and Phase 11 after everything else (Phases 12–13 included).
 5. GitHub `prod` environment (required approval) + prod environment secrets with 10.3.
 
 ---
@@ -235,11 +235,12 @@
   - [x] Android: installed app, Google login stays in the app window (user, 2026-10-26)
   - [ ] iOS: not tested yet, the user has no device for now
 
-- [ ] **9.8** Share target hardening (security review finding 2026-10-27, follow-up to 9.6; do after 10.1). Any website can POST to `/share-target` (CSRF; the user's Upload tap is the only guard), and today the inbox **appends** across POSTs with the 100-file cap per request only:
-  - [ ] A new share **replaces** what is waiting (clear + put in one transaction), so planted files can't ride along with a real share
-  - [ ] Upload sends exactly the files that were shown (`take()` by the listed keys, not whatever is in the store at tap time)
-  - [ ] Limits before reading bytes: FR-UP-2 types and 50 MB per file (FR-UP-3, constants from `packages/shared`), a total cap for the inbox (count + bytes)
-  - [ ] Tests (replace, shown-only upload, limits); ARCHITECTURE §14 + changelog; dev site upload, user re-checks a share on Android
+- [~] **9.8** Share target hardening (security review finding 2026-10-27, follow-up to 9.6; do after 10.1). Any website can POST to `/share-target` (CSRF; the user's Upload tap is the only guard), and today the inbox **appends** across POSTs with the 100-file cap per request only:
+  - [x] A new share **replaces** what is waiting (`replace()`: clear + add in one transaction), so planted files can't ride along with a real share
+  - [x] Upload sends exactly the files that were shown (`list()` → `{id, file}`, `take(ids)`; Discard the same); a share arriving meanwhile is offered on its own
+  - [x] Limits before reading bytes: `checkFile` (FR-UP-2 types, not empty, 50 MB FR-UP-3) + 100 files / 1 GiB per share (the inbox holds one share); left-out files counted → `?skipped=N` notice on /upload
+  - [x] Tests (6 new: limits, no read of skipped files, byte cap, replace, shown-only take, page notice + shown-only upload; 740 total pass); ARCHITECTURE §14 + changelog
+  - [ ] Deploy (merge → automatic dev deploy); user re-checks a share on Android (several photos + one non-photo → "1 shared file was left out")
 
 ## Phase 10 — CI/CD (§14)
 
@@ -315,6 +316,7 @@ Deferred by the user (2026-10-24): done once Phases 7–12 are finished. Until t
 
 | Date | Note |
 |---|---|
+| 2026-10-27 | **Prod last** (user): prod bootstrap, 10.3 (prod deploy job) and Phase 11 wait until everything else is done, Phase 13 features included. |
 | 2026-10-27 | **Deploy trigger (10.2):** `deploy.yml` runs on `workflow_run` after CI **succeeds** for a push to `main`, not directly on push as §14.2 says, so failing tests block the deploy. Lambda zips use `output_file_mode = "0644"` so local and CI builds hash the same. |
 | 2026-10-27 | **CI secrets:** dev values are **repository** secrets (the plan job runs on every branch/PR, so an environment would restrict nothing, would log each plan as a deployment and change the OIDC `sub` to `environment:dev`); prod values will be **environment** secrets in `prod` with required approval (10.3). The CI plan role got `kms:Decrypt` via SSM for `/photo-app/*`: refreshing the SecureString media key needs it, and the role can read the same key from the state anyway (12.5). |
 | 2026-10-25 | **Offline start (9.3):** the session store also keeps the user's `sub` in localStorage (spec §11.4 says refresh token only), so an offline start knows whose saved data to restore. No email/name. Recorded in ARCHITECTURE §15; spec not changed yet. |
@@ -491,3 +493,4 @@ Deferred by the user (2026-10-24): done once Phases 7–12 are finished. Until t
 | 2026-10-27 | 10.1 done: test PR #1 got the plan comment from `github-actions[bot]`; a second push found it and posted no duplicate (same plan text, so no visible edit). |
 | 2026-10-27 | 10.2 written: `deploy.yml`, `upload-site.sh`, `google_login` output, reproducible zips (`output_file_mode`; CI plan's 3 Lambda changes were umask-dependent file modes), CI plan lock timeout. Module tests + validate pass; local plan: 3 Lambdas (modes) + 1 output. Not merged yet. |
 | 2026-10-27 | First automatic dev deploy (`87fbe5c`): CI + Deploy green, smoke test passed; local plan afterwards clean (reproducible zips confirmed), thumbnails invoke OK. User check of the app left. |
+| 2026-10-27 | 9.8 in code: share limits checked before reading (`checkFile`, 100 files / 1 GiB, `?skipped=N`), share replaces the inbox, upload/discard take only the shown photos. 740 tests pass, build OK. User decided prod comes last. |

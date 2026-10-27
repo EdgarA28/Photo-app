@@ -9,7 +9,7 @@ import type { AppConfig } from "../src/config";
 import type { PersistedQueryCache } from "../src/queries/persistedCache";
 import { createUploadQueue, type UploadQueueDeps } from "../src/upload/queue";
 import type { PostToS3 } from "../src/upload/s3Post";
-import type { ShareInbox, SharedFile } from "../src/upload/shareInbox";
+import type { ShareInbox, SharedFile, WaitingPhoto } from "../src/upload/shareInbox";
 import type { UploadItem, UploadStore } from "../src/upload/store";
 
 export const testConfig: AppConfig = {
@@ -158,20 +158,30 @@ export function channelHub() {
 
 /** The share inbox (9.6) in memory. */
 export class MemoryShareInbox implements ShareInbox {
-  files: File[] = [];
-  async put(files: SharedFile[]) {
-    for (const { name, type, lastModified, blob } of files) {
-      this.files.push(new File([blob], name, { type, lastModified }));
-    }
+  photos: WaitingPhoto[] = [];
+  private nextId = 1;
+  get files() {
+    return this.photos.map((photo) => photo.file);
+  }
+  /** Test setup: these files are waiting. */
+  set files(files: File[]) {
+    this.photos = files.map((file) => ({ id: this.nextId++, file }));
+  }
+  async replace(files: SharedFile[]) {
+    this.files = files.map(
+      ({ name, type, lastModified, blob }) => new File([blob], name, { type, lastModified }),
+    );
   }
   async list() {
-    return [...this.files];
+    return [...this.photos];
   }
-  async take() {
-    return this.files.splice(0);
+  async take(ids: number[]) {
+    const taken = this.photos.filter((photo) => ids.includes(photo.id));
+    this.photos = this.photos.filter((photo) => !ids.includes(photo.id));
+    return taken.map((photo) => photo.file);
   }
   async clear() {
-    this.files = [];
+    this.photos = [];
   }
 }
 
