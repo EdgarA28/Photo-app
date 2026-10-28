@@ -4,6 +4,7 @@ import {
   batchGet,
   conditionFailedAt,
   isConditionalCheckFailed,
+  queryAll,
   queryPage,
   stripKeys,
   type Db,
@@ -13,6 +14,7 @@ import {
   GSI1_KEY_ATTRIBUTES,
   photoKey,
   placeKey,
+  PHOTO_SK_PREFIX,
   placePhotoKey,
   takenSk,
   usageKey,
@@ -38,13 +40,21 @@ export interface PhotoRecord {
   failureReason?: string;
   /** Albums containing this photo: reverse index for deletes and share checks (§8.2). */
   albumIds?: Set<string>;
-  /** Where it was taken (13.2), set by the thumbnail Lambda from EXIF GPS. Never sent out. */
+  /**
+   * Where it was taken (13.2), set by the thumbnail Lambda from EXIF GPS. Sent out only rounded,
+   * to the owner's map (13.2h).
+   */
   latitude?: number;
   longitude?: number;
   place?: { city: string; region?: string; country: string; countryCode: string };
   /** The place list entries it counts in (`city:…`, `region:…`, `country:…`); removed with it. */
   placeIds?: Set<string>;
 }
+
+export type LocatedPhoto = Pick<PhotoRecord, "photoId" | "takenAt"> & {
+  latitude: number;
+  longitude: number;
+};
 
 export interface NewPhoto {
   userId: string;
@@ -143,6 +153,27 @@ export function photosRepo(db: Db) {
         cursor: options.cursor,
       });
       return { ...page, items: page.items.map((item) => stripKeys<PhotoRecord>(item)) };
+    },
+
+    /**
+     * Ready photos with GPS for the map (13.2h), newest first. Reads the user's whole photo
+     * partition (bounded by the quota) and keeps only the few attributes a pin needs.
+     */
+    async listLocated(userId: string): Promise<LocatedPhoto[]> {
+      const items = await queryAll(db, {
+        KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
+        FilterExpression: "attribute_exists(latitude) AND #status = :ready",
+        ProjectionExpression: "photoId, takenAt, latitude, longitude",
+        ExpressionAttributeNames: { "#status": "status" },
+        ExpressionAttributeValues: {
+          ":pk": userPk(userId),
+          ":prefix": PHOTO_SK_PREFIX,
+          ":ready": "ready",
+        },
+      });
+      return items
+        .map((item) => item as LocatedPhoto)
+        .sort((a, b) => b.takenAt.localeCompare(a.takenAt) || b.photoId.localeCompare(a.photoId));
     },
 
     /**

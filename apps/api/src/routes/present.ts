@@ -1,6 +1,14 @@
-import { previewKey, thumbKey, type Album, type Photo, type SharedAlbum } from "@photo-app/shared";
+import {
+  MAP_COORDINATE_DECIMALS,
+  previewKey,
+  thumbKey,
+  type Album,
+  type Photo,
+  type PhotoLocation,
+  type SharedAlbum,
+} from "@photo-app/shared";
 import type { MediaSigner } from "../lib/media";
-import type { AlbumRecord, PhotoRecord, ShareRecord } from "../repo";
+import type { AlbumRecord, LocatedPhoto, PhotoRecord, ShareRecord } from "../repo";
 
 /**
  * Repository records → API objects (§9). Own images use stable CloudFront paths under
@@ -29,6 +37,22 @@ export function toPhoto(record: PhotoRecord): Photo {
     // Derived images exist only once the thumbnail Lambda is done (FR-GAL-5).
     thumbUrl: ready ? `/${thumbKey(record.userId, record.photoId)}` : null,
     previewUrl: ready ? `/${previewKey(record.userId, record.photoId)}` : null,
+  };
+}
+
+/**
+ * A map pin for the owner (13.2h). Coordinates are rounded to about 100 m (FR-SRCH-5): enough for
+ * pins and clusters, less exact than the original's EXIF.
+ */
+export function toPhotoLocation(userId: string, record: LocatedPhoto): PhotoLocation {
+  const factor = 10 ** MAP_COORDINATE_DECIMALS;
+  const round = (degrees: number) => Math.round(degrees * factor) / factor;
+  return {
+    photoId: record.photoId,
+    lat: round(record.latitude),
+    lon: round(record.longitude),
+    takenAt: record.takenAt,
+    thumbUrl: `/${thumbKey(userId, record.photoId)}`,
   };
 }
 

@@ -25,7 +25,8 @@ locals {
     "style-src 'self'",
     "img-src 'self' blob: data:",
     "font-src 'self'",
-    "connect-src 'self' ${var.auth_domain_url} https://${var.photo_bucket_regional_domain_name}",
+    # Map tiles, styles, sprites and fonts from OpenFreeMap (13.2h, apps/web/src/map/style.ts).
+    "connect-src 'self' ${var.auth_domain_url} https://${var.photo_bucket_regional_domain_name} https://tiles.openfreemap.org",
     "worker-src 'self'",
     "manifest-src 'self'",
     "object-src 'none'",

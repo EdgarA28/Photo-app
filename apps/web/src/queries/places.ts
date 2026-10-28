@@ -7,3 +7,10 @@ export const placesQuery = (api: Api) =>
     queryKey: ["places"],
     queryFn: ({ signal }) => api.places.list({ signal }),
   });
+
+/** Map pins (13.2h): the user's photos with GPS, newest first. */
+export const photoLocationsQuery = (api: Api) =>
+  queryOptions({
+    queryKey: ["places", "map"],
+    queryFn: ({ signal }) => api.places.map({ signal }),
+  });

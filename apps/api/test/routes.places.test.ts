@@ -1,5 +1,15 @@
-/** Place routes (13.2e) on DynamoDB Local: the caller's places, their photos, cleanup on delete. */
-import { apiErrorSchema, photoPageSchema, photoSchema, placeListSchema } from "@photo-app/shared";
+/**
+ * Place routes (13.2e, 13.2h) on DynamoDB Local: the caller's places, their photos, map pins,
+ * cleanup on delete.
+ */
+import { UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import {
+  apiErrorSchema,
+  photoLocationListSchema,
+  photoPageSchema,
+  photoSchema,
+  placeListSchema,
+} from "@photo-app/shared";
 import { beforeAll, describe, expect, test } from "vitest";
 import type { Db, Repositories } from "../src/repo";
 import {
@@ -130,6 +140,70 @@ describe("GET /places/{placeId}/photos", () => {
     for (const bad of ["Berlin", "city:abc", "country:de", "region:DE"]) {
       expect((await api(user, "GET", `/places/${bad}/photos`)).status).toBe(400);
     }
+  });
+});
+
+describe("GET /places/map (13.2h, FR-SRCH-5)", () => {
+  /** GPS without a town nearby: the Lambda keeps the coordinates but writes no place. */
+  async function setGps(userId: string, photoId: string, lat: number, lon: number) {
+    await db.client.send(
+      new UpdateCommand({
+        TableName: db.table,
+        Key: { PK: `USER#${userId}`, SK: `PHOTO#${photoId}` },
+        UpdateExpression: "SET latitude = :lat, longitude = :lon",
+        ExpressionAttributeValues: { ":lat": lat, ":lon": lon },
+      }),
+    );
+  }
+
+  async function pins(userId: string) {
+    return photoLocationListSchema.parse((await api(userId, "GET", "/places/map")).body).items;
+  }
+
+  test("lists ready photos with GPS, newest first, coordinates rounded to ~100 m", async () => {
+    const user = newUserId();
+    const berlin = await photoAt(user, "2024-01-01T10:00:00.000Z", BERLIN);
+    const { photoId: atSea } = await createPending(repos, newPhoto(user));
+    await markReady(db, user, atSea, 1000, "2024-06-01T10:00:00.000Z");
+    // Southern and western hemispheres round the same way.
+    await setGps(user, atSea, -33.856789, -151.215432);
+    const { photoId: noGps } = await createPending(repos, newPhoto(user));
+    await markReady(db, user, noGps, 1000, "2024-03-01T10:00:00.000Z");
+
+    expect(await pins(user)).toEqual([
+      {
+        photoId: atSea,
+        lat: -33.857,
+        lon: -151.215,
+        takenAt: "2024-06-01T10:00:00.000Z",
+        thumbUrl: `/users/${user}/thumbs/${atSea}.jpg`,
+      },
+      {
+        photoId: berlin,
+        lat: 52.52,
+        lon: 13.41,
+        takenAt: "2024-01-01T10:00:00.000Z",
+        thumbUrl: `/users/${user}/thumbs/${berlin}.jpg`,
+      },
+    ]);
+  });
+
+  test("leaves out photos that aren't ready and other users' photos", async () => {
+    const user = newUserId();
+    const other = newUserId();
+    const { photoId: pending } = await createPending(repos, newPhoto(user));
+    await setGps(user, pending, 48.1, 11.5);
+    await photoAt(other, "2024-01-01T10:00:00.000Z", BERLIN);
+
+    expect(await pins(user)).toEqual([]);
+    expect(await pins(other)).toHaveLength(1);
+  });
+
+  test("a deleted photo leaves the map", async () => {
+    const user = newUserId();
+    const photoId = await photoAt(user, "2024-01-01T10:00:00.000Z", BERLIN);
+    expect((await api(user, "DELETE", `/photos/${photoId}`)).status).toBe(204);
+    expect(await pins(user)).toEqual([]);
   });
 });
 

@@ -46,7 +46,7 @@ describe("routes (§12.1)", () => {
   });
 
   // jsdom applies no media queries, so both the side rail and the bottom bar are present.
-  it("offers the four sections in both navigation bars", async () => {
+  it("offers the sections and the map in both navigation bars", async () => {
     await renderAt("/gallery");
     const navs = await screen.findAllByRole("navigation", { name: "Main" });
     expect(navs).toHaveLength(2);
@@ -55,6 +55,7 @@ describe("routes (§12.1)", () => {
       expect(links.map((link) => [link.textContent, link.getAttribute("href")])).toEqual([
         ["Gallery", "/gallery"],
         ["Albums", "/albums"],
+        ["Map", "/map"],
         ["Upload", "/upload"],
         ["Settings", "/settings"],
       ]);

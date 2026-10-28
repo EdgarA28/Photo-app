@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Version** | 0.17 |
-| **Date** | 2026-10-27 |
+| **Version** | 0.18 |
+| **Date** | 2026-10-28 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
 
@@ -61,7 +61,7 @@ A private photo storage and gallery app, similar in spirit to Google Photos, bui
 - Share albums (read-only) with other registered users
 - Per-user storage quota
 - PWA: installable, cached app shell, cached thumbnails, resilient upload queue
-- Search photos by place (town, region, country from EXIF GPS; owner only)
+- Search photos by place (town, region, country from EXIF GPS; owner only) and a map of own photos
 
 ### 2.2 Out of scope for v1
 
@@ -69,7 +69,7 @@ A private photo storage and gallery app, similar in spirit to Google Photos, bui
 - Video files
 - Public share links for people without an account
 - Album download as ZIP
-- Search other than by place (dates, tags), face/object recognition, map view
+- Search other than by place (dates, tags), face/object recognition
 - Native mobile apps
 - Photo editing
 
@@ -117,6 +117,7 @@ Accounts, tools and decisions needed before implementation.
 | Routing | **TanStack Router** | File-based routes, type-safe search params, `beforeLoad` auth guards |
 | Server state | **TanStack Query** | Caching, `useInfiniteQuery` for the gallery, persisted to IndexedDB |
 | Large lists | **TanStack Virtual** | Virtualized photo grid |
+| Map | **MapLibre GL JS** + **OpenFreeMap** tiles | Photo map (FR-SRCH-5); free vector tiles, no key |
 | UI / styling | **Tailwind CSS** + **shadcn/ui** | Utility CSS; accessible components (Radix) copied into the repo (D-3) |
 | Validation | **Zod** | Shared schemas between frontend and API |
 | PWA | **vite-plugin-pwa** (Workbox) | Manifest + service worker |
@@ -289,7 +290,8 @@ IDs are stable — reference them in issues, PRs and tests.
 | FR-SRCH-1 | Photos with EXIF GPS get the nearest town (1,000+ inhabitants, within 50 km), its region and country, looked up offline when they are processed. |
 | FR-SRCH-2 | Users can search their places by name (case- and accent-insensitive) and see a place's photos by date taken, like an album. |
 | FR-SRCH-3 | The viewer shows where an own photo was taken (town, country). |
-| FR-SRCH-4 | Places are the owner's only: share recipients see no place, and coordinates never leave the backend (the API returns names only). |
+| FR-SRCH-4 | Places are the owner's only: share recipients see no place. Photos carry place names only; coordinates leave the backend only for the owner's map (FR-SRCH-5). |
+| FR-SRCH-5 | A map shows the user's own photos with GPS as thumbnail pins, clustered with a count; tapping a cluster zooms in (or lists its photos when they were taken at one spot), tapping a photo opens the viewer. Coordinates are sent rounded to 3 decimals (~100 m), to the owner only. Map tiles come from OpenFreeMap (no key), which sees the area viewed but no photo coordinates. |
 
 ---
 
@@ -303,7 +305,7 @@ IDs are stable — reference them in issues, PRs and tests.
 | NFR-SEC-2 | Requests for another user's resources return **404**, not 403 (no existence leaks). |
 | NFR-SEC-3 | Both S3 buckets block all public access; photos are reachable only via CloudFront (Origin Access Control) or short-lived pre-signed URLs. |
 | NFR-SEC-4 | Encryption at rest for S3 (SSE-S3) and DynamoDB (default); TLS everywhere. |
-| NFR-SEC-5 | Derived images (thumbs/previews) have **all metadata stripped**, including GPS. Originals are stored unchanged. GPS read for places (FR-SRCH-1) is stored on the photo item but never returned by the API. |
+| NFR-SEC-5 | Derived images (thumbs/previews) have **all metadata stripped**, including GPS. Originals are stored unchanged. GPS read for places (FR-SRCH-1) is stored on the photo item; the API returns it only rounded (~100 m) to the owner's map (FR-SRCH-5). |
 | NFR-SEC-6 | Upload URLs are constrained by content type (`image/*`) and max size. |
 | NFR-SEC-7 | IAM least privilege per function (e.g. thumbnail Lambda can only read `originals/` and write `thumbs/`, `previews/`). |
 | NFR-SEC-8 | No long-lived AWS credentials in CI (GitHub OIDC). Secrets (Google client secret) stored outside git. |
@@ -408,6 +410,7 @@ Access patterns:
 | `GET` | `/photos/{photoId}/download-url` | 5-min pre-signed GET with `attachment` disposition |
 | `DELETE` | `/photos/{photoId}` | Delete files + metadata + memberships + place entries; update usage |
 | `GET` | `/places` | Own places with photo counts, most photos first (FR-SRCH-2) |
+| `GET` | `/places/map` | Own ready photos with GPS as map pins: `photoId`, `lat`/`lon` rounded to 3 decimals, `takenAt`, `thumbUrl`; newest first, one response (FR-SRCH-5) |
 | `GET` | `/places/{placeId}/photos` | Photos at an own place by date taken `?sort&cursor&limit`; 404 for a place the caller doesn't have |
 | `GET` | `/albums` | List own albums |
 | `POST` | `/albums` | Create album `{name}` |
@@ -512,6 +515,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 | `/photos/$photoId` | Full-screen viewer |
 | `/albums` | Invitations (accept / decline) + my albums + shared with me |
 | `/albums/$albumId` | Album view |
+| `/map` | Map of own photos with GPS (FR-SRCH-5); MapLibre, loaded only with this page |
 | `/upload` | Upload page / queue status |
 | `/settings` | Usage, quota, logout |
 
@@ -575,7 +579,7 @@ OpenTofu, region `us-east-1`. AWS Organization with separate accounts: **dev**, 
 | `api` | API Gateway HTTP API, JWT authorizer, API Lambda, IAM, throttling, log group |
 | `auth` | Cognito user pool, domain, Google IdP, app client, pre-sign-up trigger |
 | `database` | DynamoDB table (on-demand, PITR in prod), GSI1 |
-| `frontend` | Site bucket, CloudFront distribution (OAC; behaviors for `/`, `/api/*`, `/users/*`), security headers with a strict Content-Security-Policy on the site (self only, plus Cognito and the photo bucket for `connect-src`), SPA fallback (CloudFront Function on the default behavior: extension-less paths → `/index.html`; no distribution-wide error responses, so API/image 403/404 stay real), CloudFront key group for signed cookies/URLs, ACM cert, optional WAF |
+| `frontend` | Site bucket, CloudFront distribution (OAC; behaviors for `/`, `/api/*`, `/users/*`), security headers with a strict Content-Security-Policy on the site (self only, plus Cognito, the photo bucket and the OpenFreeMap tiles for `connect-src`), SPA fallback (CloudFront Function on the default behavior: extension-less paths → `/index.html`; no distribution-wide error responses, so API/image 403/404 stay real), CloudFront key group for signed cookies/URLs, ACM cert, optional WAF |
 
 All resources tagged `Project=photo-app`, `Environment={env}`, `ManagedBy=opentofu`.
 
@@ -714,7 +718,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | B-5 | "Available offline" albums | Cache previews of selected albums in the service worker | Idea |
 | B-6 | Public share links | Time-limited CloudFront signed URLs for people without an account | Idea |
 | B-7 | Video support | Needs transcoding (e.g. MediaConvert) and different storage/egress planning | Idea |
-| B-8 | Search & metadata | Date ranges, tags (places done: §6.8); location off switch; map view | Idea |
+| B-8 | Search & metadata | Date ranges, tags (places and map done: §6.8); location off switch | Idea |
 | B-9 | On-the-fly image resizing | Only if many sizes are needed; current fixed sizes are simpler | Idea |
 | | | | |
 
@@ -741,6 +745,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.18 | 2026-10-28 | Map view (13.2h): FR-SRCH-5, FR-SRCH-4 and NFR-SEC-5 allow rounded coordinates for the owner's map; `GET /places/map` (§9); `/map` route (§12.1); MapLibre + OpenFreeMap (§4); CSP `connect-src` (§13) |
 | 0.17 | 2026-10-27 | Share invitations: FR-SHR-6 (accept), FR-SHR-7 (decline / remove a shared album); share status + `INVITED#` GSI1 key (§8.2); `/share-invitations`, `/shared-albums/{id}/accept`, `DELETE /shared-albums/{id}` (§9); Albums page (§12.1) |
 | 0.16 | 2026-10-27 | Viewer zoom, loading the original for deep zoom (FR-GAL-7) |
 | 0.15 | 2026-10-27 | §12.6: location removed before upload (Google Photos direct share). Search by place in scope: FR-SRCH-1–4 (§6.8), place items (§8.2), `/places` routes and `place` on photos (§9), place lookup in the thumbnail Lambda (§10), NFR-SEC-5 note |

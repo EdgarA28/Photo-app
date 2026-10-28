@@ -539,6 +539,7 @@ const exempt: Record<string, string> = {
   "GET /api/shared-albums": "caller's shares; foreign cursor case below",
   "GET /api/share-invitations": "caller's invitations; foreign cursor case below",
   "GET /api/places": "caller's own places (keyed by sub); checked below",
+  "GET /api/places/map": "caller's own photos with GPS (keyed by sub); checked below",
   "POST /api/session/media-cookie": "caller's own prefix from the JWT sub (routes.session)",
   "DELETE /api/session/media-cookie": "caller's own prefix from the JWT sub (routes.session)",
 };
@@ -593,6 +594,15 @@ describe("list routes only return the caller's data", () => {
     expect((await t.api(w.bob, "GET", "/places")).body).toEqual({ items: [] });
     const own = (await t.api(w.alice, "GET", "/places")).body as { items: { placeId: string }[] };
     expect(own.items.map((p) => p.placeId).sort()).toEqual(BERLIN.map((p) => p.placeId).sort());
+  });
+
+  test("map pins are the owner's: a stranger and the recipient get none of Alice's (13.2h)", async () => {
+    expect((await t.api(w.mallory, "GET", "/places/map")).body).toEqual({ items: [] });
+    expect((await t.api(w.bob, "GET", "/places/map")).body).toEqual({ items: [] });
+    const own = (await t.api(w.alice, "GET", "/places/map")).body as {
+      items: { photoId: string }[];
+    };
+    expect(own.items.map((p) => p.photoId).sort()).toEqual([w.p1, w.p2].sort());
   });
 
   test("a shared photo comes without its place (13.2g)", async () => {

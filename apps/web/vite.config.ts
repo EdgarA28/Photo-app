@@ -80,6 +80,8 @@ export default defineConfig(({ mode }) => {
         },
       }),
     ],
+    // MapLibre's worker (13.2h, src/map/PhotoMap.tsx) is an ES module; it runs as a module worker.
+    worker: { format: "es" },
     resolve: {
       alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
     },

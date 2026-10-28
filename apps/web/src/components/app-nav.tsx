@@ -1,21 +1,29 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link, useRouteContext } from "@tanstack/react-router";
-import { BookImage, ImageUp, Images, Settings, type LucideIcon } from "lucide-react";
+import {
+  BookImage,
+  ImageUp,
+  Images,
+  Map as MapIcon,
+  Settings,
+  type LucideIcon,
+} from "lucide-react";
 import { Viewfinder } from "@/components/viewfinder";
 import { cn } from "@/lib/utils";
 import { shareInvitationsQuery } from "@/queries/shares";
 import { isActive, useUploads } from "@/upload/useUploads";
 
 interface NavItem {
-  to: "/gallery" | "/albums" | "/upload" | "/settings";
+  to: "/gallery" | "/albums" | "/map" | "/upload" | "/settings";
   label: string;
   icon: LucideIcon;
 }
 
-// The four sections of §12.1; the viewer and album pages sit under Gallery / Albums.
+// The sections of §12.1 plus the map (13.2h); the viewer and album pages sit under Gallery / Albums.
 const NAV: readonly NavItem[] = [
   { to: "/gallery", label: "Gallery", icon: Images },
   { to: "/albums", label: "Albums", icon: BookImage },
+  { to: "/map", label: "Map", icon: MapIcon },
   { to: "/upload", label: "Upload", icon: ImageUp },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
@@ -82,12 +90,12 @@ export function BottomNav() {
       aria-label="Main"
       className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/90 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
     >
-      <ul className="grid grid-cols-4">
+      <ul className="grid grid-cols-5">
         {NAV.map(({ to, label, icon: Icon }) => (
           <li key={to} className="flex justify-center py-1.5">
             <Link
               to={to}
-              className={cn(linkBase, "min-w-16 flex-col gap-0.5 px-3 py-1.5 text-[0.6875rem]")}
+              className={cn(linkBase, "min-w-14 flex-col gap-0.5 px-2 py-1.5 text-[0.6875rem]")}
             >
               <ActiveFrame />
               <Icon aria-hidden className="size-5" />

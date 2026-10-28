@@ -6,6 +6,7 @@ import {
   downloadUrlResponseSchema,
   mediaCookieResponseSchema,
   meResponseSchema,
+  photoLocationListSchema,
   photoPageSchema,
   placeListSchema,
   photoSchema,
@@ -61,6 +62,8 @@ export function createApi(request: Request) {
 
     places: {
       list: (o?: Opts) => request("GET", "/places", { schema: placeListSchema, ...o }),
+      /** Own photos with GPS as map pins, coordinates rounded (13.2h). */
+      map: (o?: Opts) => request("GET", "/places/map", { schema: photoLocationListSchema, ...o }),
       photos: (placeId: string, query: Page & { sort?: PhotoSort } = {}, o?: Opts) =>
         request("GET", `/places/${enc(placeId)}/photos`, { schema: photoPageSchema, query, ...o }),
     },

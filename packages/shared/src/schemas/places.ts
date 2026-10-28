@@ -1,9 +1,10 @@
 import { z } from "zod";
+import { idSchema, isoDateTimeSchema } from "./common";
 
 /**
  * Places (13.2): where photos were taken, from EXIF GPS via an offline lookup in the thumbnail
- * Lambda (§10). Names only: coordinates never leave the backend. Owner only (not shown to share
- * recipients).
+ * Lambda (§10). Owner only (not shown to share recipients). Photos carry names only; coordinates
+ * leave the backend only for the owner's map, rounded (GET /places/map, 13.2h, FR-SRCH-5).
  */
 
 /** `city:{GeoNames ID}`, `region:{country code}.{admin1 code}` or `country:{country code}`. */
@@ -36,3 +37,20 @@ export type Place = z.infer<typeof placeSchema>;
 /** GET /places: all of the caller's places, most photos first. */
 export const placeListSchema = z.object({ items: z.array(placeSchema) });
 export type PlaceList = z.infer<typeof placeListSchema>;
+
+/** Map coordinates are rounded to 3 decimals, about 100 m (13.2h, FR-SRCH-5). */
+export const MAP_COORDINATE_DECIMALS = 3;
+
+/** One of the caller's photos with GPS, as a map pin (GET /places/map). */
+export const photoLocationSchema = z.object({
+  photoId: idSchema,
+  lat: z.number().min(-90).max(90),
+  lon: z.number().min(-180).max(180),
+  takenAt: isoDateTimeSchema,
+  thumbUrl: z.string(),
+});
+export type PhotoLocation = z.infer<typeof photoLocationSchema>;
+
+/** GET /places/map: all of the caller's ready photos with GPS, newest first. */
+export const photoLocationListSchema = z.object({ items: z.array(photoLocationSchema) });
+export type PhotoLocationList = z.infer<typeof photoLocationListSchema>;

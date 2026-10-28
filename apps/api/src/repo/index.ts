@@ -9,7 +9,7 @@ import { usernamesRepo } from "./usernames";
 export type { AlbumRecord, AlbumUpdate, MembershipRecord } from "./albums";
 export { createDocumentClient, type Db } from "./db";
 export type { AddResult } from "./memberships";
-export type { NewPhoto, PhotoRecord } from "./photos";
+export type { LocatedPhoto, NewPhoto, PhotoRecord } from "./photos";
 export type { PlacePhotoRecord, PlaceRecord } from "./places";
 export type { CreateShareResult, ShareRecord } from "./shares";
 export { isAccepted, shareStatus } from "./shares";

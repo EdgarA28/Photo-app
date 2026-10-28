@@ -201,7 +201,7 @@ run "site_sends_a_strict_csp" {
         "script-src 'self'",
         "object-src 'none'",
         "frame-ancestors 'none'",
-        "connect-src 'self' https://photo-app-test-123456789012.auth.us-east-1.amazoncognito.com https://photo-app-photos-test-123456789012.s3.us-east-1.amazonaws.com",
+        "connect-src 'self' https://photo-app-test-123456789012.auth.us-east-1.amazoncognito.com https://photo-app-photos-test-123456789012.s3.us-east-1.amazonaws.com https://tiles.openfreemap.org",
       ] : contains(split("; ", one(aws_cloudfront_response_headers_policy.site.security_headers_config).content_security_policy[0].content_security_policy), directive)
     ])
     error_message = "The CSP must allow only the app's origin, Cognito and the photo bucket (12.2a)."

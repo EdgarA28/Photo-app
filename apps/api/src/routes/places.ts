@@ -1,6 +1,7 @@
 import {
   listPhotosQuerySchema,
   placeIdSchema,
+  type PhotoLocationList,
   type PhotoPage,
   type PlaceList,
 } from "@photo-app/shared";
@@ -10,7 +11,7 @@ import type { AppEnv } from "../env";
 import { orNotFound } from "../lib/errors";
 import { validate } from "../lib/validation";
 import type { Deps } from ".";
-import { toPhoto } from "./present";
+import { toPhoto, toPhotoLocation } from "./present";
 
 const placeParam = z.object({ placeId: placeIdSchema });
 
@@ -31,6 +32,19 @@ export function placeRoutes(app: Hono<AppEnv>, { repos }: Deps): void {
         context,
         photoCount,
       })),
+    };
+    return c.json(body);
+  });
+
+  /**
+   * Map pins (13.2h): every own ready photo with GPS, rounded coordinates, newest first. Own
+   * photos only, like the rest of places (FR-SRCH-4/5). One response: the quota bounds it.
+   */
+  app.get("/places/map", async (c) => {
+    const userId = c.get("userId");
+    const photos = await repos.photos.listLocated(userId);
+    const body: PhotoLocationList = {
+      items: photos.map((photo) => toPhotoLocation(userId, photo)),
     };
     return c.json(body);
   });
