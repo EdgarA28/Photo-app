@@ -48,6 +48,8 @@ export const photoLocationSchema = z.object({
   lon: z.number().min(-180).max(180),
   takenAt: isoDateTimeSchema,
   thumbUrl: z.string(),
+  /** The town it was taken in (a `city:` place); null without a town nearby. */
+  placeId: placeIdSchema.nullable(),
 });
 export type PhotoLocation = z.infer<typeof photoLocationSchema>;
 

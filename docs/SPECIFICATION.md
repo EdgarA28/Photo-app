@@ -291,7 +291,7 @@ IDs are stable — reference them in issues, PRs and tests.
 | FR-SRCH-2 | Users can search their places by name (case- and accent-insensitive) and see a place's photos by date taken, like an album. |
 | FR-SRCH-3 | The viewer shows where an own photo was taken (town, country). |
 | FR-SRCH-4 | Places are the owner's only: share recipients see no place. Photos carry place names only; coordinates leave the backend only for the owner's map (FR-SRCH-5). |
-| FR-SRCH-5 | A map shows the user's own photos with GPS as thumbnail pins, clustered with a count; tapping a cluster zooms in (or lists its photos when they were taken at one spot), tapping a photo opens the viewer. Coordinates are sent rounded to 3 decimals (~100 m), to the owner only. Map tiles come from OpenFreeMap (no key), which sees the area viewed but no photo coordinates. |
+| FR-SRCH-5 | A map shows the user's own photos with GPS as thumbnail pins, clustered with a count; tapping a cluster zooms in (or lists its photos when they were taken at one spot), tapping a photo opens the viewer on its town's photos (prev/next as after searching that town). Coordinates are sent rounded to 3 decimals (~100 m), to the owner only. Map tiles come from OpenFreeMap (no key), which sees the area viewed but no photo coordinates. |
 
 ---
 
@@ -410,7 +410,7 @@ Access patterns:
 | `GET` | `/photos/{photoId}/download-url` | 5-min pre-signed GET with `attachment` disposition |
 | `DELETE` | `/photos/{photoId}` | Delete files + metadata + memberships + place entries; update usage |
 | `GET` | `/places` | Own places with photo counts, most photos first (FR-SRCH-2) |
-| `GET` | `/places/map` | Own ready photos with GPS as map pins: `photoId`, `lat`/`lon` rounded to 3 decimals, `takenAt`, `thumbUrl`; newest first, one response (FR-SRCH-5) |
+| `GET` | `/places/map` | Own ready photos with GPS as map pins: `photoId`, `lat`/`lon` rounded to 3 decimals, `takenAt`, `thumbUrl`, `placeId` (its town, or null); newest first, one response (FR-SRCH-5) |
 | `GET` | `/places/{placeId}/photos` | Photos at an own place by date taken `?sort&cursor&limit`; 404 for a place the caller doesn't have |
 | `GET` | `/albums` | List own albums |
 | `POST` | `/albums` | Create album `{name}` |

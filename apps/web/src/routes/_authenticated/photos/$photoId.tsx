@@ -1,5 +1,6 @@
 import type { Photo } from "@photo-app/shared";
 import {
+  InfiniteQueryObserver,
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -61,6 +62,8 @@ import { ZoomableImage } from "@/viewer/ZoomableImage";
 const SWIPE_MIN_PX = 50;
 /** Load the next gallery page when the viewer gets this close to the end of the loaded ones. */
 const LOOKAHEAD_PHOTOS = 3;
+/** How far an album or place list is paged to find the photo opened (from the map, 13.2h). */
+const MAX_SEARCH_PAGES = 20;
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
@@ -72,11 +75,24 @@ export const Route = createFileRoute("/_authenticated/photos/$photoId")({
   loader: async ({ context: { queryClient, api }, params: { photoId }, deps }) => {
     // Usually cached from the gallery. A photo beyond the loaded pages (deep link) is fetched on
     // its own; then there is no prev/next. 404 for other users' photos (NFR-SEC-2).
-    const list = await queryClient.infiniteQuery({
+    let { pages } = await queryClient.infiniteQuery({
       ...galleryQuery(api, deps),
       staleTime: "static",
     });
-    if (!list.pages.some((page) => page.items.some((p) => p.photoId === photoId))) {
+    const listed = () => pages.some((page) => page.items.some((p) => p.photoId === photoId));
+    // An album or place list is paged on until the photo turns up, so prev/next work for a photo
+    // opened from the map in its town's list (13.2h). Not for all photos: that list can be long.
+    if (deps.album || deps.place) {
+      const observer = new InfiniteQueryObserver(queryClient, galleryQuery(api, deps));
+      let more = pages.at(-1)?.nextCursor != null;
+      for (let n = 0; !listed() && more && n < MAX_SEARCH_PAGES; n++) {
+        const result = await observer.fetchNextPage();
+        if (!result.data) break;
+        pages = result.data.pages;
+        more = result.hasNextPage;
+      }
+    }
+    if (!listed()) {
       await queryClient.query({ ...photoQuery(api, photoId, deps.album), staleTime: "static" });
     }
   },

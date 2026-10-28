@@ -38,7 +38,7 @@ export function PhotoMap({
   className,
 }: {
   photos: PhotoLocation[];
-  onOpen: (photoId: string) => void;
+  onOpen: (photo: PhotoLocation) => void;
   className?: string;
 }) {
   const container = useRef<HTMLDivElement>(null);
@@ -127,7 +127,7 @@ export function PhotoMap({
         if (markers.has(key)) continue;
         const [lon, lat] = (feature.geometry as Point).coordinates as [number, number];
         const element = markerElement(photo, count, () => {
-          if (clusterId === undefined) onOpenRef.current(photo.photoId);
+          if (clusterId === undefined) onOpenRef.current(photo);
           else void openCluster(clusterId, [lon, lat]);
         });
         markers.set(key, new Marker({ element }).setLngLat([lon, lat]).addTo(map));
@@ -180,7 +180,7 @@ export function PhotoMap({
                 <button
                   type="button"
                   aria-label={`Open photo from ${dateFormat.format(new Date(photo.takenAt))}`}
-                  onClick={() => onOpen(photo.photoId)}
+                  onClick={() => onOpen(photo)}
                   className="block size-16 overflow-hidden rounded-md bg-muted outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                 >
                   <img src={photo.thumbUrl} alt="" className="size-full object-cover" />

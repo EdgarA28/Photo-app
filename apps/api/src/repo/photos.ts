@@ -51,7 +51,7 @@ export interface PhotoRecord {
   placeIds?: Set<string>;
 }
 
-export type LocatedPhoto = Pick<PhotoRecord, "photoId" | "takenAt"> & {
+export type LocatedPhoto = Pick<PhotoRecord, "photoId" | "takenAt" | "placeIds"> & {
   latitude: number;
   longitude: number;
 };
@@ -163,7 +163,7 @@ export function photosRepo(db: Db) {
       const items = await queryAll(db, {
         KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
         FilterExpression: "attribute_exists(latitude) AND #status = :ready",
-        ProjectionExpression: "photoId, takenAt, latitude, longitude",
+        ProjectionExpression: "photoId, takenAt, latitude, longitude, placeIds",
         ExpressionAttributeNames: { "#status": "status" },
         ExpressionAttributeValues: {
           ":pk": userPk(userId),

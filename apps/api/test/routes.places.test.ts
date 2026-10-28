@@ -160,7 +160,7 @@ describe("GET /places/map (13.2h, FR-SRCH-5)", () => {
     return photoLocationListSchema.parse((await api(userId, "GET", "/places/map")).body).items;
   }
 
-  test("lists ready photos with GPS, newest first, coordinates rounded to ~100 m", async () => {
+  test("lists ready photos with GPS and their town, newest first, coordinates rounded to ~100 m", async () => {
     const user = newUserId();
     const berlin = await photoAt(user, "2024-01-01T10:00:00.000Z", BERLIN);
     const { photoId: atSea } = await createPending(repos, newPhoto(user));
@@ -177,6 +177,7 @@ describe("GET /places/map (13.2h, FR-SRCH-5)", () => {
         lon: -151.215,
         takenAt: "2024-06-01T10:00:00.000Z",
         thumbUrl: `/users/${user}/thumbs/${atSea}.jpg`,
+        placeId: null,
       },
       {
         photoId: berlin,
@@ -184,6 +185,7 @@ describe("GET /places/map (13.2h, FR-SRCH-5)", () => {
         lon: 13.41,
         takenAt: "2024-01-01T10:00:00.000Z",
         thumbUrl: `/users/${user}/thumbs/${berlin}.jpg`,
+        placeId: "city:2950159",
       },
     ]);
   });
