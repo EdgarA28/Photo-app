@@ -281,6 +281,19 @@ const cases: Case[] = [
     foreign: () => ({ as: w.bob, method: "DELETE", path: `/photos/${w.p1}` }),
     missing: () => ({ as: w.bob, method: "DELETE", path: `/photos/${id()}` }),
   },
+  // ---- public photo links (FR-SHR-8) ----
+  {
+    route: "POST /api/photos/:photoId/links",
+    name: "stranger makes a public link to someone else's photo",
+    foreign: () => ({ as: w.mallory, method: "POST", path: `/photos/${w.p1}/links` }),
+    missing: () => ({ as: w.mallory, method: "POST", path: `/photos/${id()}/links` }),
+  },
+  {
+    route: "POST /api/photos/:photoId/links",
+    name: "recipient makes a public link to a shared photo",
+    foreign: () => ({ as: w.bob, method: "POST", path: `/photos/${w.p1}/links` }),
+    missing: () => ({ as: w.bob, method: "POST", path: `/photos/${id()}/links` }),
+  },
   // ---- trash (FR-DEL-3) ----
   {
     route: "POST /api/trash/:photoId/restore",
@@ -565,6 +578,10 @@ const exempt: Record<string, string> = {
   "GET /api/share-invitations": "caller's invitations; foreign cursor case below",
   "GET /api/places": "caller's own places (keyed by sub); checked below",
   "GET /api/places/map": "caller's own photos with GPS (keyed by sub); checked below",
+  "GET /api/links/:token":
+    "public by design (FR-SHR-8): an unguessable token is the only key; routes.links",
+  "GET /api/links/:token/download-url":
+    "public by design (FR-SHR-8), same token check; routes.links",
   "GET /api/trash": "caller's own trash (keyed by sub); checked below",
   "DELETE /api/trash": "empties the caller's own trash (keyed by sub); checked below",
   "POST /api/session/media-cookie": "caller's own prefix from the JWT sub (routes.session)",

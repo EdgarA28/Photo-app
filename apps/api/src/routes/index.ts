@@ -5,6 +5,7 @@ import type { PhotoStorage } from "../lib/storage";
 import type { UserDirectory } from "../lib/users";
 import type { Repositories } from "../repo";
 import { albumRoutes } from "./albums";
+import { linkRoutes, publicLinkRoutes } from "./links";
 import { meRoutes } from "./me";
 import { photoRoutes } from "./photos";
 import { placeRoutes } from "./places";
@@ -30,6 +31,14 @@ export function registerRoutes(deps: Deps): (app: Hono<AppEnv>) => void {
     placeRoutes(app, deps);
     shareRoutes(app, deps);
     trashRoutes(app, deps);
+    linkRoutes(app, deps);
     sessionRoutes(app, deps);
+  };
+}
+
+/** Routes without login (`createApp({ publicRoutes })`): public photo links (FR-SHR-8). */
+export function registerPublicRoutes(deps: Deps): (app: Hono<AppEnv>) => void {
+  return (app) => {
+    publicLinkRoutes(app, deps);
   };
 }

@@ -18,6 +18,7 @@ import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticat
 import { Route as AuthenticatedTrashRouteImport } from './routes/_authenticated/trash'
 import { Route as AuthenticatedUploadRouteImport } from './routes/_authenticated/upload'
 import { Route as AuthCallbackRouteImport } from './routes/auth/callback'
+import { Route as STokenRouteImport } from './routes/s/$token'
 import { Route as AuthenticatedAlbumsIndexRouteImport } from './routes/_authenticated/albums/index'
 import { Route as AuthenticatedAlbumsAlbumIdRouteImport } from './routes/_authenticated/albums/$albumId'
 import { Route as AuthenticatedPhotosPhotoIdRouteImport } from './routes/_authenticated/photos/$photoId'
@@ -66,6 +67,11 @@ const AuthCallbackRoute = AuthCallbackRouteImport.update({
   path: '/auth/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
+const STokenRoute = STokenRouteImport.update({
+  id: '/s/$token',
+  path: '/s/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthenticatedAlbumsIndexRoute =
   AuthenticatedAlbumsIndexRouteImport.update({
     id: '/albums/',
@@ -94,6 +100,7 @@ export interface FileRoutesByFullPath {
   '/trash': typeof AuthenticatedTrashRoute
   '/upload': typeof AuthenticatedUploadRoute
   '/auth/callback': typeof AuthCallbackRoute
+  '/s/$token': typeof STokenRoute
   '/albums/$albumId': typeof AuthenticatedAlbumsAlbumIdRoute
   '/photos/$photoId': typeof AuthenticatedPhotosPhotoIdRoute
   '/albums/': typeof AuthenticatedAlbumsIndexRoute
@@ -107,6 +114,7 @@ export interface FileRoutesByTo {
   '/trash': typeof AuthenticatedTrashRoute
   '/upload': typeof AuthenticatedUploadRoute
   '/auth/callback': typeof AuthCallbackRoute
+  '/s/$token': typeof STokenRoute
   '/albums/$albumId': typeof AuthenticatedAlbumsAlbumIdRoute
   '/photos/$photoId': typeof AuthenticatedPhotosPhotoIdRoute
   '/albums': typeof AuthenticatedAlbumsIndexRoute
@@ -122,6 +130,7 @@ export interface FileRoutesById {
   '/_authenticated/trash': typeof AuthenticatedTrashRoute
   '/_authenticated/upload': typeof AuthenticatedUploadRoute
   '/auth/callback': typeof AuthCallbackRoute
+  '/s/$token': typeof STokenRoute
   '/_authenticated/albums/$albumId': typeof AuthenticatedAlbumsAlbumIdRoute
   '/_authenticated/photos/$photoId': typeof AuthenticatedPhotosPhotoIdRoute
   '/_authenticated/albums/': typeof AuthenticatedAlbumsIndexRoute
@@ -137,6 +146,7 @@ export interface FileRouteTypes {
     | '/trash'
     | '/upload'
     | '/auth/callback'
+    | '/s/$token'
     | '/albums/$albumId'
     | '/photos/$photoId'
     | '/albums/'
@@ -150,6 +160,7 @@ export interface FileRouteTypes {
     | '/trash'
     | '/upload'
     | '/auth/callback'
+    | '/s/$token'
     | '/albums/$albumId'
     | '/photos/$photoId'
     | '/albums'
@@ -164,6 +175,7 @@ export interface FileRouteTypes {
     | '/_authenticated/trash'
     | '/_authenticated/upload'
     | '/auth/callback'
+    | '/s/$token'
     | '/_authenticated/albums/$albumId'
     | '/_authenticated/photos/$photoId'
     | '/_authenticated/albums/'
@@ -174,6 +186,7 @@ export interface RootRouteChildren {
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   LoginRoute: typeof LoginRoute
   AuthCallbackRoute: typeof AuthCallbackRoute
+  STokenRoute: typeof STokenRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -241,6 +254,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/s/$token': {
+      id: '/s/$token'
+      path: '/s/$token'
+      fullPath: '/s/$token'
+      preLoaderRoute: typeof STokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_authenticated/albums/': {
       id: '/_authenticated/albums/'
       path: '/albums'
@@ -296,6 +316,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   LoginRoute: LoginRoute,
   AuthCallbackRoute: AuthCallbackRoute,
+  STokenRoute: STokenRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

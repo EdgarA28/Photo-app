@@ -190,6 +190,15 @@ resource "aws_apigatewayv2_route" "api" {
   authorization_scopes = ["openid"]
 }
 
+# Public photo links (FR-SHR-8): anyone with a link opens it without an account. The Lambda
+# checks the token (apps/api/src/routes/links.ts); more specific than /api/{proxy+}, so it wins.
+resource "aws_apigatewayv2_route" "photo_links" {
+  api_id             = aws_apigatewayv2_api.main.id
+  route_key          = "GET /api/links/{proxy+}"
+  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  authorization_type = "NONE"
+}
+
 # Unauthenticated, for the post-deploy smoke test (5.5, spec §14). More specific, so it wins.
 resource "aws_apigatewayv2_route" "health" {
   api_id             = aws_apigatewayv2_api.main.id

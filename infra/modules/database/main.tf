@@ -4,6 +4,7 @@
 #   Album membership  PK ALBUM#{albumId} SK PHOTO#{photoId}
 #   Album share       PK ALBUM#{albumId} SK SHARE#{userId}    GSI1 SHAREDWITH#{userId} / ALBUM#{albumId}
 #   Usage             PK USER#{userId}   SK USAGE
+#   Photo link        PK LINK#{token}    SK LINK              (expires: `ttl`, FR-SHR-8)
 
 resource "aws_dynamodb_table" "main" {
   name         = var.table_name
@@ -47,6 +48,13 @@ resource "aws_dynamodb_table" "main" {
       attribute_name = "GSI1SK"
       key_type       = "RANGE"
     }
+  }
+
+  # Items with a `ttl` (epoch seconds) are removed by DynamoDB some time after it passes: public
+  # photo links (FR-SHR-8). Readers still check the expiry themselves; removal can take days.
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
   }
 
   point_in_time_recovery {

@@ -6,6 +6,8 @@
 export const userPk = (userId: string) => `USER#${userId}`;
 export const albumPk = (albumId: string) => `ALBUM#${albumId}`;
 export const usernamePk = (username: string) => `USERNAME#${username}`;
+/** A public photo link (FR-SHR-8), found by its token only. */
+export const linkKey = (token: string) => ({ PK: `LINK#${token}`, SK: "LINK" });
 
 export const photoSk = (photoId: string) => `PHOTO#${photoId}`;
 export const albumSk = (albumId: string) => `ALBUM#${albumId}`;

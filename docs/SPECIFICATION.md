@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.20 |
+| **Version** | 0.21 |
 | **Date** | 2026-10-28 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -265,6 +265,7 @@ IDs are stable — reference them in issues, PRs and tests.
 | FR-SHR-4 | Recipients can view and download, but not modify, delete or re-share. |
 | FR-SHR-5 | Owners can also share with a user by their username instead of their email; sharing by username never reveals the recipient's email to the owner. |
 | FR-SHR-6 | A new share is an invitation: the recipient sees the album's name, photo count and who shared it, and gets access only after accepting it. Owners see which shares are not accepted yet. |
+| FR-SHR-8 | Owners can make a **public link** to one of their own processed photos (Share link button next to Download in the viewer). For 15 minutes anyone with the link, without an account, sees the photo (preview) and can download the original under its file name (with its EXIF data, location included). After that, or once the photo is deleted or in the trash, the link shows "expired". Each press makes a new link; links can't be revoked early. |
 | FR-SHR-7 | Recipients can decline an invitation, or remove an accepted shared album from their albums; access ends at once. The owner's album is unchanged; the person simply drops off the owner's share list (no "declined" state), and the owner can share again, which sends a new invitation. |
 
 ### 6.6 Account & quota
@@ -302,7 +303,7 @@ IDs are stable — reference them in issues, PRs and tests.
 
 | ID | Requirement |
 |---|---|
-| NFR-SEC-1 | **Tenant isolation:** the user ID is always taken from the validated JWT (`sub`), never from request path/body. Every data access is scoped to it. |
+| NFR-SEC-1 | **Tenant isolation:** the user ID is always taken from the validated JWT (`sub`), never from request path/body. Every data access is scoped to it. Exception by design: public photo links (FR-SHR-8) are found by an unguessable 128-bit token and expose only that one photo. |
 | NFR-SEC-2 | Requests for another user's resources return **404**, not 403 (no existence leaks). |
 | NFR-SEC-3 | Both S3 buckets block all public access; photos are reachable only via CloudFront (Origin Access Control) or short-lived pre-signed URLs. |
 | NFR-SEC-4 | Encryption at rest for S3 (SSE-S3) and DynamoDB (default); TLS everywhere. |
@@ -363,6 +364,7 @@ Initial design; refine during implementation.
 | Photo | `USER#{userId}` | `PHOTO#{photoId}` | `USER#{userId}`; `TRASH` while in the trash | `TAKEN#{takenAt}#{photoId}`; `PURGE#{purgeAt}#{userId}#{photoId}` while in the trash | status (`pending`/`ready`/`failed`), fileName, contentType, sizeBytes, width, height, takenAt, uploadedAt, originalKey, originalETag, latitude, longitude, place `{city, region, country, countryCode}`, placeIds; in the trash: trashedAt, purgeAt, trashedAlbumIds |
 | Album | `USER#{ownerId}` | `ALBUM#{albumId}` | — | — | name, createdAt, coverPhotoId, photoCount |
 | Album membership | `ALBUM#{albumId}` | `PHOTO#{photoId}` | `ALBUM#{albumId}` | `TAKEN#{takenAt}#{photoId}` (the photo's) | ownerId, addedAt |
+| Photo link | `LINK#{token}` | `LINK` | — | — | ownerId, photoId, createdAt, expiresAt, ttl (epoch seconds, DynamoDB TTL) |
 | Album share | `ALBUM#{albumId}` | `SHARE#{userId}` | `INVITED#{userId}` while pending, `SHAREDWITH#{userId}` once accepted | `ALBUM#{albumId}` | ownerId, email (shares by email only), status (`pending`/`accepted`; absent = accepted, shares from before v0.17), sharedAt, acceptedAt |
 | Usage | `USER#{userId}` | `USAGE` | — | — | bytesUsed, photoCount, quotaBytes |
 | Profile | `USER#{userId}` | `PROFILE` | — | — | username, usernameChangedAt |
@@ -396,7 +398,7 @@ Access patterns:
 ## 9. API specification
 
 - Base path: `/api` (via CloudFront → API Gateway HTTP API).
-- Auth: `Authorization: Bearer <Cognito access token>` on all routes; validated by the API Gateway JWT authorizer.
+- Auth: `Authorization: Bearer <Cognito access token>` on all routes except `/health` and the public link routes `GET /links/*` (FR-SHR-8); validated by the API Gateway JWT authorizer.
 - Format: JSON; request/response schemas defined with Zod in `packages/shared`.
 - Errors: `{ "error": { "code": "QUOTA_EXCEEDED", "message": "…" } }`.
 - Pagination: opaque `cursor` (encoded DynamoDB `LastEvaluatedKey`) + `limit` (default 60, max 200).
@@ -412,6 +414,9 @@ Access patterns:
 | `GET` | `/photos/{photoId}` | Photo metadata; with `?albumId=` a photo of an album shared with the caller, with signed image URLs |
 | `GET` | `/photos/{photoId}/download-url` | 5-min pre-signed GET with `attachment` disposition |
 | `DELETE` | `/photos/{photoId}` | Move to the trash (FR-DEL-3): out of gallery, albums and places, files and usage stay; a `pending` upload is deleted at once (files + metadata + usage) |
+| `POST` | `/photos/{photoId}/links` | Public link to an own ready photo, 15 min → `{token, path: /s/{token}, expiresAt}` (FR-SHR-8) |
+| `GET` | `/links/{token}` | **No login.** The linked photo: preview as a CloudFront signed URL valid until the link expires, dimensions, `expiresAt`; 404 when unknown, expired, deleted or trashed (FR-SHR-8) |
+| `GET` | `/links/{token}/download-url` | **No login.** 5-min pre-signed GET of the original, `attachment` with its file name; same 404 rule (FR-SHR-8) |
 | `GET` | `/trash` | Own photos in the trash (with `trashedAt`, `purgeAt`), most recently deleted first, one response (FR-DEL-3) |
 | `POST` | `/trash/{photoId}/restore` | Restore a photo from the trash; returns the photo (FR-DEL-3) |
 | `DELETE` | `/trash/{photoId}` | Delete a trashed photo for good (FR-DEL-1/3) |
@@ -526,6 +531,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 | `/map` | Map of own photos with GPS (FR-SRCH-5); MapLibre, loaded only with this page |
 | `/upload` | Upload page / queue status |
 | `/settings` | Usage, quota, link to the trash, logout |
+| `/s/$token` | Public photo link (FR-SHR-8), no login, no app shell: the photo, "Link works until …", Download original; "expired" message |
 | `/trash` | Trash (FR-DEL-3): trashed photos with days left; pick to restore or delete forever; empty trash |
 
 ### 12.2 Data fetching (TanStack Query)
@@ -587,7 +593,7 @@ OpenTofu, region `us-east-1`. AWS Organization with separate accounts: **dev**, 
 | `thumbnails` | Python Lambda, IAM role (least privilege), S3 notification + Lambda permission, SQS DLQ, log group (30 days) |
 | `api` | API Gateway HTTP API, JWT authorizer, API Lambda, IAM, throttling, log group; trash purge Lambda (same bundle, own role) run daily by an EventBridge rule (FR-DEL-3) |
 | `auth` | Cognito user pool, domain, Google IdP, app client, pre-sign-up trigger |
-| `database` | DynamoDB table (on-demand, PITR in prod), GSI1 |
+| `database` | DynamoDB table (on-demand, PITR in prod), GSI1, TTL on `ttl` (photo links) |
 | `frontend` | Site bucket, CloudFront distribution (OAC; behaviors for `/`, `/api/*`, `/users/*`), security headers with a strict Content-Security-Policy on the site (self only, plus Cognito, the photo bucket and the OpenFreeMap tiles for `connect-src`), SPA fallback (CloudFront Function on the default behavior: extension-less paths → `/index.html`; no distribution-wide error responses, so API/image 403/404 stay real), CloudFront key group for signed cookies/URLs, ACM cert, optional WAF |
 
 All resources tagged `Project=photo-app`, `Environment={env}`, `ManagedBy=opentofu`.
@@ -754,6 +760,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.21 | 2026-10-28 | Public photo links: FR-SHR-8 (15 min, see + download original, no login), NFR-SEC-1 exception; link item + table TTL (§8.2, §13.1); `POST /photos/{id}/links`, public `GET /links/{token}` and `/download-url` (§9); `/s/$token` page (§12.1) |
 | 0.20 | 2026-10-28 | Managed login styled like the app; email login opens only the email form (§11.1) |
 | 0.19 | 2026-10-28 | Trash: FR-DEL-3 (15 days, restore, delete forever, empty, daily purge), FR-DEL-1/2 adjusted; photo trash attributes + `TRASH` GSI1 key, place `trashedCount` (§8.2); `/trash` routes and `DELETE /photos/{id}` moves to the trash (§9); `/trash` page (§12.1); purge Lambda in the `api` module (§13.1) |
 | 0.18 | 2026-10-28 | Map view (13.2h): FR-SRCH-5, FR-SRCH-4 and NFR-SEC-5 allow rounded coordinates for the owner's map; `GET /places/map` (§9); `/map` route (§12.1); MapLibre + OpenFreeMap (§4); CSP `connect-src` (§13) |

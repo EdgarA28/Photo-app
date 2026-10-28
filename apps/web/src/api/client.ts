@@ -12,6 +12,8 @@ export interface RequestOptions<T> {
   query?: Record<string, string | number | undefined>;
   body?: unknown;
   signal?: AbortSignal | undefined;
+  /** No login needed (public photo links, FR-SHR-8): sent without a token, a 401 isn't a logout. */
+  public?: boolean;
 }
 
 export type Request = <T = void>(
@@ -45,10 +47,10 @@ export function createRequest({
   async function send(
     method: string,
     url: string,
-    token: string,
+    token: string | null,
     options: RequestOptions<unknown>,
   ) {
-    const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
     let body: string | undefined;
     if (options.body !== undefined) {
       headers["Content-Type"] = "application/json";
@@ -69,6 +71,7 @@ export function createRequest({
   ): Promise<T> {
     const url = BASE + path + queryString(options.query);
 
+    if (options.public) return parse(await send(method, url, null, options), method, path, options);
     const token = await auth.getAccessToken();
     if (!token) unauthorized();
     let response = await send(method, url, token, options);
@@ -78,19 +81,27 @@ export function createRequest({
       response = await send(method, url, fresh, options);
       if (response.status === 401) unauthorized();
     }
-
-    if (!response.ok) throw await toError(response);
-    if (!options.schema) return undefined as T;
-    const parsed = options.schema.safeParse(await response.json().catch(() => undefined));
-    if (!parsed.success) {
-      throw new ApiRequestError(
-        "INVALID_RESPONSE",
-        `Unexpected response from ${method} ${path}`,
-        response.status,
-      );
-    }
-    return parsed.data;
+    return parse(response, method, path, options);
   };
+}
+
+async function parse<T>(
+  response: Response,
+  method: string,
+  path: string,
+  options: RequestOptions<T>,
+): Promise<T> {
+  if (!response.ok) throw await toError(response);
+  if (!options.schema) return undefined as T;
+  const parsed = options.schema.safeParse(await response.json().catch(() => undefined));
+  if (!parsed.success) {
+    throw new ApiRequestError(
+      "INVALID_RESPONSE",
+      `Unexpected response from ${method} ${path}`,
+      response.status,
+    );
+  }
+  return parsed.data;
 }
 
 function queryString(query: RequestOptions<unknown>["query"]): string {

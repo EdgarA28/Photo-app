@@ -15,7 +15,7 @@ import {
   type PhotoRecord,
   type Repositories,
 } from "../src/repo";
-import { registerRoutes } from "../src/routes";
+import { registerPublicRoutes, registerRoutes } from "../src/routes";
 
 /**
  * A fresh table per test file, shaped like the `database` module's table (infra/modules/database):
@@ -327,15 +327,14 @@ export async function createTestApi() {
       await hooks.onDelete?.(keys);
     },
   };
-  const app = createApp({
-    routes: registerRoutes({
-      repos,
-      users,
-      storage,
-      media: testMediaSigner(),
-      config: { defaultQuotaBytes: TEST_DEFAULT_QUOTA },
-    }),
-  });
+  const deps = {
+    repos,
+    users,
+    storage,
+    media: testMediaSigner(),
+    config: { defaultQuotaBytes: TEST_DEFAULT_QUOTA },
+  };
+  const app = createApp({ routes: registerRoutes(deps), publicRoutes: registerPublicRoutes(deps) });
 
   async function api(as: string | null, method: string, path: string, body?: unknown) {
     const res = await app.request(

@@ -54,6 +54,24 @@ describe("request", () => {
     expect(init?.body).toBe('{"photoIds":["P"]}');
   });
 
+  it("public requests go without a token, and a 401 there is no logout (FR-SHR-8)", async () => {
+    fetchMock.mockResolvedValueOnce(Response.json(testMe));
+    await client()("GET", "/links/T", { schema: meResponseSchema, public: true });
+    expect(authHeader(0)).toBeUndefined();
+    expect(auth.getAccessToken).not.toHaveBeenCalled();
+
+    fetchMock.mockResolvedValueOnce(apiError(404, "NOT_FOUND"));
+    await expect(client()("GET", "/links/T", { public: true })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      status: 404,
+    });
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 401 }));
+    await expect(client()("GET", "/links/T", { public: true })).rejects.toMatchObject({
+      status: 401,
+    });
+    expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+
   it("returns undefined for 204 routes", async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
     await expect(client()("DELETE", "/photos/P")).resolves.toBeUndefined();

@@ -25,10 +25,11 @@ export interface MediaSigner {
   signCookies(userId: string, now: Date): Promise<MediaCookies>;
   /**
    * One image seen through an album shared with the caller (7.4, §9): `path` (`/users/…`) with a
-   * canned-policy signature for exactly that URL, valid 15 min. Relative, like own image paths,
-   * so it works on CloudFront and through the dev proxy.
+   * canned-policy signature for exactly that URL, valid 15 min, or until `until` if given (a
+   * public photo link's end, FR-SHR-8). Relative, like own image paths, so it works on CloudFront
+   * and through the dev proxy.
    */
-  signUrl(path: string, now: Date): Promise<string>;
+  signUrl(path: string, now: Date, until?: Date): Promise<string>;
 }
 
 export interface MediaSignerOptions {
@@ -84,14 +85,14 @@ export function cloudFrontMediaSigner({
       return { cookies, expiresAt: new Date(expiresEpoch * 1000) };
     },
 
-    async signUrl(path, now) {
+    async signUrl(path, now, until) {
       const signed = getSignedUrl({
         url: `${origin}${path}`,
         keyPairId,
         privateKey: await privateKey(),
-        dateLessThan: new Date(
-          (Math.floor(now.getTime() / 1000) + SHARED_IMAGE_URL_TTL_SECONDS) * 1000,
-        ),
+        dateLessThan: until
+          ? new Date(Math.floor(until.getTime() / 1000) * 1000)
+          : new Date((Math.floor(now.getTime() / 1000) + SHARED_IMAGE_URL_TTL_SECONDS) * 1000),
         algorithm: "SHA256",
       });
       return signed.slice(origin.length);
