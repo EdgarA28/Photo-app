@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.19 |
+| **Version** | 0.20 |
 | **Date** | 2026-10-28 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -485,6 +485,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 - Callback URLs: `https://photos.<domain>/auth/callback`, `http://localhost:5173/auth/callback` (dev).
 - Sign-out URLs: `https://photos.<domain>/login`, `http://localhost:5173/login`.
 - Domain: Cognito prefix domain (dev); optionally custom `auth.<domain>` (prod).
+- Managed login (the email/password, sign-up and reset pages) styled like the app: its neutral colours, light/dark following the device, the app icon as logo and favicon, no AWS background. "Continue with email" opens only the email form (`identity_provider=COGNITO`), since Google has its own button on the app's login page.
 - Token lifetimes (initial): access/ID 1 h, refresh 30 days.
 
 ### 11.2 Google provider
@@ -753,6 +754,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.20 | 2026-10-28 | Managed login styled like the app; email login opens only the email form (§11.1) |
 | 0.19 | 2026-10-28 | Trash: FR-DEL-3 (15 days, restore, delete forever, empty, daily purge), FR-DEL-1/2 adjusted; photo trash attributes + `TRASH` GSI1 key, place `trashedCount` (§8.2); `/trash` routes and `DELETE /photos/{id}` moves to the trash (§9); `/trash` page (§12.1); purge Lambda in the `api` module (§13.1) |
 | 0.18 | 2026-10-28 | Map view (13.2h): FR-SRCH-5, FR-SRCH-4 and NFR-SEC-5 allow rounded coordinates for the owner's map; `GET /places/map` (§9); `/map` route (§12.1); MapLibre + OpenFreeMap (§4); CSP `connect-src` (§13) |
 | 0.17 | 2026-10-27 | Share invitations: FR-SHR-6 (accept), FR-SHR-7 (decline / remove a shared album); share status + `INVITED#` GSI1 key (§8.2); `/share-invitations`, `/shared-albums/{id}/accept`, `DELETE /shared-albums/{id}` (§9); Albums page (§12.1) |
