@@ -10,6 +10,7 @@ import {
   batchGet,
   conditionFailedAt,
   isConditionalCheckFailed,
+  isTransactionConflict,
   queryAll,
   queryPage,
   stripKeys,
@@ -249,7 +250,7 @@ export function photosRepo(db: Db) {
       photoId: string,
       guard: (record: PhotoRecord) => boolean = () => true,
     ): Promise<PhotoRecord | null> {
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let attempt = 0; attempt < 6; attempt++) {
         const record = await getPhoto(db, userId, photoId, true);
         if (!record || !guard(record)) return null;
 
@@ -312,8 +313,13 @@ export function photosRepo(db: Db) {
           await dropEmptyPlaces(db, userId, record.placeIds);
           return record;
         } catch (err) {
-          // Status changed or photo deleted concurrently: re-read and try again.
-          if (!conditionFailedAt(err, 0)) throw err;
+          // Status changed or photo deleted concurrently: re-read and try again. Also when
+          // another delete of this user's photos updated Usage at the same moment (emptying the
+          // trash deletes several in parallel; it answered 500, dev 2026-10-28), after a short
+          // random pause.
+          if (isTransactionConflict(err)) {
+            await new Promise((resolve) => setTimeout(resolve, Math.random() * 50 * 2 ** attempt));
+          } else if (!conditionFailedAt(err, 0)) throw err;
         }
       }
       throw new Error(`Photo ${photoId} kept changing while being deleted`);

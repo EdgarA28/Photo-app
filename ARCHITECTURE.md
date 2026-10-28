@@ -1220,3 +1220,4 @@ Target design: spec §12 (TanStack Router file routes with an authenticated layo
 | 2026-10-28 | Thumbnail Lambda: the final transaction is retried at once on `TransactionConflict` (5 tries, random pause up to 0.1·2ⁿ s); parallel uploads clash on Usage and the photo showed "processing" for Lambda's 1-minute retry (§10). |
 | 2026-10-28 | Upload queue: each picked file starts uploading as soon as it is added, not after the whole pick has been read (§12.4). |
 | 2026-10-28 | `uploadId` on `POST /photos/upload-url` + upload claim item: a repeated request for the same queued file re-signs its photo (app closed before the `photoId` was stored); the queue sends it and counts any 409 as done (§8, §9, §10). |
+| 2026-10-28 | `repos.photos.delete` retries a `TransactionConflict` (re-read, short random pause, up to 6 tries): emptying the trash deletes photos in parallel, all updating Usage, and answered 500 (§9). |
