@@ -195,9 +195,10 @@ function Viewer() {
           <X className="size-5" />
         </Button>
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-sm font-medium">{photo.fileName}</h1>
+          {/* Not shown (user request 2026-10-28), only announced: the photo needs a name. */}
+          <h1 className="sr-only">{photo.fileName}</h1>
           {photo.status === "ready" && (
-            <p className="text-xs text-white/60">{dateFormat.format(new Date(photo.takenAt))}</p>
+            <p className="text-sm text-white/80">{dateFormat.format(new Date(photo.takenAt))}</p>
           )}
           {photo.place && (
             // Own photos only: the API leaves the place out for share recipients (13.2g).

@@ -40,6 +40,13 @@ describe("photo viewer (FR-GAL-4)", () => {
     expect(screen.queryByRole("navigation")).toBeNull();
   });
 
+  it("doesn't show the file name, only announces it; the date is shown", async () => {
+    await renderAt(`/photos/${testId(0)}`, { api: setup().api });
+    const name = await screen.findByRole("heading", { name: "IMG_0.jpg" });
+    expect(name.className).toContain("sr-only");
+    expect(name.nextElementSibling?.textContent).toMatch(/2026/);
+  });
+
   it("steps through the gallery list with the previous/next buttons", async () => {
     const { router } = await renderAt(`/photos/${testId(0)}`, { api: setup().api });
     expect(await screen.findByRole("heading", { name: "IMG_0.jpg" })).toBeTruthy();
