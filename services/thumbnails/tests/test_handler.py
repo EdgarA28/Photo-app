@@ -301,6 +301,37 @@ def test_transient_errors_are_raised(aws: tuple[Any, Any], jpeg_plain: bytes) ->
     assert item["status"]["S"] == "pending"
 
 
+def test_transaction_conflict_is_retried_at_once(
+    aws: tuple[Any, Any], jpeg_plain: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Parallel uploads all update Usage; a clash must not wait a minute for Lambda's retry.
+    s3, dynamodb = aws
+    put_pending(dynamodb, declared=len(jpeg_plain))
+    event = upload(s3, jpeg_plain)
+    processor = handler_module._processor()
+    real = processor._dynamodb.transact_write_items
+    calls = {"n": 0}
+
+    def flaky(**kwargs: Any) -> Any:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ClientError(
+                {
+                    "Error": {"Code": "TransactionCanceledException", "Message": "conflict"},
+                    "CancellationReasons": [{"Code": "None"}, {"Code": "TransactionConflict"}],
+                },
+                "TransactWriteItems",
+            )
+        return real(**kwargs)
+
+    monkeypatch.setattr(processor._dynamodb, "transact_write_items", flaky)
+    monkeypatch.setattr("thumbnails.processor.time.sleep", lambda _s: None)
+    handler_module.handler(event)
+    item = get(dynamodb, PHOTO_KEY)
+    assert item is not None and item["status"]["S"] == "ready"
+    assert calls["n"] == 2
+
+
 # 12.2b: the upload POST stays valid for 15 min, so the original can be overwritten after it was
 # processed. The photo must not stay `ready` with derived images of other bytes.
 
