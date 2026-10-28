@@ -4,8 +4,8 @@ import {
   albumShareListSchema,
   albumShareSchema,
   downloadUrlResponseSchema,
-  linkedPhotoSchema,
   photoLinkSchema,
+  sharedLinkSchema,
   mediaCookieResponseSchema,
   meResponseSchema,
   photoLocationListSchema,
@@ -60,19 +60,19 @@ export function createApi(request: Request) {
           schema: downloadUrlResponseSchema,
           query: { albumId },
         }),
-      /** A public link to the photo, valid 15 min (FR-SHR-8). */
-      createLink: (photoId: string) =>
-        request("POST", `/photos/${enc(photoId)}/links`, { schema: photoLinkSchema }),
       /** Moves it to the trash; a pending upload is deleted at once (FR-DEL-3). */
       delete: (photoId: string) => request("DELETE", `/photos/${enc(photoId)}`),
     },
 
-    /** Public photo links, no login (FR-SHR-8). */
+    /** Public photo links (FR-SHR-8): created signed in, opened without a login. */
     links: {
+      /** A link to these own photos, valid 15 min. */
+      create: (photoIds: string[]) =>
+        request("POST", "/links", { schema: photoLinkSchema, body: { photoIds } }),
       get: (token: string, o?: Opts) =>
-        request("GET", `/links/${enc(token)}`, { schema: linkedPhotoSchema, public: true, ...o }),
-      downloadUrl: (token: string) =>
-        request("GET", `/links/${enc(token)}/download-url`, {
+        request("GET", `/links/${enc(token)}`, { schema: sharedLinkSchema, public: true, ...o }),
+      downloadUrl: (token: string, photoId: string) =>
+        request("GET", `/links/${enc(token)}/photos/${enc(photoId)}/download-url`, {
           schema: downloadUrlResponseSchema,
           public: true,
         }),

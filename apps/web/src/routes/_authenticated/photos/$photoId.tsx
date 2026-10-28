@@ -31,7 +31,7 @@ import {
   type ReactNode,
 } from "react";
 import { useImageFailed } from "@/components/useImageFailed";
-import { ShareLinkButton } from "@/viewer/ShareLinkButton";
+import { ShareLinkButton } from "@/links/ShareLinkDialog";
 import { errorMessage } from "@/api/errors";
 import {
   AlertDialog,
@@ -326,7 +326,7 @@ function PhotoActions({
         )}
       </Button>
       {own && photo.status === "ready" && (
-        <ShareLinkButton photo={photo} setOverlay={setOverlay} className={iconButton} />
+        <ShareLinkButton photoId={photo.photoId} setOverlay={setOverlay} className={iconButton} />
       )}
       {own && (
         <AlbumActions photo={photo} album={album} setOverlay={setOverlay} onRemoved={onDeleted} />

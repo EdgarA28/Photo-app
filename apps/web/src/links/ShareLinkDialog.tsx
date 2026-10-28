@@ -1,8 +1,8 @@
-import { PHOTO_LINK_TTL_SECONDS, type Photo, type PhotoLink } from "@photo-app/shared";
+import { PHOTO_LINK_TTL_SECONDS, type PhotoLink } from "@photo-app/shared";
 import { useMutation } from "@tanstack/react-query";
 import { useRouteContext } from "@tanstack/react-router";
 import { Check, Copy, Link2, LoaderCircle, Share2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { errorMessage } from "@/api/errors";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,47 +16,36 @@ import { Input } from "@/components/ui/input";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
 const minutes = PHOTO_LINK_TTL_SECONDS / 60;
+const photosText = (count: number) => (count === 1 ? "1 photo" : `${count} photos`);
 
 /**
- * "Share link" in the viewer (FR-SHR-8): makes a public link to this photo that anyone can open
- * for 15 minutes, to see it and download the original. Each press makes a new link. Own, processed
- * photos only (the caller decides); the API refuses the rest.
+ * Public link (FR-SHR-8) to own photos: anyone with it can see them and download the originals for
+ * 15 minutes. `trigger` opens the dialog, which makes a new link each time; photos still
+ * processing or in the trash are left out by the API, and the dialog says so.
  */
-export function ShareLinkButton({
-  photo,
-  className,
-  setOverlay,
+export function ShareLinkDialog({
+  photoIds,
+  trigger,
+  onOpenChange,
 }: {
-  photo: Photo;
-  className?: string;
-  /** While the dialog is open the viewer ignores its keys. */
-  setOverlay: (open: boolean) => void;
+  photoIds: string[];
+  trigger: (props: { open: () => void; busy: boolean }) => ReactNode;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const api = useRouteContext({ from: "__root__", select: (context) => context.api });
   const [open, setOpen] = useState(false);
-  const create = useMutation({ mutationFn: () => api.photos.createLink(photo.photoId) });
-  useEffect(() => setOverlay(open), [open, setOverlay]);
+  const create = useMutation({ mutationFn: (ids: string[]) => api.links.create(ids) });
+  useEffect(() => onOpenChange?.(open), [open, onOpenChange]);
 
   return (
     <>
-      <Button
-        variant="ghost"
-        size="icon-lg"
-        aria-label="Share link"
-        title={`Link anyone can open for ${minutes} minutes`}
-        disabled={create.isPending}
-        onClick={() => {
+      {trigger({
+        open: () => {
           setOpen(true);
-          create.mutate();
-        }}
-        className={className}
-      >
-        {create.isPending ? (
-          <LoaderCircle className="size-5 motion-safe:animate-spin" />
-        ) : (
-          <Link2 className="size-5" />
-        )}
-      </Button>
+          create.mutate(photoIds);
+        },
+        busy: create.isPending,
+      })}
       <Dialog
         open={open}
         onOpenChange={(next) => {
@@ -68,8 +57,9 @@ export function ShareLinkButton({
           <DialogHeader>
             <DialogTitle>Share link</DialogTitle>
             <DialogDescription>
-              Anyone with this link can see the photo and download the original for {minutes}{" "}
-              minutes, without an account.
+              Anyone with this link can see{" "}
+              {photoIds.length === 1 ? "the photo" : `these ${photoIds.length} photos`} and download
+              the originals for {minutes} minutes, without an account.
             </DialogDescription>
           </DialogHeader>
           {create.isError ? (
@@ -77,7 +67,7 @@ export function ShareLinkButton({
               {errorMessage(create.error)}
             </p>
           ) : create.data ? (
-            <LinkReady link={create.data} />
+            <LinkReady link={create.data} requested={photoIds.length} />
           ) : (
             <p role="status" className="text-sm text-muted-foreground">
               Creating link…
@@ -89,11 +79,48 @@ export function ShareLinkButton({
   );
 }
 
-function LinkReady({ link }: { link: PhotoLink }) {
+/** The viewer's icon button for one photo. */
+export function ShareLinkButton({
+  photoId,
+  className,
+  setOverlay,
+}: {
+  photoId: string;
+  className?: string;
+  /** While the dialog is open the viewer ignores its keys. */
+  setOverlay: (open: boolean) => void;
+}) {
+  return (
+    <ShareLinkDialog
+      photoIds={[photoId]}
+      onOpenChange={setOverlay}
+      trigger={({ open, busy }) => (
+        <Button
+          variant="ghost"
+          size="icon-lg"
+          aria-label="Share link"
+          title={`Link anyone can open for ${minutes} minutes`}
+          disabled={busy}
+          onClick={open}
+          className={className}
+        >
+          {busy ? (
+            <LoaderCircle className="size-5 motion-safe:animate-spin" />
+          ) : (
+            <Link2 className="size-5" />
+          )}
+        </Button>
+      )}
+    />
+  );
+}
+
+function LinkReady({ link, requested }: { link: PhotoLink; requested: number }) {
   const url = `${window.location.origin}${link.path}`;
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
   const canShare = typeof navigator.share === "function";
+  const left = requested - link.photoCount;
 
   return (
     <div className="space-y-3">
@@ -104,8 +131,15 @@ function LinkReady({ link }: { link: PhotoLink }) {
         onFocus={(event) => event.currentTarget.select()}
       />
       <p className="text-sm text-muted-foreground">
-        Works until {timeFormat.format(new Date(link.expiresAt))}.
+        {requested > 1 && `${photosText(link.photoCount)} · `}Works until{" "}
+        {timeFormat.format(new Date(link.expiresAt))}.
       </p>
+      {left > 0 && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {photosText(left)} still processing or in the trash {left === 1 ? "was" : "were"} left
+          out.
+        </p>
+      )}
       {copyFailed && (
         <p role="alert" className="text-sm text-destructive">
           Couldn't copy. Select the link and copy it yourself.

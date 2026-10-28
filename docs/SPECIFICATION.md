@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.21 |
+| **Version** | 0.22 |
 | **Date** | 2026-10-28 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -265,7 +265,7 @@ IDs are stable — reference them in issues, PRs and tests.
 | FR-SHR-4 | Recipients can view and download, but not modify, delete or re-share. |
 | FR-SHR-5 | Owners can also share with a user by their username instead of their email; sharing by username never reveals the recipient's email to the owner. |
 | FR-SHR-6 | A new share is an invitation: the recipient sees the album's name, photo count and who shared it, and gets access only after accepting it. Owners see which shares are not accepted yet. |
-| FR-SHR-8 | Owners can make a **public link** to one of their own processed photos (Share link button next to Download in the viewer). For 15 minutes anyone with the link, without an account, sees the photo (preview) and can download the original under its file name (with its EXIF data, location included). After that, or once the photo is deleted or in the trash, the link shows "expired". Each press makes a new link; links can't be revoked early. |
+| FR-SHR-8 | Owners can make a **public link** to their own processed photos: one photo (Share link button next to Download in the viewer) or up to 100 picked in the gallery's select mode (Share link next to Delete). For 15 minutes anyone with the link, without an account, sees the photos (one full screen, several as a grid that opens each one large) and can download each original under its file name (with its EXIF data, location included). Photos still processing or in the trash are left out (the owner is told); a photo deleted or trashed later drops out of the link; after 15 minutes, or with nothing left, the link shows "expired". Each press makes a new link; links can't be revoked early. |
 | FR-SHR-7 | Recipients can decline an invitation, or remove an accepted shared album from their albums; access ends at once. The owner's album is unchanged; the person simply drops off the owner's share list (no "declined" state), and the owner can share again, which sends a new invitation. |
 
 ### 6.6 Account & quota
@@ -364,7 +364,7 @@ Initial design; refine during implementation.
 | Photo | `USER#{userId}` | `PHOTO#{photoId}` | `USER#{userId}`; `TRASH` while in the trash | `TAKEN#{takenAt}#{photoId}`; `PURGE#{purgeAt}#{userId}#{photoId}` while in the trash | status (`pending`/`ready`/`failed`), fileName, contentType, sizeBytes, width, height, takenAt, uploadedAt, originalKey, originalETag, latitude, longitude, place `{city, region, country, countryCode}`, placeIds; in the trash: trashedAt, purgeAt, trashedAlbumIds |
 | Album | `USER#{ownerId}` | `ALBUM#{albumId}` | — | — | name, createdAt, coverPhotoId, photoCount |
 | Album membership | `ALBUM#{albumId}` | `PHOTO#{photoId}` | `ALBUM#{albumId}` | `TAKEN#{takenAt}#{photoId}` (the photo's) | ownerId, addedAt |
-| Photo link | `LINK#{token}` | `LINK` | — | — | ownerId, photoId, createdAt, expiresAt, ttl (epoch seconds, DynamoDB TTL) |
+| Photo link | `LINK#{token}` | `LINK` | — | — | ownerId, photoIds (≤ 100, newest first), createdAt, expiresAt, ttl (epoch seconds, DynamoDB TTL) |
 | Album share | `ALBUM#{albumId}` | `SHARE#{userId}` | `INVITED#{userId}` while pending, `SHAREDWITH#{userId}` once accepted | `ALBUM#{albumId}` | ownerId, email (shares by email only), status (`pending`/`accepted`; absent = accepted, shares from before v0.17), sharedAt, acceptedAt |
 | Usage | `USER#{userId}` | `USAGE` | — | — | bytesUsed, photoCount, quotaBytes |
 | Profile | `USER#{userId}` | `PROFILE` | — | — | username, usernameChangedAt |
@@ -414,9 +414,9 @@ Access patterns:
 | `GET` | `/photos/{photoId}` | Photo metadata; with `?albumId=` a photo of an album shared with the caller, with signed image URLs |
 | `GET` | `/photos/{photoId}/download-url` | 5-min pre-signed GET with `attachment` disposition |
 | `DELETE` | `/photos/{photoId}` | Move to the trash (FR-DEL-3): out of gallery, albums and places, files and usage stay; a `pending` upload is deleted at once (files + metadata + usage) |
-| `POST` | `/photos/{photoId}/links` | Public link to an own ready photo, 15 min → `{token, path: /s/{token}, expiresAt}` (FR-SHR-8) |
-| `GET` | `/links/{token}` | **No login.** The linked photo: preview as a CloudFront signed URL valid until the link expires, dimensions, `expiresAt`; 404 when unknown, expired, deleted or trashed (FR-SHR-8) |
-| `GET` | `/links/{token}/download-url` | **No login.** 5-min pre-signed GET of the original, `attachment` with its file name; same 404 rule (FR-SHR-8) |
+| `POST` | `/links` | Public link `{photoIds}` (1–100 own photos; not ready / trashed / foreign left out), 15 min → `{token, path: /s/{token}, expiresAt, photoCount}`; none of the caller's → 404, none shareable → 409 (FR-SHR-8) |
+| `GET` | `/links/{token}` | **No login.** `{photos: [{photoId, thumbUrl, previewUrl, width, height}], expiresAt}`, newest first, images as CloudFront signed URLs valid until the link expires; 404 when unknown, expired or no photo left (FR-SHR-8) |
+| `GET` | `/links/{token}/photos/{photoId}/download-url` | **No login.** 5-min pre-signed GET of that original (only photos of the link), `attachment` with its file name; same 404 rule (FR-SHR-8) |
 | `GET` | `/trash` | Own photos in the trash (with `trashedAt`, `purgeAt`), most recently deleted first, one response (FR-DEL-3) |
 | `POST` | `/trash/{photoId}/restore` | Restore a photo from the trash; returns the photo (FR-DEL-3) |
 | `DELETE` | `/trash/{photoId}` | Delete a trashed photo for good (FR-DEL-1/3) |
@@ -531,7 +531,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 | `/map` | Map of own photos with GPS (FR-SRCH-5); MapLibre, loaded only with this page |
 | `/upload` | Upload page / queue status |
 | `/settings` | Usage, quota, link to the trash, logout |
-| `/s/$token` | Public photo link (FR-SHR-8), no login, no app shell: the photo, "Link works until …", Download original; "expired" message |
+| `/s/$token` | Public photo link (FR-SHR-8), no login, no app shell: one photo full screen, or a grid ("N shared photos") whose tiles open the photo large with prev/next; "Link works until …", Download original per photo; "expired" message |
 | `/trash` | Trash (FR-DEL-3): trashed photos with days left; pick to restore or delete forever; empty trash |
 
 ### 12.2 Data fetching (TanStack Query)
@@ -760,6 +760,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.22 | 2026-10-28 | FR-SHR-8: several photos per link (gallery select mode, up to 100); `POST /links` replaces `POST /photos/{id}/links`, link page lists the photos, download per photo `/links/{token}/photos/{photoId}/download-url` (§8.2, §9, §12.1) |
 | 0.21 | 2026-10-28 | Public photo links: FR-SHR-8 (15 min, see + download original, no login), NFR-SEC-1 exception; link item + table TTL (§8.2, §13.1); `POST /photos/{id}/links`, public `GET /links/{token}` and `/download-url` (§9); `/s/$token` page (§12.1) |
 | 0.20 | 2026-10-28 | Managed login styled like the app; email login opens only the email form (§11.1) |
 | 0.19 | 2026-10-28 | Trash: FR-DEL-3 (15 days, restore, delete forever, empty, daily purge), FR-DEL-1/2 adjusted; photo trash attributes + `TRASH` GSI1 key, place `trashedCount` (§8.2); `/trash` routes and `DELETE /photos/{id}` moves to the trash (§9); `/trash` page (§12.1); purge Lambda in the `api` module (§13.1) |

@@ -4,13 +4,14 @@ import { linkKey } from "./keys";
 
 /**
  * Public photo links (FR-SHR-8, §8.2): item `LINK#{token}` / `LINK`. The token is the only key,
- * so a link reveals nothing but its one photo. `ttl` (epoch seconds) lets DynamoDB remove expired
+ * so a link reveals nothing but its photos. `ttl` (epoch seconds) lets DynamoDB remove expired
  * items; that can take days, so readers check `expiresAt` themselves.
  */
 export interface LinkRecord {
   token: string;
   ownerId: string;
-  photoId: string;
+  /** Up to 100 of the owner's photos, newest first. */
+  photoIds: string[];
   createdAt: string;
   expiresAt: string;
 }
@@ -39,7 +40,13 @@ export function linksRepo(db: Db) {
         new GetCommand({ TableName: db.table, Key: linkKey(token), ConsistentRead: true }),
       );
       if (!output.Item) return null;
-      const { ttl: _, ...link } = stripKeys<LinkRecord & { ttl: number }>(output.Item);
+      const {
+        ttl: _,
+        photoId,
+        ...rest
+      } = stripKeys<LinkRecord & { ttl: number; photoId?: string }>(output.Item);
+      // Links made before several photos per link (expired within 15 min of that deploy).
+      const link = { ...rest, photoIds: rest.photoIds ?? (photoId ? [photoId] : []) };
       return link.expiresAt > now.toISOString() ? link : null;
     },
   };
