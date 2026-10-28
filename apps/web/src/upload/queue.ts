@@ -88,6 +88,13 @@ export const TAKEOVER_CHECK_MS = 3000;
 export const TAKEOVER_AFTER_MS = 10_000;
 /** While hidden with uploads waiting, the Background Sync is asked for again this often (9.5). */
 export const SYNC_REARM_MS = 60_000;
+/**
+ * Reading the stored queue is given up after this long; writes are never waited for. On Android
+ * an app window frozen in the background mid-transaction stalls the store for minutes in every
+ * window (seen over remote debugging, 2026-10-28): uploads stuck at 0 %, picked photos missing,
+ * a queue that never started.
+ */
+export const STORE_READ_TIMEOUT_MS = 2000;
 
 /**
  * Between tabs and the service worker. `working`: the service worker is uploading (its fetch
@@ -141,6 +148,10 @@ export function createUploadQueue({
   let starting: Promise<void> = Promise.resolve();
 
   const items = new Map<string, UploadItem>();
+  /** Items whose latest version isn't stored yet: a reload keeps them as this tab knows them. */
+  const unsaved = new Set<string>();
+  /** Each item's latest write to IndexedDB (settled either way). */
+  const writes = new Map<string, Promise<void>>();
   const progress = new Map<string, number>();
   /** Uploads running in this tab. */
   const active = new Map<string, AbortController>();
@@ -162,15 +173,19 @@ export function createUploadQueue({
 
   async function save(item: UploadItem) {
     items.set(item.id, item);
+    unsaved.add(item.id);
     emit();
-    try {
-      await store.put(item);
-    } catch (error) {
-      // The stored copy only matters if the app closes mid-upload; failing to write it must not
-      // stop the upload or a retry (found on Android: "Failed to write blobs (InvalidBlob)").
-      console.warn("Saving the upload queue failed", error);
-    }
-    broadcast({ type: "changed" });
+    // Not waited for (see STORE_READ_TIMEOUT_MS). The stored copy only matters if the app closes
+    // mid-upload; failing to write it must not stop the upload or a retry (found on Android:
+    // "Failed to write blobs (InvalidBlob)").
+    const written = store.put(item).then(
+      () => {
+        if (items.get(item.id) === item) unsaved.delete(item.id);
+        broadcast({ type: "changed" });
+      },
+      (error: unknown) => console.warn("Saving the upload queue failed", error),
+    );
+    writes.set(item.id, written);
   }
 
   /** Applies a change to an item still in the queue (it may have been removed meanwhile). */
@@ -179,19 +194,31 @@ export function createUploadQueue({
     if (current) await save({ ...current, ...patch });
   }
 
-  /** Reads the stored queue, keeping this tab's running uploads as it knows them. */
-  async function reload() {
-    if (!userId) return;
+  /**
+   * Reads the stored queue, keeping this tab's running uploads as it knows them. Returns the IDs
+   * read, or null if the store didn't answer in time.
+   */
+  async function reload(): Promise<Set<string> | null> {
+    if (!userId) return null;
     const forSession = session;
-    const stored = await store.list(userId);
-    if (forSession !== session) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stored = await Promise.race([
+      store.list(userId),
+      new Promise<null>((resolve) => (timer = setTimeout(resolve, STORE_READ_TIMEOUT_MS, null))),
+    ]).finally(() => clearTimeout(timer));
+    // Unreadable for now: carry on with what this tab knows.
+    if (!stored || forSession !== session) return null;
     const storedIds = new Set(stored.map((item) => item.id));
-    for (const [id, controller] of active) if (!storedIds.has(id)) controller.abort();
+    for (const [id, controller] of active) {
+      if (!storedIds.has(id) && !unsaved.has(id)) controller.abort();
+    }
     const known = new Map(items);
     items.clear();
     for (const item of stored) {
-      items.set(item.id, (active.has(item.id) && known.get(item.id)) || item);
+      const mine = active.has(item.id) || unsaved.has(item.id);
+      items.set(item.id, (mine && known.get(item.id)) || item);
     }
+    for (const id of unsaved) if (!items.has(id) && known.has(id)) items.set(id, known.get(id)!);
     emit();
     // Finished by another tab: refresh what shows it here too (its gallery would stay stale; the
     // uploading tab already did its own before marking the item done).
@@ -200,6 +227,7 @@ export function createUploadQueue({
         item.status === "done" && known.has(item.id) && known.get(item.id)!.status !== "done",
     );
     if (finishedElsewhere) await onUploaded?.();
+    return storedIds;
   }
 
   function onMessage(event: MessageEvent<UploadMessage>) {
@@ -226,9 +254,11 @@ export function createUploadQueue({
     leader = true;
     clearInterval(ticker);
     ticker = undefined;
-    await reload();
+    const stored = await reload();
     if (forSession !== session) return;
     for (const item of [...items.values()]) {
+      // Only what an earlier session left behind, not this session's own work.
+      if (!stored?.has(item.id) || active.has(item.id)) continue;
       if (item.status === "uploading") await update(item.id, { status: "queued", retryAt: 0 });
       // Finished in an earlier session: already in the gallery.
       else if (item.status === "done") await forget(item.id);
@@ -270,7 +300,17 @@ export function createUploadQueue({
         { api, post, now },
         {
           signal,
-          onPhotoId: (photoId) => update(id, { photoId }),
+          // The one write waited for, briefly: with the photoId stored before the file goes out,
+          // an app closed mid-upload re-signs this photo on its next start instead of
+          // uploading a duplicate (5.6a). A stalled store doesn't hold the upload up.
+          onPhotoId: async (photoId) => {
+            await update(id, { photoId });
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            await Promise.race([
+              writes.get(id),
+              new Promise((resolve) => (timer = setTimeout(resolve, STORE_READ_TIMEOUT_MS))),
+            ]).finally(() => clearTimeout(timer));
+          },
           onProgress: (fraction) => {
             if (signal.aborted) return;
             progress.set(id, fraction);
@@ -300,10 +340,14 @@ export function createUploadQueue({
   async function forget(id: string) {
     active.get(id)?.abort();
     items.delete(id);
+    unsaved.delete(id);
+    writes.delete(id);
     progress.delete(id);
     emit();
-    await store.delete(id);
-    broadcast({ type: "changed" });
+    store.delete(id).then(
+      () => broadcast({ type: "changed" }),
+      (error: unknown) => console.warn("Removing from the upload queue failed", error),
+    );
   }
 
   /**
