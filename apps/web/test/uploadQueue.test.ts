@@ -470,6 +470,20 @@ describe("upload queue: files from the device (Android, 2026-10-26)", () => {
     expect([...store.items.values()][0]!.photoId).toBe(testId(1));
   });
 
+  it("starts uploading the first picked files while the rest are still being read", async () => {
+    const { api } = uploadApi();
+    const { post, calls } = controlledPost();
+    const { queue } = testUploadQueue(api, { post });
+    await queue.start(USER);
+    let finishRead!: (bytes: ArrayBuffer) => void;
+    const slow = testFile("IMG_2.jpg");
+    vi.spyOn(slow, "arrayBuffer").mockReturnValue(new Promise((resolve) => (finishRead = resolve)));
+    const added = queue.add([testFile("IMG_1.jpg"), slow]);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    finishRead(new ArrayBuffer(1000));
+    expect((await added).added).toBe(2);
+  });
+
   it("starts uploading when reading the stored queue never finishes", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const store = new MemoryUploadStore();

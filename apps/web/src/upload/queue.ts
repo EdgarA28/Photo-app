@@ -525,6 +525,8 @@ export function createUploadQueue({
         });
         result.added++;
         result.addedBytes += file.size;
+        // Upload the first ones while the rest are still being read.
+        pump();
       }
       if (result.added && !persistenceRequested) {
         persistenceRequested = true;
