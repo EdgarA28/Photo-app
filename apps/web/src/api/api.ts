@@ -13,6 +13,7 @@ import {
   setUsernameResponseSchema,
   sharedAlbumPageSchema,
   shareInvitationPageSchema,
+  trashListSchema,
   uploadUrlResponseSchema,
   type AddAlbumPhotosRequest,
   type CreateAlbumRequest,
@@ -57,7 +58,16 @@ export function createApi(request: Request) {
           schema: downloadUrlResponseSchema,
           query: { albumId },
         }),
+      /** Moves it to the trash; a pending upload is deleted at once (FR-DEL-3). */
       delete: (photoId: string) => request("DELETE", `/photos/${enc(photoId)}`),
+    },
+
+    trash: {
+      list: (o?: Opts) => request("GET", "/trash", { schema: trashListSchema, ...o }),
+      restore: (photoId: string) =>
+        request("POST", `/trash/${enc(photoId)}/restore`, { schema: photoSchema }),
+      deleteForever: (photoId: string) => request("DELETE", `/trash/${enc(photoId)}`),
+      empty: () => request("DELETE", "/trash"),
     },
 
     places: {

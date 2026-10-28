@@ -7,3 +7,8 @@ output "function_name" {
   description = "API Lambda, for logs and manual checks."
   value       = aws_lambda_function.api.function_name
 }
+
+output "purge_function_name" {
+  description = "Daily trash purge Lambda (FR-DEL-3), for logs and manual runs."
+  value       = aws_lambda_function.purge.function_name
+}

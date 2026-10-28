@@ -15,6 +15,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedGalleryRouteImport } from './routes/_authenticated/gallery'
 import { Route as AuthenticatedMapRouteImport } from './routes/_authenticated/map'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
+import { Route as AuthenticatedTrashRouteImport } from './routes/_authenticated/trash'
 import { Route as AuthenticatedUploadRouteImport } from './routes/_authenticated/upload'
 import { Route as AuthCallbackRouteImport } from './routes/auth/callback'
 import { Route as AuthenticatedAlbumsIndexRouteImport } from './routes/_authenticated/albums/index'
@@ -48,6 +49,11 @@ const AuthenticatedMapRoute = AuthenticatedMapRouteImport.update({
 const AuthenticatedSettingsRoute = AuthenticatedSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedTrashRoute = AuthenticatedTrashRouteImport.update({
+  id: '/trash',
+  path: '/trash',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
 const AuthenticatedUploadRoute = AuthenticatedUploadRouteImport.update({
@@ -85,6 +91,7 @@ export interface FileRoutesByFullPath {
   '/gallery': typeof AuthenticatedGalleryRoute
   '/map': typeof AuthenticatedMapRoute
   '/settings': typeof AuthenticatedSettingsRoute
+  '/trash': typeof AuthenticatedTrashRoute
   '/upload': typeof AuthenticatedUploadRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/albums/$albumId': typeof AuthenticatedAlbumsAlbumIdRoute
@@ -97,6 +104,7 @@ export interface FileRoutesByTo {
   '/gallery': typeof AuthenticatedGalleryRoute
   '/map': typeof AuthenticatedMapRoute
   '/settings': typeof AuthenticatedSettingsRoute
+  '/trash': typeof AuthenticatedTrashRoute
   '/upload': typeof AuthenticatedUploadRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/albums/$albumId': typeof AuthenticatedAlbumsAlbumIdRoute
@@ -111,6 +119,7 @@ export interface FileRoutesById {
   '/_authenticated/gallery': typeof AuthenticatedGalleryRoute
   '/_authenticated/map': typeof AuthenticatedMapRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
+  '/_authenticated/trash': typeof AuthenticatedTrashRoute
   '/_authenticated/upload': typeof AuthenticatedUploadRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/_authenticated/albums/$albumId': typeof AuthenticatedAlbumsAlbumIdRoute
@@ -125,6 +134,7 @@ export interface FileRouteTypes {
     | '/gallery'
     | '/map'
     | '/settings'
+    | '/trash'
     | '/upload'
     | '/auth/callback'
     | '/albums/$albumId'
@@ -137,6 +147,7 @@ export interface FileRouteTypes {
     | '/gallery'
     | '/map'
     | '/settings'
+    | '/trash'
     | '/upload'
     | '/auth/callback'
     | '/albums/$albumId'
@@ -150,6 +161,7 @@ export interface FileRouteTypes {
     | '/_authenticated/gallery'
     | '/_authenticated/map'
     | '/_authenticated/settings'
+    | '/_authenticated/trash'
     | '/_authenticated/upload'
     | '/auth/callback'
     | '/_authenticated/albums/$albumId'
@@ -208,6 +220,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSettingsRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/trash': {
+      id: '/_authenticated/trash'
+      path: '/trash'
+      fullPath: '/trash'
+      preLoaderRoute: typeof AuthenticatedTrashRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/upload': {
       id: '/_authenticated/upload'
       path: '/upload'
@@ -250,6 +269,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedGalleryRoute: typeof AuthenticatedGalleryRoute
   AuthenticatedMapRoute: typeof AuthenticatedMapRoute
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
+  AuthenticatedTrashRoute: typeof AuthenticatedTrashRoute
   AuthenticatedUploadRoute: typeof AuthenticatedUploadRoute
   AuthenticatedAlbumsAlbumIdRoute: typeof AuthenticatedAlbumsAlbumIdRoute
   AuthenticatedPhotosPhotoIdRoute: typeof AuthenticatedPhotosPhotoIdRoute
@@ -260,6 +280,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedGalleryRoute: AuthenticatedGalleryRoute,
   AuthenticatedMapRoute: AuthenticatedMapRoute,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
+  AuthenticatedTrashRoute: AuthenticatedTrashRoute,
   AuthenticatedUploadRoute: AuthenticatedUploadRoute,
   AuthenticatedAlbumsAlbumIdRoute: AuthenticatedAlbumsAlbumIdRoute,
   AuthenticatedPhotosPhotoIdRoute: AuthenticatedPhotosPhotoIdRoute,

@@ -1,5 +1,6 @@
-import type { Photo } from "@photo-app/shared";
+import { TRASH_RETENTION_DAYS, type Photo } from "@photo-app/shared";
 import {
+  InfiniteQueryObserver,
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -61,6 +62,8 @@ import { ZoomableImage } from "@/viewer/ZoomableImage";
 const SWIPE_MIN_PX = 50;
 /** Load the next gallery page when the viewer gets this close to the end of the loaded ones. */
 const LOOKAHEAD_PHOTOS = 3;
+/** How far an album or place list is paged to find the photo opened (from the map, 13.2h). */
+const MAX_SEARCH_PAGES = 20;
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
@@ -72,11 +75,24 @@ export const Route = createFileRoute("/_authenticated/photos/$photoId")({
   loader: async ({ context: { queryClient, api }, params: { photoId }, deps }) => {
     // Usually cached from the gallery. A photo beyond the loaded pages (deep link) is fetched on
     // its own; then there is no prev/next. 404 for other users' photos (NFR-SEC-2).
-    const list = await queryClient.infiniteQuery({
+    let { pages } = await queryClient.infiniteQuery({
       ...galleryQuery(api, deps),
       staleTime: "static",
     });
-    if (!list.pages.some((page) => page.items.some((p) => p.photoId === photoId))) {
+    const listed = () => pages.some((page) => page.items.some((p) => p.photoId === photoId));
+    // An album or place list is paged on until the photo turns up, so prev/next work for a photo
+    // opened from the map in its town's list (13.2h). Not for all photos: that list can be long.
+    if (deps.album || deps.place) {
+      const observer = new InfiniteQueryObserver(queryClient, galleryQuery(api, deps));
+      let more = pages.at(-1)?.nextCursor != null;
+      for (let n = 0; !listed() && more && n < MAX_SEARCH_PAGES; n++) {
+        const result = await observer.fetchNextPage();
+        if (!result.data) break;
+        pages = result.data.pages;
+        more = result.hasNextPage;
+      }
+    }
+    if (!listed()) {
       await queryClient.query({ ...photoQuery(api, photoId, deps.album), staleTime: "static" });
     }
   },
@@ -179,9 +195,10 @@ function Viewer() {
           <X className="size-5" />
         </Button>
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-sm font-medium">{photo.fileName}</h1>
+          {/* Not shown (user request 2026-10-28), only announced: the photo needs a name. */}
+          <h1 className="sr-only">{photo.fileName}</h1>
           {photo.status === "ready" && (
-            <p className="text-xs text-white/60">{dateFormat.format(new Date(photo.takenAt))}</p>
+            <p className="text-sm text-white/80">{dateFormat.format(new Date(photo.takenAt))}</p>
           )}
           {photo.place && (
             // Own photos only: the API leaves the place out for share recipients (13.2g).
@@ -237,7 +254,7 @@ function SharedByLine({ album }: { album: string }) {
 }
 
 /**
- * Download (FR-DL-1/2) and delete (FR-DEL-1/2). Delete is offered for own photos only: in an album
+ * Download (FR-DL-1/2) and delete to the trash (FR-DEL-1/2/3). Delete is offered for own photos only: in an album
  * that isn't in my album list (shared with me) the photo belongs to someone else.
  */
 function PhotoActions({
@@ -258,7 +275,9 @@ function PhotoActions({
   const { api } = Route.useRouteContext();
   const queryClient = useQueryClient();
   const { data: albums } = useQuery({ ...albumsQuery(api), enabled: album !== undefined });
-  const own = album === undefined || !!albums?.items.some((a) => a.albumId === album);
+  // A photo in the trash (opened by its URL) can only be restored there (FR-DEL-3).
+  const own =
+    !photo.trashedAt && (album === undefined || !!albums?.items.some((a) => a.albumId === album));
 
   // A 5-minute pre-signed URL with `attachment` disposition: the browser saves the original
   // under its file name straight from S3. A shared photo needs its album (5.13).
@@ -274,7 +293,7 @@ function PhotoActions({
       await onDeleted();
       // Only once the viewer has moved on, so it never looks the deleted photo up again.
       removePhotoFromCache(queryClient, photo.photoId);
-      for (const key of [["photos"], ["albums"], ["me"]]) {
+      for (const key of [["photos"], ["albums"], ["places"], ["trash"], ["me"]]) {
         void queryClient.invalidateQueries({ queryKey: key });
       }
     },
@@ -328,10 +347,11 @@ function PhotoActions({
           </Button>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Delete this photo?</AlertDialogTitle>
+              <AlertDialogTitle>Move this photo to the trash?</AlertDialogTitle>
               <AlertDialogDescription>
-                {photo.fileName} will be removed from your library and from all albums. This can't
-                be undone.
+                {photo.fileName} will be removed from your library and from all albums, and deleted
+                for good after {TRASH_RETENTION_DAYS} days. Until then you can restore it from the
+                trash.
               </AlertDialogDescription>
             </AlertDialogHeader>
             {remove.isError && (
@@ -349,7 +369,7 @@ function PhotoActions({
                   remove.mutate();
                 }}
               >
-                {remove.isPending ? "Deleting…" : "Delete"}
+                {remove.isPending ? "Moving…" : "Move to trash"}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

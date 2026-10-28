@@ -28,6 +28,12 @@ mock_provider "aws" {
     }
   }
 
+  mock_resource "aws_cloudwatch_event_rule" {
+    defaults = {
+      arn = "arn:aws:events:us-east-1:123456789012:rule/test"
+    }
+  }
+
   mock_resource "aws_apigatewayv2_api" {
     defaults = {
       execution_arn = "arn:aws:execute-api:us-east-1:123456789012:abc123"
@@ -194,4 +200,43 @@ run "rejects_bad_quota" {
   }
 
   expect_failures = [var.default_quota_bytes]
+}
+
+run "trash_purge" {
+  command = plan
+
+  assert {
+    condition     = aws_lambda_function.purge.handler == "purge.handler" && aws_lambda_function.purge.source_code_hash == aws_lambda_function.api.source_code_hash
+    error_message = "The purge runs purge.handler from the API's bundle."
+  }
+
+  assert {
+    condition     = aws_iam_role.purge.name == "photo-app-test-trash-purge" && aws_iam_role_policy.purge.role == aws_iam_role.purge.id
+    error_message = "The purge has its own role."
+  }
+
+  assert {
+    condition     = aws_lambda_function.purge.environment[0].variables == tomap({ TABLE_NAME = "photo-app-test", PHOTO_BUCKET = "photo-app-photos-test-123456789012", NODE_OPTIONS = "--enable-source-maps" })
+    error_message = "The purge needs only the table and the photo bucket."
+  }
+
+  assert {
+    condition     = aws_cloudwatch_event_rule.purge.schedule_expression == "cron(0 3 * * ? *)"
+    error_message = "Runs once a day."
+  }
+
+  assert {
+    condition     = aws_lambda_permission.purge_schedule.principal == "events.amazonaws.com"
+    error_message = "Only its schedule invokes it."
+  }
+
+  assert {
+    condition     = !anytrue([for a in data.aws_iam_policy_document.purge.statement[0].actions : contains(["dynamodb:Scan", "dynamodb:PutItem", "dynamodb:DeleteTable", "dynamodb:*"], a)])
+    error_message = "Purge: no scans, puts or table-level actions."
+  }
+
+  assert {
+    condition     = toset(data.aws_iam_policy_document.purge.statement[1].actions) == toset(["s3:DeleteObject"]) && length(data.aws_iam_policy_document.purge.statement[1].resources) == 3
+    error_message = "Purge deletes only photo objects (original, thumb, preview)."
+  }
 }

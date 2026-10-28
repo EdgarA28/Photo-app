@@ -125,7 +125,7 @@ export interface DeletePhotosResult {
 }
 
 /**
- * Deletes several own photos (FR-DEL-1) from the gallery's select mode. No batch route: one
+ * Moves several own photos to the trash (FR-DEL-1/3) from the gallery's select mode. No batch route: one
  * `DELETE /photos/{id}` per photo, a few at a time. A failed photo doesn't stop the others; the
  * result says which ones are left, so they can be tried again.
  */
@@ -157,7 +157,7 @@ export function useDeletePhotos() {
     },
     onSettled: () =>
       Promise.all(
-        [["photos"], ["albums"], ["places"], ["me"]].map((queryKey) =>
+        [["photos"], ["albums"], ["places"], ["trash"], ["me"]].map((queryKey) =>
           queryClient.invalidateQueries({ queryKey }),
         ),
       ),

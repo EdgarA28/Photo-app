@@ -34,7 +34,14 @@ function MapPage() {
       ) : (
         <PhotoMap
           photos={data.items}
-          onOpen={(photoId) => void navigate({ to: "/photos/$photoId", params: { photoId } })}
+          // In its town's list, so prev/next walk the photos of that place, as after a search.
+          onOpen={({ photoId, placeId }) =>
+            void navigate({
+              to: "/photos/$photoId",
+              params: { photoId },
+              search: { place: placeId ?? undefined },
+            })
+          }
           className="min-h-0 flex-1 overflow-hidden rounded-lg border"
         />
       )}

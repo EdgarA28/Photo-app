@@ -25,6 +25,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   };
 }
 
+/** The trash purge Lambda (FR-DEL-3, `purge.ts`): only the table and the photo bucket. */
+export function loadPurgeConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): Pick<Config, "tableName" | "photoBucket"> {
+  return { tableName: required(env, "TABLE_NAME"), photoBucket: required(env, "PHOTO_BUCKET") };
+}
+
 function required(env: NodeJS.ProcessEnv, name: string): string {
   const value = env[name];
   if (!value) throw new Error(`Missing environment variable ${name}`);

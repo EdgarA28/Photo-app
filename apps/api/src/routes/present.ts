@@ -37,12 +37,15 @@ export function toPhoto(record: PhotoRecord): Photo {
     // Derived images exist only once the thumbnail Lambda is done (FR-GAL-5).
     thumbUrl: ready ? `/${thumbKey(record.userId, record.photoId)}` : null,
     previewUrl: ready ? `/${previewKey(record.userId, record.photoId)}` : null,
+    trashedAt: record.trashedAt ?? null,
+    purgeAt: record.purgeAt ?? null,
   };
 }
 
 /**
  * A map pin for the owner (13.2h). Coordinates are rounded to about 100 m (FR-SRCH-5): enough for
- * pins and clusters, less exact than the original's EXIF.
+ * pins and clusters, less exact than the original's EXIF. `placeId` is the photo's town, so the
+ * viewer opened from the map walks that town's photos, like a place search.
  */
 export function toPhotoLocation(userId: string, record: LocatedPhoto): PhotoLocation {
   const factor = 10 ** MAP_COORDINATE_DECIMALS;
@@ -53,6 +56,7 @@ export function toPhotoLocation(userId: string, record: LocatedPhoto): PhotoLoca
     lon: round(record.longitude),
     takenAt: record.takenAt,
     thumbUrl: `/${thumbKey(userId, record.photoId)}`,
+    placeId: [...(record.placeIds ?? [])].find((id) => id.startsWith("city:")) ?? null,
   };
 }
 

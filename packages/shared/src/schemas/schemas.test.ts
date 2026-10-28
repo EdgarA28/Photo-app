@@ -92,8 +92,13 @@ describe("photoSchema", () => {
       thumbUrl: null,
       previewUrl: null,
     };
-    // Without `place` (an API from before 13.2) it reads as null.
-    expect(photoSchema.parse(pending)).toEqual({ ...pending, place: null });
+    // Without `place` (an API from before 13.2) or the trash dates (FR-DEL-3) they read as null.
+    expect(photoSchema.parse(pending)).toEqual({
+      ...pending,
+      place: null,
+      trashedAt: null,
+      purgeAt: null,
+    });
   });
 
   test("takes a place name, and rejects place IDs in the wrong shape (13.2)", () => {

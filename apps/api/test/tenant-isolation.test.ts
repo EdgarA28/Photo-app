@@ -43,6 +43,8 @@ const w = {
   p1: "",
   p2: "",
   p3: "",
+  /** In Alice's trash (FR-DEL-3). */
+  p4: "",
   albumA: "",
   albumB: "",
   albumC: "",
@@ -99,6 +101,9 @@ beforeAll(async () => {
   await addPlaces(t.db, w.alice, w.p1, BERLIN);
   await addPlaces(t.db, w.alice, w.p2, BERLIN);
 
+  w.p4 = await readyPhoto(w.alice);
+  await repos.photos.trash(w.alice, w.p4, new Date());
+
   w.malloryPhoto = await readyPhoto(w.mallory);
   w.malloryAlbum = await album(w.mallory, "Mine");
 
@@ -113,6 +118,7 @@ beforeAll(async () => {
 async function snapshot() {
   return {
     photos: await repos.photos.list(w.alice, { sort: "taken-desc", limit: 100 }),
+    trash: await repos.photos.listTrashed(w.alice),
     albums: await repos.albums.list(w.alice),
     membersA: await repos.albums.listMemberships(w.albumA, { sort: "taken-desc", limit: 100 }),
     membersB: await repos.albums.listMemberships(w.albumB, { sort: "taken-desc", limit: 100 }),
@@ -274,6 +280,25 @@ const cases: Case[] = [
     name: "recipient deletes a shared photo",
     foreign: () => ({ as: w.bob, method: "DELETE", path: `/photos/${w.p1}` }),
     missing: () => ({ as: w.bob, method: "DELETE", path: `/photos/${id()}` }),
+  },
+  // ---- trash (FR-DEL-3) ----
+  {
+    route: "POST /api/trash/:photoId/restore",
+    name: "stranger restores a trashed photo",
+    foreign: () => ({ as: w.mallory, method: "POST", path: `/trash/${w.p4}/restore` }),
+    missing: () => ({ as: w.mallory, method: "POST", path: `/trash/${id()}/restore` }),
+  },
+  {
+    route: "DELETE /api/trash/:photoId",
+    name: "stranger deletes a trashed photo forever",
+    foreign: () => ({ as: w.mallory, method: "DELETE", path: `/trash/${w.p4}` }),
+    missing: () => ({ as: w.mallory, method: "DELETE", path: `/trash/${id()}` }),
+  },
+  {
+    route: "DELETE /api/trash/:photoId",
+    name: "recipient deletes a shared photo forever",
+    foreign: () => ({ as: w.bob, method: "DELETE", path: `/trash/${w.p1}` }),
+    missing: () => ({ as: w.bob, method: "DELETE", path: `/trash/${id()}` }),
   },
   {
     route: "POST /api/photos/upload-url",
@@ -540,6 +565,8 @@ const exempt: Record<string, string> = {
   "GET /api/share-invitations": "caller's invitations; foreign cursor case below",
   "GET /api/places": "caller's own places (keyed by sub); checked below",
   "GET /api/places/map": "caller's own photos with GPS (keyed by sub); checked below",
+  "GET /api/trash": "caller's own trash (keyed by sub); checked below",
+  "DELETE /api/trash": "empties the caller's own trash (keyed by sub); checked below",
   "POST /api/session/media-cookie": "caller's own prefix from the JWT sub (routes.session)",
   "DELETE /api/session/media-cookie": "caller's own prefix from the JWT sub (routes.session)",
 };
@@ -587,6 +614,14 @@ describe("list routes only return the caller's data", () => {
       (await t.api(w.mallory, "GET", "/share-invitations")).body,
     );
     expect(invited.items).toEqual([]);
+  });
+
+  test("the trash is the owner's: a stranger sees and empties only her own (FR-DEL-3)", async () => {
+    expect((await t.api(w.mallory, "GET", "/trash")).body).toEqual({ items: [] });
+    expect((await t.api(w.bob, "GET", "/trash")).body).toEqual({ items: [] });
+    expect((await t.api(w.mallory, "DELETE", "/trash")).status).toBe(204);
+    expect(await repos.photos.listTrashed(w.alice)).toEqual(before.trash);
+    expect(before.trash.map((p) => p.photoId)).toEqual([w.p4]);
   });
 
   test("places are the owner's: a stranger and the recipient have none of Alice's", async () => {

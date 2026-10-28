@@ -32,7 +32,9 @@ def main() -> None:
     for page in ddb.get_paginator("scan").paginate(
         TableName=table,
         FilterExpression="begins_with(PK, :user) AND begins_with(SK, :photo) "
-        "AND #status = :ready AND attribute_not_exists(latitude)",
+        # Not trashed photos (FR-DEL-3): their places count them as trashed, not as photos.
+        "AND #status = :ready AND attribute_not_exists(latitude) "
+        "AND attribute_not_exists(trashedAt)",
         ExpressionAttributeNames={"#status": "status"},
         ExpressionAttributeValues={
             ":user": {"S": "USER#"},
@@ -73,7 +75,8 @@ def main() -> None:
                             "Key": {"PK": item["PK"], "SK": item["SK"]},
                             "UpdateExpression": "SET " + set_clause.removeprefix(", "),
                             "ConditionExpression": "#status = :ready "
-                            "AND attribute_not_exists(latitude)",
+                            "AND attribute_not_exists(latitude) "
+                            "AND attribute_not_exists(trashedAt)",
                             "ExpressionAttributeNames": {"#status": "status"},
                             "ExpressionAttributeValues": {**values, ":ready": {"S": "ready"}},
                         }

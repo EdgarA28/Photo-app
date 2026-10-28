@@ -1,6 +1,7 @@
+import { TRASH_RETENTION_DAYS } from "@photo-app/shared";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { createFileRoute, useRouter, type ErrorComponentProps } from "@tanstack/react-router";
-import { LogOut } from "lucide-react";
+import { createFileRoute, Link, useRouter, type ErrorComponentProps } from "@tanstack/react-router";
+import { LogOut, Trash2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { errorMessage } from "@/api/errors";
 import { logout } from "@/auth/logout";
@@ -21,7 +22,7 @@ import { UsernameSection } from "@/settings/UsernameSection";
 import { isActive, useUploads } from "@/upload/useUploads";
 import { APP_VERSION } from "@/version";
 
-// Account, storage, username and logout (FR-ACC-1, FR-ACC-3, FR-AUTH-5, 8.13).
+// Account, storage, trash, username and logout (FR-ACC-1, FR-ACC-3, FR-DEL-3, FR-AUTH-5, 8.13).
 export const Route = createFileRoute("/_authenticated/settings")({
   loader: ({ context }) =>
     context.queryClient.query({ ...meQuery(context.api), staleTime: "static" }),
@@ -44,6 +45,18 @@ function Settings() {
 
       <Section title="Storage">
         <QuotaBar usage={me.usage} />
+      </Section>
+
+      <Section
+        title="Trash"
+        description={`Deleted photos stay in the trash for ${TRASH_RETENTION_DAYS} days, so you can restore them.`}
+      >
+        <Button variant="outline" asChild>
+          <Link to="/trash">
+            <Trash2 aria-hidden />
+            Open trash
+          </Link>
+        </Button>
       </Section>
 
       <Section

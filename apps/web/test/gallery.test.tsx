@@ -474,7 +474,10 @@ describe("deleting selected photos (FR-DEL-1/2)", () => {
   it("asks for confirmation and does nothing when cancelled", async () => {
     const { api, request } = setup({ "GET /photos": testPhotoPage(0, 3) });
     await renderAt("/gallery", { api });
-    const dialog = await selectAndConfirm(["IMG_0.jpg", "IMG_2.jpg"], "Delete 2 photos?");
+    const dialog = await selectAndConfirm(
+      ["IMG_0.jpg", "IMG_2.jpg"],
+      "Move 2 photos to the trash?",
+    );
     expect(dialog.textContent).toContain("They will be removed from your library");
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
@@ -493,10 +496,13 @@ describe("deleting selected photos (FR-DEL-1/2)", () => {
       [`DELETE /photos/${testId(2)}`]: () => void gone.add(testId(2)),
     });
     await renderAt("/gallery", { api });
-    const dialog = await selectAndConfirm(["IMG_0.jpg", "IMG_2.jpg"], "Delete 2 photos?");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    const dialog = await selectAndConfirm(
+      ["IMG_0.jpg", "IMG_2.jpg"],
+      "Move 2 photos to the trash?",
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Move to trash" }));
 
-    expect((await screen.findByRole("status")).textContent).toBe("Deleted 2 photos.");
+    expect((await screen.findByRole("status")).textContent).toBe("Moved 2 photos to the trash.");
     expect(deletes(request)).toEqual([`/photos/${testId(0)}`, `/photos/${testId(2)}`]);
     expect(screen.queryByRole("toolbar")).toBeNull();
     expect(tiles().map((t) => t.getAttribute("aria-label"))).toEqual(["IMG_1.jpg"]);
@@ -516,18 +522,18 @@ describe("deleting selected photos (FR-DEL-1/2)", () => {
     await renderAt("/gallery", { api });
     const dialog = await selectAndConfirm(
       ["IMG_0.jpg", "IMG_1.jpg", "IMG_2.jpg"],
-      "Delete 3 photos?",
+      "Move 3 photos to the trash?",
     );
-    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Move to trash" }));
 
     expect((await within(dialog).findByRole("alert")).textContent).toBe(
-      "1 photo couldn't be deleted: Something went wrong on our side. Try again later.",
+      "1 photo couldn't be moved: Something went wrong on our side. Try again later.",
     );
-    expect(within(dialog).getByRole("heading").textContent).toBe("Delete this photo?");
+    expect(within(dialog).getByRole("heading").textContent).toBe("Move this photo to the trash?");
 
     fail = false;
     fireEvent.click(within(dialog).getByRole("button", { name: "Try again" }));
-    expect((await screen.findByRole("status")).textContent).toBe("Deleted 3 photos.");
+    expect((await screen.findByRole("status")).textContent).toBe("Moved 3 photos to the trash.");
     expect(deletes(request)).toEqual([
       `/photos/${testId(0)}`,
       `/photos/${testId(1)}`,
