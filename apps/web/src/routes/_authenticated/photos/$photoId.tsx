@@ -1,4 +1,4 @@
-import type { Photo } from "@photo-app/shared";
+import { TRASH_RETENTION_DAYS, type Photo } from "@photo-app/shared";
 import {
   InfiniteQueryObserver,
   useInfiniteQuery,
@@ -253,7 +253,7 @@ function SharedByLine({ album }: { album: string }) {
 }
 
 /**
- * Download (FR-DL-1/2) and delete (FR-DEL-1/2). Delete is offered for own photos only: in an album
+ * Download (FR-DL-1/2) and delete to the trash (FR-DEL-1/2/3). Delete is offered for own photos only: in an album
  * that isn't in my album list (shared with me) the photo belongs to someone else.
  */
 function PhotoActions({
@@ -274,7 +274,9 @@ function PhotoActions({
   const { api } = Route.useRouteContext();
   const queryClient = useQueryClient();
   const { data: albums } = useQuery({ ...albumsQuery(api), enabled: album !== undefined });
-  const own = album === undefined || !!albums?.items.some((a) => a.albumId === album);
+  // A photo in the trash (opened by its URL) can only be restored there (FR-DEL-3).
+  const own =
+    !photo.trashedAt && (album === undefined || !!albums?.items.some((a) => a.albumId === album));
 
   // A 5-minute pre-signed URL with `attachment` disposition: the browser saves the original
   // under its file name straight from S3. A shared photo needs its album (5.13).
@@ -290,7 +292,7 @@ function PhotoActions({
       await onDeleted();
       // Only once the viewer has moved on, so it never looks the deleted photo up again.
       removePhotoFromCache(queryClient, photo.photoId);
-      for (const key of [["photos"], ["albums"], ["me"]]) {
+      for (const key of [["photos"], ["albums"], ["places"], ["trash"], ["me"]]) {
         void queryClient.invalidateQueries({ queryKey: key });
       }
     },
@@ -344,10 +346,11 @@ function PhotoActions({
           </Button>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Delete this photo?</AlertDialogTitle>
+              <AlertDialogTitle>Move this photo to the trash?</AlertDialogTitle>
               <AlertDialogDescription>
-                {photo.fileName} will be removed from your library and from all albums. This can't
-                be undone.
+                {photo.fileName} will be removed from your library and from all albums, and deleted
+                for good after {TRASH_RETENTION_DAYS} days. Until then you can restore it from the
+                trash.
               </AlertDialogDescription>
             </AlertDialogHeader>
             {remove.isError && (
@@ -365,7 +368,7 @@ function PhotoActions({
                   remove.mutate();
                 }}
               >
-                {remove.isPending ? "Deleting…" : "Delete"}
+                {remove.isPending ? "Moving…" : "Move to trash"}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

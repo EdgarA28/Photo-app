@@ -60,6 +60,9 @@ export const RESERVED_USERNAMES: readonly string[] = [
   "www",
 ];
 
+/** Days a deleted photo stays in the trash before the daily purge removes it for good (FR-DEL-3). */
+export const TRASH_RETENTION_DAYS = 15;
+
 /** URL / cookie lifetimes in seconds (§9). */
 export const UPLOAD_URL_TTL_SECONDS = 15 * 60;
 export const DOWNLOAD_URL_TTL_SECONDS = 5 * 60;

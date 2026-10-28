@@ -150,21 +150,30 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, media, config }
   );
 
   /**
-   * Deletes an own photo (FR-DEL-1): original, thumb and preview, then the item, its album
-   * memberships and its Usage (`repos.photos.delete`). Objects go first: if the item delete then
-   * fails, a retry still finds the photo and finishes, whereas the other order could leave
-   * unreferenced files behind. 204 also when it vanished meanwhile (a concurrent delete).
+   * Deletes an own photo (FR-DEL-1/3): a ready or failed photo goes to the trash for 15 days
+   * (`repos.photos.trash`; restore and delete forever under /trash). An upload still pending has
+   * nothing to restore, so it is deleted at once: original, thumb and preview, then the item, its
+   * album memberships and its Usage (`repos.photos.delete`). Objects go first: if the item delete
+   * then fails, a retry still finds the photo and finishes, whereas the other order could leave
+   * unreferenced files behind. 204 also when it vanished meanwhile (a concurrent delete), or was
+   * in the trash already.
    */
   app.delete("/photos/:photoId", validate("param", photoParam), async (c) => {
     const userId = c.get("userId");
     const { photoId } = c.req.valid("param");
+    const trashed = orNotFound(
+      await repos.photos.trash(userId, photoId, new Date()),
+      "Photo not found",
+    );
+    if (trashed !== "pending") return c.body(null, 204);
+
     const record = orNotFound(await repos.photos.get(userId, photoId), "Photo not found");
     const keys = [record.originalKey, thumbKey(userId, photoId), previewKey(userId, photoId)];
-
     await storage.deleteObjects(keys);
     const deleted = await repos.photos.delete(userId, photoId);
     // The thumbnail Lambda finished in between and wrote thumb and preview after our delete.
-    // (Had it finished after the item was gone, it would have removed them itself.)
+    // (Had it finished after the item was gone, it would have removed them itself.) Its original
+    // is gone, so it is deleted rather than trashed.
     if (deleted && deleted.status !== record.status) await storage.deleteObjects(keys);
     return c.body(null, 204);
   });

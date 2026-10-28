@@ -28,6 +28,12 @@ export const photoSchema = z.object({
   /** Stable CloudFront path for own photos, signed URL for shared ones (§9). */
   thumbUrl: z.string().nullable(),
   previewUrl: z.string().nullable(),
+  /**
+   * Set while the photo is in the trash (FR-DEL-3): when it was deleted and when the daily purge
+   * removes it for good. Missing (an API from before the trash) reads as null.
+   */
+  trashedAt: isoDateTimeSchema.nullable().default(null),
+  purgeAt: isoDateTimeSchema.nullable().default(null),
 });
 export type Photo = z.infer<typeof photoSchema>;
 
@@ -41,6 +47,10 @@ export const listPhotosQuerySchema = pageQuerySchema.extend({
 export type ListPhotosQuery = z.infer<typeof listPhotosQuerySchema>;
 export const photoPageSchema = pageSchema(photoSchema);
 export type PhotoPage = z.infer<typeof photoPageSchema>;
+
+/** GET /trash: own photos in the trash, most recently deleted first, in one response (FR-DEL-3). */
+export const trashListSchema = z.object({ items: z.array(photoSchema) });
+export type TrashList = z.infer<typeof trashListSchema>;
 
 /** POST /photos/upload-url (FR-UP-2, FR-UP-3, NFR-SEC-6) */
 export const uploadUrlRequestSchema = z.object({

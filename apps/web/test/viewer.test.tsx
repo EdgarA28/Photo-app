@@ -288,7 +288,7 @@ describe("delete (FR-DEL-1/2)", () => {
 
   async function openDialog() {
     fireEvent.click(await screen.findByRole("button", { name: "Delete photo" }));
-    return screen.findByRole("alertdialog", { name: "Delete this photo?" });
+    return screen.findByRole("alertdialog", { name: "Move this photo to the trash?" });
   }
 
   it("asks for confirmation and does nothing when cancelled", async () => {
@@ -315,7 +315,7 @@ describe("delete (FR-DEL-1/2)", () => {
     fireEvent.click(await screen.findByRole("link", { name: "IMG_1.jpg" }));
     await screen.findByRole("heading", { name: "IMG_1.jpg" });
 
-    fireEvent.click(within(await openDialog()).getByRole("button", { name: "Delete" }));
+    fireEvent.click(within(await openDialog()).getByRole("button", { name: "Move to trash" }));
     await waitFor(() => expect(heading()).toBe("IMG_2.jpg"));
     expect(deletes(request)).toEqual([`/photos/${testId(1)}`]);
     expect(screen.queryByRole("alertdialog")).toBeNull();
@@ -337,7 +337,7 @@ describe("delete (FR-DEL-1/2)", () => {
       [`DELETE /photos/${testId(0)}`]: undefined,
     });
     const { router } = await renderAt(`/photos/${testId(0)}`, { api });
-    fireEvent.click(within(await openDialog()).getByRole("button", { name: "Delete" }));
+    fireEvent.click(within(await openDialog()).getByRole("button", { name: "Move to trash" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/gallery"));
   });
 
@@ -347,7 +347,7 @@ describe("delete (FR-DEL-1/2)", () => {
     });
     await renderAt(`/photos/${testId(1)}`, { api });
     const dialog = await openDialog();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Move to trash" }));
     expect((await within(dialog).findByRole("alert")).textContent).toBe(
       "Something went wrong on our side. Try again later.",
     );

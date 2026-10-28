@@ -25,6 +25,14 @@ export const takenSk = (takenAt: string, photoId: string) => `TAKEN#${takenAt}#$
 export const sharedWithPk = (userId: string) => `SHAREDWITH#${userId}`;
 /** GSI1PK of a share the recipient hasn't accepted yet: their invitations (FR-SHR-6). */
 export const invitedPk = (userId: string) => `INVITED#${userId}`;
+/**
+ * GSI1PK of every photo in the trash, all users together (FR-DEL-3): the daily purge finds the
+ * expired ones with one query instead of a scan. Users list their own trash from their partition.
+ */
+export const TRASH_PK = "TRASH";
+/** GSI1SK of a trashed photo: by purge date, so everything due is one key range. */
+export const purgeSk = (purgeAt: string, userId: string, photoId: string) =>
+  `PURGE#${purgeAt}#${userId}#${photoId}`;
 /** A user's photos taken at one place (13.2c): table PK and GSI1PK of its place photo items. */
 export const placePhotosPk = (userId: string, placeId: string) => `PLACE#${userId}#${placeId}`;
 

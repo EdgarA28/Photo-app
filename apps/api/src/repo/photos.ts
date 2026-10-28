@@ -1,5 +1,11 @@
 import { DeleteCommand, GetCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
-import type { AllowedContentType, Page, PhotoSort, PhotoStatus } from "@photo-app/shared";
+import {
+  TRASH_RETENTION_DAYS,
+  type AllowedContentType,
+  type Page,
+  type PhotoSort,
+  type PhotoStatus,
+} from "@photo-app/shared";
 import {
   batchGet,
   conditionFailedAt,
@@ -16,11 +22,14 @@ import {
   placeKey,
   PHOTO_SK_PREFIX,
   placePhotoKey,
+  placePhotosPk,
+  purgeSk,
   takenSk,
+  TRASH_PK,
   usageKey,
   userPk,
 } from "./keys";
-import { removeMembership } from "./memberships";
+import { addMembership, removeMembership } from "./memberships";
 
 /** Photo item without key attributes (spec §8.2). */
 export interface PhotoRecord {
@@ -49,6 +58,20 @@ export interface PhotoRecord {
   place?: { city: string; region?: string; country: string; countryCode: string };
   /** The place list entries it counts in (`city:…`, `region:…`, `country:…`); removed with it. */
   placeIds?: Set<string>;
+  /**
+   * In the trash (FR-DEL-3): deleted at `trashedAt`, purged for good from `purgeAt`. While
+   * trashed the photo is out of the gallery, its albums and its places, but still counts in
+   * Usage; `trashedAlbumIds` are the albums it goes back to when restored.
+   */
+  trashedAt?: string;
+  purgeAt?: string;
+  trashedAlbumIds?: Set<string>;
+}
+
+/** A trashed photo due for the purge (any user's). */
+export interface ExpiredPhoto {
+  userId: string;
+  photoId: string;
 }
 
 export type LocatedPhoto = Pick<PhotoRecord, "photoId" | "takenAt" | "placeIds"> & {
@@ -162,7 +185,8 @@ export function photosRepo(db: Db) {
     async listLocated(userId: string): Promise<LocatedPhoto[]> {
       const items = await queryAll(db, {
         KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
-        FilterExpression: "attribute_exists(latitude) AND #status = :ready",
+        FilterExpression:
+          "attribute_exists(latitude) AND #status = :ready AND attribute_not_exists(trashedAt)",
         ProjectionExpression: "photoId, takenAt, latitude, longitude, placeIds",
         ExpressionAttributeNames: { "#status": "status" },
         ExpressionAttributeValues: {
@@ -183,19 +207,28 @@ export function photosRepo(db: Db) {
      * (status != pending).
      *
      * Every step is conditional, so a retry after a partial failure finishes the job without
-     * double-counting. Returns the deleted record, or null if it did not exist. S3 objects are
-     * the caller's job.
+     * double-counting. Returns the deleted record, or null if it did not exist or `guard` refused
+     * it (e.g. "only if still in the trash"); the guard sees every re-read. S3 objects are the
+     * caller's job.
+     *
+     * A trashed photo (FR-DEL-3) has no memberships left, and its places already stopped counting
+     * it: their `trashedCount` goes down instead of `photoCount`.
      */
-    async delete(userId: string, photoId: string): Promise<PhotoRecord | null> {
+    async delete(
+      userId: string,
+      photoId: string,
+      guard: (record: PhotoRecord) => boolean = () => true,
+    ): Promise<PhotoRecord | null> {
       for (let attempt = 0; attempt < 3; attempt++) {
         const record = await getPhoto(db, userId, photoId, true);
-        if (!record) return null;
+        if (!record || !guard(record)) return null;
 
         for (const albumId of record.albumIds ?? []) {
           await removeMembership(db, userId, albumId, photoId);
         }
 
         const counted = record.status !== "pending";
+        const trashed = record.trashedAt !== undefined;
         try {
           await db.client.send(
             new TransactWriteCommand({
@@ -205,10 +238,15 @@ export function photosRepo(db: Db) {
                     TableName: db.table,
                     Key: photoKey(userId, photoId),
                     // Guards against the thumbnail Lambda changing the status (and counting
-                    // Usage) between our read and this delete.
-                    ConditionExpression: "#status = :status",
+                    // Usage) between our read and this delete, and against a trash or restore.
+                    ConditionExpression: trashed
+                      ? "#status = :status AND trashedAt = :trashedAt"
+                      : "#status = :status AND attribute_not_exists(trashedAt)",
                     ExpressionAttributeNames: { "#status": "status" },
-                    ExpressionAttributeValues: { ":status": record.status },
+                    ExpressionAttributeValues: {
+                      ":status": record.status,
+                      ...(trashed && { ":trashedAt": record.trashedAt }),
+                    },
                   },
                 },
                 // Its place entries (13.2c). The status condition above covers them too: places
@@ -219,7 +257,9 @@ export function photosRepo(db: Db) {
                     Update: {
                       TableName: db.table,
                       Key: placeKey(userId, placeId),
-                      UpdateExpression: "ADD photoCount :minusOne",
+                      UpdateExpression: trashed
+                        ? "ADD trashedCount :minusOne"
+                        : "ADD photoCount :minusOne",
                       ExpressionAttributeValues: { ":minusOne": -1 },
                     },
                   },
@@ -248,7 +288,208 @@ export function photosRepo(db: Db) {
       }
       throw new Error(`Photo ${photoId} kept changing while being deleted`);
     },
+
+    /**
+     * Moves a photo to the trash (FR-DEL-3, DELETE /photos/{id}). In one transaction the item
+     * leaves the gallery (GSI1 → `TRASH`, by purge date) and its place photo items leave GSI1,
+     * their places counting it as trashed instead (so a place emptied meanwhile keeps its entry
+     * for a restore). Then its album memberships go; `trashedAlbumIds` remembers them. Usage is
+     * unchanged: trashed photos still count until purged.
+     *
+     * Already trashed: finishes leftover membership removals and returns it unchanged, so a retry
+     * is safe. Pending uploads aren't trashed (nothing to restore): "pending", the caller deletes
+     * them. Null if the photo doesn't exist.
+     */
+    async trash(
+      userId: string,
+      photoId: string,
+      now: Date,
+    ): Promise<PhotoRecord | "pending" | null> {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        let record = await getPhoto(db, userId, photoId, true);
+        if (!record) return null;
+        if (record.status === "pending") return "pending";
+
+        if (record.trashedAt === undefined) {
+          const trashedAt = now.toISOString();
+          const purgeAt = new Date(now.getTime() + TRASH_RETENTION_DAYS * DAY_MS).toISOString();
+          const albumIds = record.albumIds?.size ? record.albumIds : undefined;
+          try {
+            await db.client.send(
+              new TransactWriteCommand({
+                TransactItems: [
+                  {
+                    Update: {
+                      TableName: db.table,
+                      Key: photoKey(userId, photoId),
+                      UpdateExpression:
+                        "SET trashedAt = :trashedAt, purgeAt = :purgeAt, GSI1PK = :pk, GSI1SK = :sk" +
+                        (albumIds ? ", trashedAlbumIds = :albums" : ""),
+                      // Ready or failed as read (the thumbnail Lambda may mark it failed).
+                      ConditionExpression: "#status = :status AND attribute_not_exists(trashedAt)",
+                      ExpressionAttributeNames: { "#status": "status" },
+                      ExpressionAttributeValues: {
+                        ":trashedAt": trashedAt,
+                        ":purgeAt": purgeAt,
+                        ":pk": TRASH_PK,
+                        ":sk": purgeSk(purgeAt, userId, photoId),
+                        ":status": record.status,
+                        ...(albumIds && { ":albums": albumIds }),
+                      },
+                    },
+                  },
+                  ...placeMoves(db, userId, photoId, record.placeIds, "trash", record.takenAt),
+                ],
+              }),
+            );
+          } catch (err) {
+            if (conditionFailedAt(err, 0)) continue; // Changed meanwhile: re-read.
+            throw err;
+          }
+          record = {
+            ...record,
+            trashedAt,
+            purgeAt,
+            ...(albumIds && { trashedAlbumIds: albumIds }),
+          };
+        }
+
+        // After the trash mark, so no new membership can be added in between (addMembership).
+        for (const albumId of record.albumIds ?? []) {
+          await removeMembership(db, userId, albumId, photoId);
+        }
+        const { albumIds: _, ...rest } = record;
+        return rest;
+      }
+      throw new Error(`Photo ${photoId} kept changing while being trashed`);
+    },
+
+    /**
+     * Takes a photo out of the trash (FR-DEL-3): back in the gallery and its places, then back in
+     * the albums it was in that still exist. Null if it isn't in the trash (or doesn't exist).
+     */
+    async restore(userId: string, photoId: string, now: Date): Promise<PhotoRecord | null> {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const record = await getPhoto(db, userId, photoId, true);
+        if (!record?.trashedAt) return null;
+        try {
+          await db.client.send(
+            new TransactWriteCommand({
+              TransactItems: [
+                {
+                  Update: {
+                    TableName: db.table,
+                    Key: photoKey(userId, photoId),
+                    UpdateExpression:
+                      "SET GSI1PK = :pk, GSI1SK = :sk REMOVE trashedAt, purgeAt, trashedAlbumIds",
+                    ConditionExpression: "trashedAt = :trashedAt",
+                    ExpressionAttributeValues: {
+                      ":pk": userPk(userId),
+                      ":sk": takenSk(record.takenAt, photoId),
+                      ":trashedAt": record.trashedAt,
+                    },
+                  },
+                },
+                ...placeMoves(db, userId, photoId, record.placeIds, "restore", record.takenAt),
+              ],
+            }),
+          );
+        } catch (err) {
+          if (conditionFailedAt(err, 0)) continue; // Restored or purged meanwhile: re-read.
+          throw err;
+        }
+        // Albums deleted meanwhile are skipped ("album-not-found").
+        for (const albumId of record.trashedAlbumIds ?? []) {
+          await addMembership(db, userId, albumId, photoId, now.toISOString());
+        }
+        const { trashedAt: _t, purgeAt: _p, trashedAlbumIds: _a, ...restored } = record;
+        return { ...restored, albumIds: record.trashedAlbumIds };
+      }
+      throw new Error(`Photo ${photoId} kept changing while being restored`);
+    },
+
+    /**
+     * The user's trash, most recently deleted first. Reads the whole photo partition (bounded by
+     * the quota) like the map; the trash index (`TRASH`) is sorted by purge date for all users.
+     */
+    async listTrashed(userId: string): Promise<PhotoRecord[]> {
+      const items = await queryAll(db, {
+        KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
+        FilterExpression: "attribute_exists(trashedAt)",
+        ExpressionAttributeValues: { ":pk": userPk(userId), ":prefix": PHOTO_SK_PREFIX },
+      });
+      return items
+        .map((item) => stripKeys<PhotoRecord>(item))
+        .sort(
+          (a, b) => b.trashedAt!.localeCompare(a.trashedAt!) || b.photoId.localeCompare(a.photoId),
+        );
+    },
+
+    /** Trashed photos of every user whose `purgeAt` has passed, oldest first (daily purge). */
+    async listExpired(now: Date): Promise<ExpiredPhoto[]> {
+      const items = await queryAll(db, {
+        IndexName: GSI1,
+        KeyConditionExpression: "GSI1PK = :pk AND GSI1SK BETWEEN :from AND :until",
+        ProjectionExpression: "userId, photoId",
+        ExpressionAttributeValues: {
+          ":pk": TRASH_PK,
+          ":from": "PURGE#",
+          // "~" sorts after every character of the user and photo IDs that follow the date.
+          ":until": `PURGE#${now.toISOString()}~`,
+        },
+      });
+      return items.map((item) => ({
+        userId: item.userId as string,
+        photoId: item.photoId as string,
+      }));
+    },
   };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Trash / restore writes for a photo's place items (FR-DEL-3, 13.2c): its place photo items leave
+ * GSI1 (or come back, sorted by takenAt), and each place moves one photo between `photoCount` and
+ * `trashedCount`. The place lists hide places without counted photos; the purge drops a place only
+ * once both counts are 0 (`dropEmptyPlaces`).
+ */
+function placeMoves(
+  db: Db,
+  userId: string,
+  photoId: string,
+  placeIds: Set<string> | undefined,
+  direction: "trash" | "restore",
+  takenAt: string,
+) {
+  const sign = direction === "trash" ? -1 : 1;
+  return [...(placeIds ?? [])].flatMap((placeId) => [
+    {
+      Update: {
+        TableName: db.table,
+        Key: placePhotoKey(userId, placeId, photoId),
+        ...(direction === "trash"
+          ? { UpdateExpression: "REMOVE GSI1PK, GSI1SK" }
+          : {
+              UpdateExpression: "SET GSI1PK = :pk, GSI1SK = :sk",
+              ExpressionAttributeValues: {
+                ":pk": placePhotosPk(userId, placeId),
+                ":sk": takenSk(takenAt, photoId),
+              },
+            }),
+        // No stub items for a place photo item that is missing.
+        ConditionExpression: "attribute_exists(PK)",
+      },
+    },
+    {
+      Update: {
+        TableName: db.table,
+        Key: placeKey(userId, placeId),
+        UpdateExpression: "ADD photoCount :counted, trashedCount :trashed",
+        ExpressionAttributeValues: { ":counted": sign, ":trashed": -sign },
+      },
+    },
+  ]);
 }
 
 async function getPhoto(
@@ -267,7 +508,10 @@ async function getPhoto(
   return output.Item ? stripKeys<PhotoRecord>(output.Item) : null;
 }
 
-/** Removes place list entries left without photos; one that gained a photo meanwhile stays. */
+/**
+ * Removes place list entries left without photos, counted or trashed; one that gained a photo
+ * meanwhile stays.
+ */
 async function dropEmptyPlaces(db: Db, userId: string, placeIds: Set<string> | undefined) {
   for (const placeId of placeIds ?? []) {
     try {
@@ -275,7 +519,9 @@ async function dropEmptyPlaces(db: Db, userId: string, placeIds: Set<string> | u
         new DeleteCommand({
           TableName: db.table,
           Key: placeKey(userId, placeId),
-          ConditionExpression: "photoCount <= :zero",
+          // Trashed photos still need it for a restore (FR-DEL-3).
+          ConditionExpression:
+            "photoCount <= :zero AND (attribute_not_exists(trashedCount) OR trashedCount <= :zero)",
           ExpressionAttributeValues: { ":zero": 0 },
         }),
       );

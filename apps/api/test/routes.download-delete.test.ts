@@ -108,14 +108,14 @@ describe("GET /photos/{photoId}/download-url (FR-DL-1, FR-DL-2)", () => {
   });
 });
 
-describe("DELETE /photos/{photoId} (FR-DEL-1)", () => {
+describe("DELETE /photos/{photoId} (FR-DEL-1, FR-DEL-3)", () => {
   const keysOf = (userId: string, photo: { photoId: string; originalKey: string }) => [
     photo.originalKey,
     thumbKey(userId, photo.photoId),
     previewKey(userId, photo.photoId),
   ];
 
-  test("ready photo: objects, item, memberships and usage are gone", async () => {
+  test("ready photo goes to the trash: out of gallery and albums, files and usage stay (FR-DEL-3)", async () => {
     const user = newUserId();
     const photo = await readyPhoto(user, 700);
     const other = await readyPhoto(user, 300);
@@ -132,18 +132,21 @@ describe("DELETE /photos/{photoId} (FR-DEL-1)", () => {
 
     expect(res.status).toBe(204);
     expect(res.body).toBeNull();
-    expect(deletes).toEqual([keysOf(user, photo)]);
-    expect(await repos.photos.get(user, photo.photoId)).toBeNull();
+    expect(deletes).toEqual([]);
+    const trashed = await repos.photos.get(user, photo.photoId);
+    expect(trashed?.trashedAt).toBeDefined();
+    expect(trashed?.trashedAlbumIds).toEqual(new Set([album.albumId]));
     expect(await repos.albums.hasPhoto(album.albumId, photo.photoId)).toBe(false);
     const after = await repos.albums.get(user, album.albumId);
     expect(after?.photoCount).toBe(1);
     expect(after?.coverPhotoId).toBeUndefined();
+    const gallery = await repos.photos.list(user, { sort: "taken-desc", limit: 10 });
+    expect(gallery.items.map((p) => p.photoId)).toEqual([other.photoId]);
     expect(await repos.usage.get(user)).toMatchObject({
-      bytesUsed: 300,
-      photoCount: 1,
-      bytesReserved: 300,
+      bytesUsed: 1000,
+      photoCount: 2,
+      bytesReserved: 1000,
     });
-    expect((await api(user, "GET", `/photos/${photo.photoId}`)).status).toBe(404);
   });
 
   test("pending photo: releases its reservation, nothing counted", async () => {
@@ -182,7 +185,7 @@ describe("DELETE /photos/{photoId} (FR-DEL-1)", () => {
 
   test("an S3 failure leaves the photo in place, so a retry can finish", async () => {
     const user = newUserId();
-    const photo = await readyPhoto(user);
+    const photo = await createPending(repos, newPhoto(user));
     hooks.onDelete = async () => {
       throw new Error("S3 unavailable");
     };
@@ -195,7 +198,7 @@ describe("DELETE /photos/{photoId} (FR-DEL-1)", () => {
     expect(await repos.photos.get(user, photo.photoId)).toBeNull();
   });
 
-  test("another user's photo → 404 and untouched; deleting twice → 404 (NFR-SEC-2)", async () => {
+  test("another user's photo → 404 and untouched; deleting twice is fine (NFR-SEC-2)", async () => {
     const owner = newUserId();
     const photo = await readyPhoto(owner);
 
@@ -205,8 +208,12 @@ describe("DELETE /photos/{photoId} (FR-DEL-1)", () => {
     expect(deletes).toEqual([]);
     expect(await repos.photos.get(owner, photo.photoId)).not.toBeNull();
 
+    // In the trash already: still 204, unchanged.
     expect((await api(owner, "DELETE", `/photos/${photo.photoId}`)).status).toBe(204);
-    expect((await api(owner, "DELETE", `/photos/${photo.photoId}`)).status).toBe(404);
+    const trashedAt = (await repos.photos.get(owner, photo.photoId))?.trashedAt;
+    expect((await api(owner, "DELETE", `/photos/${photo.photoId}`)).status).toBe(204);
+    expect((await repos.photos.get(owner, photo.photoId))?.trashedAt).toBe(trashedAt);
+    expect((await api(owner, "DELETE", `/photos/${newId()}`)).status).toBe(404);
   });
 
   test("invalid ID → 400, anonymous → 401", async () => {

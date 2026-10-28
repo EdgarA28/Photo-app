@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.18 |
+| **Version** | 0.19 |
 | **Date** | 2026-10-28 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -249,8 +249,9 @@ IDs are stable — reference them in issues, PRs and tests.
 |---|---|
 | FR-DL-1 | Users can download the original file of their own photos and of photos in albums shared with them. |
 | FR-DL-2 | Downloads save under the original file name. |
-| FR-DEL-1 | Users can delete their own photos; this removes the original, thumbnail, preview and all metadata, and removes it from albums. |
-| FR-DEL-2 | Deletion asks for confirmation. |
+| FR-DEL-1 | Users can delete their own photos; this removes the original, thumbnail, preview and all metadata, and removes it from albums. Since v0.19 a delete first moves the photo to the trash (FR-DEL-3); this full removal happens when it leaves the trash. |
+| FR-DEL-2 | Deletion asks for confirmation (moving to the trash, deleting from the trash, emptying it). |
+| FR-DEL-3 | Deleted photos go to a trash for 15 days: out of the gallery, albums (also shared ones), places and the map, but still counted in the quota. In the trash the owner can restore a photo (back in the gallery, its places and the albums it was in that still exist) or delete it for good, one by one or all at once ("Empty trash"). After 15 days a daily job deletes it for good (FR-DEL-1). Uploads that never finished (`pending`) have nothing to restore and are deleted at once. |
 
 ### 6.5 Albums & sharing
 
@@ -359,14 +360,14 @@ Initial design; refine during implementation.
 
 | Entity | PK | SK | GSI1PK | GSI1SK | Attributes |
 |---|---|---|---|---|---|
-| Photo | `USER#{userId}` | `PHOTO#{photoId}` | `USER#{userId}` | `TAKEN#{takenAt}#{photoId}` | status (`pending`/`ready`/`failed`), fileName, contentType, sizeBytes, width, height, takenAt, uploadedAt, originalKey, originalETag, latitude, longitude, place `{city, region, country, countryCode}`, placeIds |
+| Photo | `USER#{userId}` | `PHOTO#{photoId}` | `USER#{userId}`; `TRASH` while in the trash | `TAKEN#{takenAt}#{photoId}`; `PURGE#{purgeAt}#{userId}#{photoId}` while in the trash | status (`pending`/`ready`/`failed`), fileName, contentType, sizeBytes, width, height, takenAt, uploadedAt, originalKey, originalETag, latitude, longitude, place `{city, region, country, countryCode}`, placeIds; in the trash: trashedAt, purgeAt, trashedAlbumIds |
 | Album | `USER#{ownerId}` | `ALBUM#{albumId}` | — | — | name, createdAt, coverPhotoId, photoCount |
 | Album membership | `ALBUM#{albumId}` | `PHOTO#{photoId}` | `ALBUM#{albumId}` | `TAKEN#{takenAt}#{photoId}` (the photo's) | ownerId, addedAt |
 | Album share | `ALBUM#{albumId}` | `SHARE#{userId}` | `INVITED#{userId}` while pending, `SHAREDWITH#{userId}` once accepted | `ALBUM#{albumId}` | ownerId, email (shares by email only), status (`pending`/`accepted`; absent = accepted, shares from before v0.17), sharedAt, acceptedAt |
 | Usage | `USER#{userId}` | `USAGE` | — | — | bytesUsed, photoCount, quotaBytes |
 | Profile | `USER#{userId}` | `PROFILE` | — | — | username, usernameChangedAt |
-| Place (list entry) | `USER#{userId}` | `PLACE#{placeId}` | — | — | kind (`city`/`region`/`country`), name, context, photoCount |
-| Place photo | `PLACE#{userId}#{placeId}` | `PHOTO#{photoId}` | `PLACE#{userId}#{placeId}` | `TAKEN#{takenAt}#{photoId}` | ownerId, placeId |
+| Place (list entry) | `USER#{userId}` | `PLACE#{placeId}` | — | — | kind (`city`/`region`/`country`), name, context, photoCount, trashedCount (its photos in the trash, so the entry survives for a restore) |
+| Place photo | `PLACE#{userId}#{placeId}` | `PHOTO#{photoId}` | `PLACE#{userId}#{placeId}` (removed while the photo is in the trash) | `TAKEN#{takenAt}#{photoId}` | ownerId, placeId |
 | Username claim | `USERNAME#{username}` | `USERNAME` | — | — | userId, claimedAt; when released: releasedAt, heldUntil |
 
 Access patterns:
@@ -380,6 +381,8 @@ Access patterns:
 | Who an album is shared with | `PK = ALBUM#{albumId}, SK begins_with SHARE#` |
 | Albums shared with me (accepted) | GSI1: `GSI1PK = SHAREDWITH#{id}` |
 | My invitations | GSI1: `GSI1PK = INVITED#{id}` |
+| My trash | `PK = USER#{id}, SK begins_with PHOTO#`, filter `attribute_exists(trashedAt)` (bounded by the quota) |
+| Trashed photos due for the purge (all users) | GSI1: `GSI1PK = TRASH`, `GSI1SK` between `PURGE#` and `PURGE#{now}~` |
 | My places (search) | `PK = USER#{id}, SK begins_with PLACE#` |
 | Photos at a place (by date taken) | GSI1: `GSI1PK = PLACE#{id}#{placeId}`, descending (or ascending), paginated |
 | User by username | `PK = USERNAME#{username}, SK = USERNAME` (ignored while `heldUntil` is set) |
@@ -408,7 +411,11 @@ Access patterns:
 | `GET` | `/photos` | List own photos `?cursor&limit&sort` |
 | `GET` | `/photos/{photoId}` | Photo metadata; with `?albumId=` a photo of an album shared with the caller, with signed image URLs |
 | `GET` | `/photos/{photoId}/download-url` | 5-min pre-signed GET with `attachment` disposition |
-| `DELETE` | `/photos/{photoId}` | Delete files + metadata + memberships + place entries; update usage |
+| `DELETE` | `/photos/{photoId}` | Move to the trash (FR-DEL-3): out of gallery, albums and places, files and usage stay; a `pending` upload is deleted at once (files + metadata + usage) |
+| `GET` | `/trash` | Own photos in the trash (with `trashedAt`, `purgeAt`), most recently deleted first, one response (FR-DEL-3) |
+| `POST` | `/trash/{photoId}/restore` | Restore a photo from the trash; returns the photo (FR-DEL-3) |
+| `DELETE` | `/trash/{photoId}` | Delete a trashed photo for good (FR-DEL-1/3) |
+| `DELETE` | `/trash` | Empty the trash (FR-DEL-3) |
 | `GET` | `/places` | Own places with photo counts, most photos first (FR-SRCH-2) |
 | `GET` | `/places/map` | Own ready photos with GPS as map pins: `photoId`, `lat`/`lon` rounded to 3 decimals, `takenAt`, `thumbUrl`, `placeId` (its town, or null); newest first, one response (FR-SRCH-5) |
 | `GET` | `/places/{placeId}/photos` | Photos at an own place by date taken `?sort&cursor&limit`; 404 for a place the caller doesn't have |
@@ -517,7 +524,8 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 | `/albums/$albumId` | Album view |
 | `/map` | Map of own photos with GPS (FR-SRCH-5); MapLibre, loaded only with this page |
 | `/upload` | Upload page / queue status |
-| `/settings` | Usage, quota, logout |
+| `/settings` | Usage, quota, link to the trash, logout |
+| `/trash` | Trash (FR-DEL-3): trashed photos with days left; pick to restore or delete forever; empty trash |
 
 ### 12.2 Data fetching (TanStack Query)
 
@@ -576,7 +584,7 @@ OpenTofu, region `us-east-1`. AWS Organization with separate accounts: **dev**, 
 |---|---|
 | `storage` | Photo bucket: public access block, SSE-S3, CORS (app origins only), lifecycle (abort incomplete multipart uploads after 2 days), optional versioning |
 | `thumbnails` | Python Lambda, IAM role (least privilege), S3 notification + Lambda permission, SQS DLQ, log group (30 days) |
-| `api` | API Gateway HTTP API, JWT authorizer, API Lambda, IAM, throttling, log group |
+| `api` | API Gateway HTTP API, JWT authorizer, API Lambda, IAM, throttling, log group; trash purge Lambda (same bundle, own role) run daily by an EventBridge rule (FR-DEL-3) |
 | `auth` | Cognito user pool, domain, Google IdP, app client, pre-sign-up trigger |
 | `database` | DynamoDB table (on-demand, PITR in prod), GSI1 |
 | `frontend` | Site bucket, CloudFront distribution (OAC; behaviors for `/`, `/api/*`, `/users/*`), security headers with a strict Content-Security-Policy on the site (self only, plus Cognito, the photo bucket and the OpenFreeMap tiles for `connect-src`), SPA fallback (CloudFront Function on the default behavior: extension-less paths → `/index.html`; no distribution-wide error responses, so API/image 403/404 stay real), CloudFront key group for signed cookies/URLs, ACM cert, optional WAF |
@@ -745,6 +753,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.19 | 2026-10-28 | Trash: FR-DEL-3 (15 days, restore, delete forever, empty, daily purge), FR-DEL-1/2 adjusted; photo trash attributes + `TRASH` GSI1 key, place `trashedCount` (§8.2); `/trash` routes and `DELETE /photos/{id}` moves to the trash (§9); `/trash` page (§12.1); purge Lambda in the `api` module (§13.1) |
 | 0.18 | 2026-10-28 | Map view (13.2h): FR-SRCH-5, FR-SRCH-4 and NFR-SEC-5 allow rounded coordinates for the owner's map; `GET /places/map` (§9); `/map` route (§12.1); MapLibre + OpenFreeMap (§4); CSP `connect-src` (§13) |
 | 0.17 | 2026-10-27 | Share invitations: FR-SHR-6 (accept), FR-SHR-7 (decline / remove a shared album); share status + `INVITED#` GSI1 key (§8.2); `/share-invitations`, `/shared-albums/{id}/accept`, `DELETE /shared-albums/{id}` (§9); Albums page (§12.1) |
 | 0.16 | 2026-10-27 | Viewer zoom, loading the original for deep zoom (FR-GAL-7) |

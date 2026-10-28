@@ -1,4 +1,4 @@
-import { photoSortSchema, type PhotoSort } from "@photo-app/shared";
+import { photoSortSchema, TRASH_RETENTION_DAYS, type PhotoSort } from "@photo-app/shared";
 import { useQuery, useSuspenseInfiniteQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useRouter, type ErrorComponentProps } from "@tanstack/react-router";
 import { MapPin, X } from "lucide-react";
@@ -210,7 +210,9 @@ function SelectionActions({
   );
 }
 
-/** Deletes the picked photos after a confirmation (FR-DEL-2); failed ones stay picked. */
+/**
+ * Moves the picked photos to the trash after a confirmation (FR-DEL-2/3); failed ones stay picked.
+ */
 function DeleteSelected({
   photoIds,
   onDeleted,
@@ -249,17 +251,20 @@ function DeleteSelected({
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>
-            {photoIds.length === 1 ? "Delete this photo?" : `Delete ${count}?`}
+            {photoIds.length === 1
+              ? "Move this photo to the trash?"
+              : `Move ${count} to the trash?`}
           </AlertDialogTitle>
           <AlertDialogDescription>
             {photoIds.length === 1 ? "It" : "They"} will be removed from your library and from all
-            albums. This can't be undone.
+            albums, and deleted for good after {TRASH_RETENTION_DAYS} days. Until then you can
+            restore {photoIds.length === 1 ? "it" : "them"} from the trash.
           </AlertDialogDescription>
         </AlertDialogHeader>
         {(remove.isError || partial) && (
           <p role="alert" className="text-sm text-destructive">
             {partial
-              ? `${photosText(partial.failed.length)} couldn't be deleted: ${errorMessage(partial.error)}`
+              ? `${photosText(partial.failed.length)} couldn't be moved: ${errorMessage(partial.error)}`
               : errorMessage(remove.error)}
           </p>
         )}
@@ -278,12 +283,23 @@ function DeleteSelected({
                     return;
                   }
                   setConfirming(false);
-                  onDone(`Deleted ${photosText(deletedBefore + deleted.length)}.`);
+                  onDone(
+                    <>
+                      Moved {photosText(deletedBefore + deleted.length)} to the{" "}
+                      <Link
+                        to="/trash"
+                        className="font-medium text-foreground underline underline-offset-4"
+                      >
+                        trash
+                      </Link>
+                      .
+                    </>,
+                  );
                 },
               });
             }}
           >
-            {remove.isPending ? "Deleting…" : partial ? "Try again" : "Delete"}
+            {remove.isPending ? "Moving…" : partial ? "Try again" : "Move to trash"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

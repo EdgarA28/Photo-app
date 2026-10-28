@@ -37,6 +37,8 @@ export function toPhoto(record: PhotoRecord): Photo {
     // Derived images exist only once the thumbnail Lambda is done (FR-GAL-5).
     thumbUrl: ready ? `/${thumbKey(record.userId, record.photoId)}` : null,
     previewUrl: ready ? `/${previewKey(record.userId, record.photoId)}` : null,
+    trashedAt: record.trashedAt ?? null,
+    purgeAt: record.purgeAt ?? null,
   };
 }
 

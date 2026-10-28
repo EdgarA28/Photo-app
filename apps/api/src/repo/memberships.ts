@@ -36,12 +36,13 @@ export async function addMembership(
       new GetCommand({
         TableName: db.table,
         Key: photoKey(userId, photoId),
-        ProjectionExpression: "takenAt",
+        ProjectionExpression: "takenAt, trashedAt",
         ConsistentRead: true,
       }),
     );
     const takenAt = photo.Item?.takenAt as string | undefined;
-    if (!takenAt) return "photo-not-found";
+    // A photo in the trash is in no album (FR-DEL-3).
+    if (!takenAt || photo.Item?.trashedAt) return "photo-not-found";
     const result = await addWithTakenAt(db, userId, albumId, photoId, addedAt, takenAt);
     if (result !== "taken-at-changed") return result;
     if (attempt === ADD_ATTEMPTS) throw new Error(`Photo ${photoId} kept changing while adding it`);
@@ -74,8 +75,10 @@ async function addWithTakenAt(
               TableName: db.table,
               Key: photoKey(userId, photoId),
               UpdateExpression: "ADD albumIds :album",
-              // The membership's sort key below must match the photo's current takenAt.
-              ConditionExpression: "attribute_exists(PK) AND takenAt = :takenAt",
+              // The membership's sort key below must match the photo's current takenAt, and the
+              // photo must not have gone to the trash since it was read.
+              ConditionExpression:
+                "attribute_exists(PK) AND takenAt = :takenAt AND attribute_not_exists(trashedAt)",
               ExpressionAttributeValues: { ":album": new Set([albumId]), ":takenAt": takenAt },
             },
           },
@@ -101,7 +104,7 @@ async function addWithTakenAt(
     return "added";
   } catch (err) {
     if (conditionFailedAt(err, 0)) return "album-not-found";
-    // The photo is gone, or the thumbnail Lambda changed its takenAt since it was read.
+    // The photo is gone or trashed, or the thumbnail Lambda changed its takenAt since it was read.
     if (conditionFailedAt(err, 1)) return "taken-at-changed";
     if (conditionFailedAt(err, 2)) return "already-member";
     throw err;
