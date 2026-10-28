@@ -49,3 +49,9 @@ variable "allowed_emails" {
     error_message = "Each entry is one email address (no commas or spaces)."
   }
 }
+
+variable "branding_logo_svg" {
+  description = "App icon (SVG) for the managed login page: logo above the form and favicon. Null = Cognito's default look."
+  type        = string
+  default     = null
+}

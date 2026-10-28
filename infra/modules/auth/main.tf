@@ -156,9 +156,33 @@ resource "aws_cognito_identity_provider" "google" {
   }
 }
 
-# Managed login needs a style per client; Cognito's default look for now.
+# Managed login needs a style per client. Ours matches the app (branding/settings.json: the
+# app's neutral colours from apps/web/src/index.css, light/dark following the device, no AWS
+# background image) with the app icon above the form and as the favicon. Without a logo
+# (tests), Cognito's defaults are used.
+locals {
+  branding_assets = var.branding_logo_svg == null ? [] : flatten([
+    for category in ["FORM_LOGO", "FAVICON_SVG"] : [
+      for mode in ["LIGHT", "DARK"] : { category = category, color_mode = mode }
+    ]
+  ])
+}
+
 resource "aws_cognito_managed_login_branding" "web" {
-  user_pool_id                = aws_cognito_user_pool.main.id
-  client_id                   = aws_cognito_user_pool_client.web.id
-  use_cognito_provided_values = true
+  user_pool_id = aws_cognito_user_pool.main.id
+  client_id    = aws_cognito_user_pool_client.web.id
+
+  # Exactly one of the two may be set.
+  use_cognito_provided_values = var.branding_logo_svg == null ? true : null
+  settings                    = var.branding_logo_svg == null ? null : file("${path.module}/branding/settings.json")
+
+  dynamic "asset" {
+    for_each = local.branding_assets
+    content {
+      category   = asset.value.category
+      color_mode = asset.value.color_mode
+      extension  = "SVG"
+      bytes      = filebase64(var.branding_logo_svg)
+    }
+  }
 }
