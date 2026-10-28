@@ -85,6 +85,7 @@ describe("upload queue (§12.4, FR-UP-1/5/6)", () => {
       fileName: "IMG_1.jpg",
       contentType: "image/jpeg",
       sizeBytes: 1234,
+      uploadId: "local-1",
     });
     expect(calls[0]!.upload).toEqual(UPLOAD);
     // Its own copy of the bytes (Android), not the picked File.
@@ -273,6 +274,14 @@ describe("upload queue (§12.4, FR-UP-1/5/6)", () => {
     await vi.waitFor(() => expect(statuses(queue)).toEqual(["done"]));
     expect(uploadUrl.mock.calls.map(([body]) => body.photoId)).toEqual([testId(77), undefined]);
     expect(queue.getSnapshot()[0]!.photoId).toBe(testId(1));
+  });
+
+  it("counts a 409 as done without a stored photoId too (found by uploadId)", async () => {
+    const { api } = uploadApi(() => new ApiRequestError("CONFLICT", "uploaded", 409));
+    const { queue } = testUploadQueue(api);
+    await queue.start(USER);
+    await queue.add([testFile("IMG_1.jpg")]);
+    await vi.waitFor(() => expect(statuses(queue)).toEqual(["done"]));
   });
 
   it("counts a 409 on re-sign as done: an earlier attempt already reached S3", async () => {

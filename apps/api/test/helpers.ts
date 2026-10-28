@@ -89,7 +89,7 @@ export async function createPending(
   quotaBytes = 1024 ** 4,
 ): Promise<PhotoRecord> {
   const created = await repos.photos.createPending(photo, { quotaBytes });
-  if (created === "quota-exceeded") throw new Error("Unexpected quota-exceeded in test setup");
+  if (typeof created === "string") throw new Error(`Unexpected ${created} in test setup`);
   return created;
 }
 

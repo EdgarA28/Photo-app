@@ -62,6 +62,11 @@ export const uploadUrlRequestSchema = z.object({
    * new one. contentType and sizeBytes must match it; fileName is kept from the first request.
    */
   photoId: idSchema.optional(),
+  /**
+   * The client's queue ID for the file: a repeated request with it gets the photo the first one
+   * created, re-signed, e.g. when the app closed before it could store that photoId.
+   */
+  uploadId: z.uuid().optional(),
 });
 export type UploadUrlRequest = z.infer<typeof uploadUrlRequestSchema>;
 

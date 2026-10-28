@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.22 |
+| **Version** | 0.23 |
 | **Date** | 2026-10-28 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -183,7 +183,7 @@ flowchart LR
 4. App calls `POST /api/session/media-cookie` → API sets CloudFront signed cookies for `/users/{userId}/*`.
 
 **Upload**
-1. App requests `POST /api/photos/upload-url` with file name, type, size.
+1. App requests `POST /api/photos/upload-url` with file name, type, size and its queue ID for the file (`uploadId`; a repeated request gets the same photo).
 2. API checks quota, creates a `pending` photo item in DynamoDB, returns a pre-signed POST (size + content-type constrained).
 3. App uploads the file **directly to S3** at `users/{userId}/originals/{photoId}.{ext}`.
 4. S3 triggers the thumbnail Lambda → creates thumb + preview → updates the DynamoDB item to `ready` with dimensions and date taken.
@@ -367,6 +367,7 @@ Initial design; refine during implementation.
 | Photo link | `LINK#{token}` | `LINK` | — | — | ownerId, photoIds (≤ 100, newest first), createdAt, expiresAt, ttl (epoch seconds, DynamoDB TTL) |
 | Album share | `ALBUM#{albumId}` | `SHARE#{userId}` | `INVITED#{userId}` while pending, `SHAREDWITH#{userId}` once accepted | `ALBUM#{albumId}` | ownerId, email (shares by email only), status (`pending`/`accepted`; absent = accepted, shares from before v0.17), sharedAt, acceptedAt |
 | Usage | `USER#{userId}` | `USAGE` | — | — | bytesUsed, photoCount, quotaBytes |
+| Upload claim | `USER#{userId}` | `UPLOAD#{uploadId}` | — | — | photoId, ttl (7 days) |
 | Profile | `USER#{userId}` | `PROFILE` | — | — | username, usernameChangedAt |
 | Place (list entry) | `USER#{userId}` | `PLACE#{placeId}` | — | — | kind (`city`/`region`/`country`), name, context, photoCount, trashedCount (its photos in the trash, so the entry survives for a restore) |
 | Place photo | `PLACE#{userId}#{placeId}` | `PHOTO#{photoId}` | `PLACE#{userId}#{placeId}` (removed while the photo is in the trash) | `TAKEN#{takenAt}#{photoId}` | ownerId, placeId |
@@ -760,6 +761,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.23 | 2026-10-28 | `uploadId` on `POST /photos/upload-url` + Upload claim item: an app closed right after the request no longer leaves a pending photo behind (§8.2, §10) |
 | 0.22 | 2026-10-28 | FR-SHR-8: several photos per link (gallery select mode, up to 100); `POST /links` replaces `POST /photos/{id}/links`, link page lists the photos, download per photo `/links/{token}/photos/{photoId}/download-url` (§8.2, §9, §12.1) |
 | 0.21 | 2026-10-28 | Public photo links: FR-SHR-8 (15 min, see + download original, no login), NFR-SEC-1 exception; link item + table TTL (§8.2, §13.1); `POST /photos/{id}/links`, public `GET /links/{token}` and `/download-url` (§9); `/s/$token` page (§12.1) |
 | 0.20 | 2026-10-28 | Managed login styled like the app; email login opens only the email form (§11.1) |
