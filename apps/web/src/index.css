@@ -136,3 +136,19 @@
     color-scheme: light dark;
   }
 }
+
+/* Launch splash (index.html): the app icon on the theme background until React renders a route.
+   This stylesheet is render-blocking in the build, so the splash is styled from the first paint. */
+#splash {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--background);
+}
+#splash img {
+  border-radius: 22%;
+}
+#root:not(:empty) + #splash {
+  display: none;
+}
