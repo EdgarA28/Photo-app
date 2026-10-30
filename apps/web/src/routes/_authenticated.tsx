@@ -14,9 +14,10 @@ import { useOnline } from "@/upload/useUploads";
 // (9.3, FR-PWA-2). Nothing new loads without a token anyway: the first API call waits for the
 // refresh, and if Cognito rejects it, `onUnauthorized` (main.tsx) ends the session. Without a
 // stored session, `getUser` decides (a network error shows the error page). That user's saved
-// Query cache is restored before any loader reads the cache. Pages render only once the media
-// cookies for this token are set (7.3), so the first images don't fail with 403; ensure() never
-// throws. Its token refresh runs alongside the cache restore.
+// Query cache is restored before any loader reads the cache. Pages render only once the browser
+// holds media cookies for this user (7.3), so the first images don't fail with 403: the ones
+// issued on an earlier start if they're still valid (8.25c, renewed in the background), else new
+// ones, which wait for the token refresh. ready() never throws and runs alongside the restore.
 export const Route = createFileRoute("/_authenticated")({
   beforeLoad: async ({ context, location }) => {
     const user = (await context.auth.getStoredUser()) ?? (await context.auth.getUser());
@@ -28,7 +29,7 @@ export const Route = createFileRoute("/_authenticated")({
         .catch((error: unknown) => console.warn("Deleting the saved query cache failed", error));
       throw redirect({ to: "/login", search: { redirect: location.href } });
     }
-    await Promise.all([context.persistedCache.start(user.sub), context.media.ensure()]);
+    await Promise.all([context.persistedCache.start(user.sub), context.media.ready(user.sub)]);
     return { user };
   },
   component: AuthenticatedLayout,
