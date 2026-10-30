@@ -67,6 +67,8 @@ export async function attemptUpload(
       fileName: current.fileName,
       contentType: current.contentType,
       sizeBytes: current.sizeBytes,
+      // Finds the photo this item created even if its photoId never got stored here.
+      uploadId: current.id,
       ...(current.photoId ? { photoId: current.photoId } : {}),
     });
     if (signal.aborted) return null;
@@ -95,8 +97,9 @@ function failed(item: UploadItem, error: unknown, now: () => number): AttemptRes
     if (error.status === 404 && item.photoId) {
       return result({ status: "queued", photoId: null, retryAt: 0 });
     }
-    // No longer pending: an earlier attempt reached S3 even though its answer got lost.
-    if (error.status === 409 && item.photoId) return { uploaded: true, patch: DONE };
+    // No longer pending: an earlier attempt reached S3 even though its answer got lost (the
+    // photo found by photoId, or by uploadId when the photoId never got stored).
+    if (error.status === 409) return { uploaded: true, patch: DONE };
     // The page's client already sent the user to /login; the upload continues after it.
     if (error.code === "UNAUTHORIZED" || error.retryable) return later();
     return result({ status: "failed", error: errorMessage(error), errorCode: error.code });

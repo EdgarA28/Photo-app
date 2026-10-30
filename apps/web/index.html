@@ -11,6 +11,12 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- Launch splash (14.1): shown by index.css while #root is empty, i.e. until the first route
+         renders, including while the session guard waits. Styled there: the CSP has no inline
+         styles (12.2a). -->
+    <div id="splash" role="status">
+      <img src="/logo.svg" alt="Photo App is loading" width="96" height="96" />
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

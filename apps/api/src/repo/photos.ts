@@ -10,6 +10,7 @@ import {
   batchGet,
   conditionFailedAt,
   isConditionalCheckFailed,
+  isTransactionConflict,
   queryAll,
   queryPage,
   stripKeys,
@@ -26,6 +27,7 @@ import {
   purgeSk,
   takenSk,
   TRASH_PK,
+  uploadClaimKey,
   usageKey,
   userPk,
 } from "./keys";
@@ -99,10 +101,14 @@ export function photosRepo(db: Db) {
      * reservation stays within `quotaBytes` (FR-UP-7, 5.6b). `bytesUsed`/`photoCount` are NOT
      * counted here: the thumbnail Lambda does that once the original is stored.
      */
+    /**
+     * With `uploadId`, also records which photo that client upload created (kept 7 days, DynamoDB
+     * TTL): "claimed" if another request with it got there first.
+     */
     async createPending(
       photo: NewPhoto,
-      { quotaBytes }: { quotaBytes: number },
-    ): Promise<PhotoRecord | "quota-exceeded"> {
+      { quotaBytes, uploadId }: { quotaBytes: number; uploadId?: string | undefined },
+    ): Promise<PhotoRecord | "quota-exceeded" | "claimed"> {
       if (photo.sizeBytes > quotaBytes) return "quota-exceeded";
       const record: PhotoRecord = { ...photo, status: "pending", takenAt: photo.uploadedAt };
       try {
@@ -136,14 +142,39 @@ export function photosRepo(db: Db) {
                   },
                 },
               },
+              ...(uploadId
+                ? [
+                    {
+                      Put: {
+                        TableName: db.table,
+                        Item: {
+                          ...uploadClaimKey(photo.userId, uploadId),
+                          photoId: photo.photoId,
+                          ttl: Math.ceil(Date.now() / 1000) + 7 * 86_400,
+                        },
+                        ConditionExpression: "attribute_not_exists(PK)",
+                      },
+                    },
+                  ]
+                : []),
             ],
           }),
         );
       } catch (err) {
         if (conditionFailedAt(err, 1)) return "quota-exceeded";
+        if (conditionFailedAt(err, 2)) return "claimed";
         throw err;
       }
       return record;
+    },
+
+    /** The photo an earlier request with this client `uploadId` created, if it still exists. */
+    async claimed(userId: string, uploadId: string): Promise<PhotoRecord | null> {
+      const claim = await db.client.send(
+        new GetCommand({ TableName: db.table, Key: uploadClaimKey(userId, uploadId) }),
+      );
+      const photoId: unknown = claim.Item?.photoId;
+      return typeof photoId === "string" ? getPhoto(db, userId, photoId) : null;
     },
 
     get: (userId: string, photoId: string) => getPhoto(db, userId, photoId),
@@ -219,7 +250,7 @@ export function photosRepo(db: Db) {
       photoId: string,
       guard: (record: PhotoRecord) => boolean = () => true,
     ): Promise<PhotoRecord | null> {
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let attempt = 0; attempt < 6; attempt++) {
         const record = await getPhoto(db, userId, photoId, true);
         if (!record || !guard(record)) return null;
 
@@ -282,8 +313,13 @@ export function photosRepo(db: Db) {
           await dropEmptyPlaces(db, userId, record.placeIds);
           return record;
         } catch (err) {
-          // Status changed or photo deleted concurrently: re-read and try again.
-          if (!conditionFailedAt(err, 0)) throw err;
+          // Status changed or photo deleted concurrently: re-read and try again. Also when
+          // another delete of this user's photos updated Usage at the same moment (emptying the
+          // trash deletes several in parallel; it answered 500, dev 2026-10-28), after a short
+          // random pause.
+          if (isTransactionConflict(err)) {
+            await new Promise((resolve) => setTimeout(resolve, Math.random() * 50 * 2 ** attempt));
+          } else if (!conditionFailedAt(err, 0)) throw err;
         }
       }
       throw new Error(`Photo ${photoId} kept changing while being deleted`);

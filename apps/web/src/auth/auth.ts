@@ -189,7 +189,6 @@ export function createAuth(config: AppConfig, deps: AuthDeps = {}): Auth {
   };
 }
 
-/** Sign-in request: Google skips the Cognito page (`identity_provider`); `state` carries the target. */
 function sessionUser({ profile: { sub, email, name } }: User): SessionUser {
   return {
     sub,
@@ -198,9 +197,14 @@ function sessionUser({ profile: { sub, email, name } }: User): SessionUser {
   };
 }
 
+/**
+ * Sign-in request; `state` carries the target. `identity_provider` picks the way in: Google skips
+ * the Cognito page, `COGNITO` shows only its email + password form (the user chose email on our
+ * login page, so no second Google button).
+ */
 export function signinArgs(provider: LoginProvider, redirect: string | undefined) {
   return {
     state: safeRedirect(redirect),
-    ...(provider === "Google" ? { extraQueryParams: { identity_provider: "Google" } } : {}),
+    extraQueryParams: { identity_provider: provider === "Google" ? "Google" : "COGNITO" },
   };
 }

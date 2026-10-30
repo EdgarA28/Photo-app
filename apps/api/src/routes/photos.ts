@@ -20,6 +20,7 @@ import { z } from "zod";
 import type { AppEnv } from "../env";
 import { AppError, orNotFound } from "../lib/errors";
 import { validate } from "../lib/validation";
+import type { PhotoRecord } from "../repo";
 import type { Deps } from ".";
 import { sharedPhoto } from "./access";
 import { toPhoto, toSharedPhoto } from "./present";
@@ -33,11 +34,13 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, media, config }
    * takes it from there (ARCHITECTURE.md §8.2).
    *
    * With `photoId` (a retry, 5.6a) it re-signs the upload for that photo instead: no new item, so
-   * failed or expired attempts don't leave duplicate pending photos behind.
+   * failed or expired attempts don't leave duplicate pending photos behind. `uploadId` (the
+   * client's queue ID for the file) finds that photo when the client never got to store its
+   * `photoId`, e.g. the app was closed right after the request.
    */
   app.post("/photos/upload-url", validate("json", uploadUrlRequestSchema), async (c) => {
     const userId = c.get("userId");
-    const { fileName, contentType, sizeBytes, photoId: retryOf } = c.req.valid("json");
+    const { fileName, contentType, sizeBytes, photoId: retryOf, uploadId } = c.req.valid("json");
 
     // The quota covers counted photos plus every pending upload (`bytesReserved`, 5.6b).
     const usage = await repos.usage.get(userId);
@@ -45,9 +48,7 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, media, config }
     const quotaExceeded = () =>
       new AppError(413, "QUOTA_EXCEEDED", "This upload would exceed your storage quota");
 
-    if (retryOf) {
-      // Other users' photos read as missing (NFR-SEC-2).
-      const record = orNotFound(await repos.photos.get(userId, retryOf), "Photo not found");
+    const resign = async (record: PhotoRecord) => {
       // Once processed, the original must not be replaced.
       if (record.status !== "pending") {
         throw new AppError(409, "CONFLICT", "This photo has already been uploaded");
@@ -65,25 +66,37 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, media, config }
       });
       const body: UploadUrlResponse = { photoId: record.photoId, upload };
       return c.json(body);
+    };
+
+    if (retryOf) {
+      // Other users' photos read as missing (NFR-SEC-2).
+      return resign(orNotFound(await repos.photos.get(userId, retryOf), "Photo not found"));
     }
+    const claimed = uploadId && (await repos.photos.claimed(userId, uploadId));
+    if (claimed) return resign(claimed);
 
     const photoId = newId();
     const key = originalKey(userId, photoId, extensionFor(contentType));
     // Signed before the item exists, so a failure here leaves nothing behind.
     const upload = await storage.createUploadPost({ key, contentType, sizeBytes });
     // Reserves the bytes atomically with the item, so parallel requests can't overshoot.
-    const created = await repos.photos.createPending(
-      {
-        userId,
-        photoId,
-        fileName,
-        contentType,
-        sizeBytes,
-        originalKey: key,
-        uploadedAt: new Date().toISOString(),
-      },
-      { quotaBytes },
-    );
+    const pending = {
+      userId,
+      photoId,
+      fileName,
+      contentType,
+      sizeBytes,
+      originalKey: key,
+      uploadedAt: new Date().toISOString(),
+    };
+    let created = await repos.photos.createPending(pending, { quotaBytes, uploadId });
+    if (created === "claimed") {
+      // A parallel request with this uploadId won: re-sign its photo.
+      const winner = await repos.photos.claimed(userId, uploadId!);
+      if (winner) return resign(winner);
+      // That photo was deleted meanwhile: a new one, without the claim.
+      created = await repos.photos.createPending(pending, { quotaBytes });
+    }
     if (created === "quota-exceeded") throw quotaExceeded();
 
     const body: UploadUrlResponse = { photoId, upload };

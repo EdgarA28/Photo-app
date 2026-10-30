@@ -208,6 +208,55 @@ test("401 for anonymous callers", async () => {
   expect((await api(null, "POST", "/photos/upload-url", request)).status).toBe(401);
 });
 
+describe("the same queued file again, by uploadId (5.6a)", () => {
+  const ask = (user: string, uploadId: string) =>
+    api(user, "POST", "/photos/upload-url", { ...request, uploadId });
+  const photoIdOf = (body: unknown) => uploadUrlResponseSchema.parse(body).photoId;
+  const listed = async (user: string) =>
+    photoPageSchema.parse((await api(user, "GET", "/photos")).body).items.map((p) => p.photoId);
+
+  test("a repeated request re-signs the photo the first one created (app closed in between)", async () => {
+    const user = newUserId();
+    const id = crypto.randomUUID();
+    const first = await ask(user, id);
+    const again = await ask(user, id);
+    expect([first.status, again.status]).toEqual([201, 200]);
+    expect(photoIdOf(again.body)).toBe(photoIdOf(first.body));
+    expect(await listed(user)).toEqual([photoIdOf(first.body)]);
+  });
+
+  test("parallel requests end with one photo", async () => {
+    const user = newUserId();
+    const id = crypto.randomUUID();
+    const answers = await Promise.all([1, 2, 3].map(() => ask(user, id)));
+    expect(new Set(answers.map((a) => photoIdOf(a.body))).size).toBe(1);
+    expect(await listed(user)).toHaveLength(1);
+  });
+
+  test("409 once that photo is uploaded; a new photo once it was deleted", async () => {
+    const user = newUserId();
+    const id = crypto.randomUUID();
+    const photoId = photoIdOf((await ask(user, id)).body);
+    await markReady(db, user, photoId, 3_000_000, "2025-01-01T00:00:00.000Z");
+    expect((await ask(user, id)).status).toBe(409);
+
+    const other = crypto.randomUUID();
+    const pending = photoIdOf((await ask(user, other)).body);
+    expect((await api(user, "DELETE", `/photos/${pending}`)).status).toBe(204);
+    const fresh = await ask(user, other);
+    expect(fresh.status).toBe(201);
+    expect(photoIdOf(fresh.body)).not.toBe(pending);
+  });
+
+  test("another user's uploadId is not shared (NFR-SEC-2)", async () => {
+    const id = crypto.randomUUID();
+    const mine = photoIdOf((await ask(newUserId(), id)).body);
+    const theirs = await ask(newUserId(), id);
+    expect(theirs.status).toBe(201);
+    expect(photoIdOf(theirs.body)).not.toBe(mine);
+  });
+});
+
 describe("retrying an upload with photoId (5.6a)", () => {
   async function start(user: string) {
     const { body } = await api(user, "POST", "/photos/upload-url", request);

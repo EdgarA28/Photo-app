@@ -317,3 +317,42 @@ run "rejects_malformed_allowlist" {
 
   expect_failures = [var.allowed_emails]
 }
+
+run "branding_default_without_logo" {
+  command = plan
+
+  assert {
+    condition     = aws_cognito_managed_login_branding.web.use_cognito_provided_values && length(aws_cognito_managed_login_branding.web.asset) == 0
+    error_message = "Without a logo the login page keeps Cognito's default look."
+  }
+}
+
+run "branding_like_the_app" {
+  command = plan
+
+  variables {
+    branding_logo_svg = "../../../apps/web/public/logo.svg"
+  }
+
+  assert {
+    condition     = aws_cognito_managed_login_branding.web.use_cognito_provided_values != true
+    error_message = "With a logo our own settings are used."
+  }
+
+  assert {
+    condition     = jsondecode(aws_cognito_managed_login_branding.web.settings).categories.global.colorSchemeMode == "DYNAMIC"
+    error_message = "Light/dark follows the device, like the app."
+  }
+
+  assert {
+    condition     = !jsondecode(aws_cognito_managed_login_branding.web.settings).components.pageBackground.image.enabled
+    error_message = "No AWS background image."
+  }
+
+  assert {
+    condition = toset([for a in aws_cognito_managed_login_branding.web.asset : "${a.category}/${a.color_mode}/${a.extension}"]) == toset([
+      "FORM_LOGO/LIGHT/SVG", "FORM_LOGO/DARK/SVG", "FAVICON_SVG/LIGHT/SVG", "FAVICON_SVG/DARK/SVG",
+    ])
+    error_message = "The app icon as form logo and favicon, in both colour modes."
+  }
+}

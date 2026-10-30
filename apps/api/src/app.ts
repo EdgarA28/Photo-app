@@ -23,6 +23,11 @@ const HTTP_EXCEPTION_CODES: Partial<Record<number, ErrorCode>> = {
 export interface AppOptions {
   /** Registers the authenticated routes (5.5+). They run after `requireUser`. */
   routes?: (app: Hono<AppEnv>) => void;
+  /**
+   * Routes anyone may call (public photo links, FR-SHR-8). Registered before `requireUser`, so
+   * they answer before it runs; API Gateway must also leave them without the JWT authorizer.
+   */
+  publicRoutes?: (app: Hono<AppEnv>) => void;
 }
 
 /**
@@ -47,6 +52,7 @@ export function createApp(options: AppOptions = {}): Hono<AppEnv> {
 
   // Unauthenticated: used by the post-deploy smoke test (5.5, §14).
   app.get("/health", (c) => c.json({ status: "ok" }));
+  options.publicRoutes?.(app);
 
   // Everything else requires a user. Unknown routes also answer 401 to anonymous callers.
   app.use("*", requireUser);

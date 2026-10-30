@@ -9,7 +9,7 @@ import { cloudFrontMediaSigner, ssmPrivateKeyLoader } from "./lib/media";
 import { s3PhotoStorage } from "./lib/storage";
 import { cognitoUserDirectory } from "./lib/users";
 import { createDocumentClient, createRepositories } from "./repo";
-import { registerRoutes } from "./routes";
+import { registerPublicRoutes, registerRoutes } from "./routes";
 
 // Built once per execution environment and reused across warm invocations. A missing environment
 // variable fails the cold start rather than a request.
@@ -23,6 +23,7 @@ const media = cloudFrontMediaSigner({
   loadPrivateKey: ssmPrivateKeyLoader(new SSMClient({}), config.mediaPrivateKeyParameter),
 });
 
+const deps = { repos, users, storage, media, config };
 export const handler = handle(
-  createApp({ routes: registerRoutes({ repos, users, storage, media, config }) }),
+  createApp({ routes: registerRoutes(deps), publicRoutes: registerPublicRoutes(deps) }),
 );

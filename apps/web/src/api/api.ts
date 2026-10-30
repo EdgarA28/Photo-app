@@ -4,6 +4,8 @@ import {
   albumShareListSchema,
   albumShareSchema,
   downloadUrlResponseSchema,
+  photoLinkSchema,
+  sharedLinkSchema,
   mediaCookieResponseSchema,
   meResponseSchema,
   photoLocationListSchema,
@@ -60,6 +62,20 @@ export function createApi(request: Request) {
         }),
       /** Moves it to the trash; a pending upload is deleted at once (FR-DEL-3). */
       delete: (photoId: string) => request("DELETE", `/photos/${enc(photoId)}`),
+    },
+
+    /** Public photo links (FR-SHR-8): created signed in, opened without a login. */
+    links: {
+      /** A link to these own photos, valid 15 min. */
+      create: (photoIds: string[]) =>
+        request("POST", "/links", { schema: photoLinkSchema, body: { photoIds } }),
+      get: (token: string, o?: Opts) =>
+        request("GET", `/links/${enc(token)}`, { schema: sharedLinkSchema, public: true, ...o }),
+      downloadUrl: (token: string, photoId: string) =>
+        request("GET", `/links/${enc(token)}/photos/${enc(photoId)}/download-url`, {
+          schema: downloadUrlResponseSchema,
+          public: true,
+        }),
     },
 
     trash: {

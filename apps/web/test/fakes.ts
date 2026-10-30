@@ -56,6 +56,7 @@ export function fakeAuth(options: { signedIn?: boolean; callbackTarget?: string 
 export function fakeMedia() {
   return {
     ensure: vi.fn(async () => {}),
+    ready: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),
   } satisfies MediaCookies;
 }

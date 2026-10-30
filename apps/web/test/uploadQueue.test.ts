@@ -7,12 +7,14 @@ import {
   RETRY_BASE_MS,
   RETRY_MAX_MS,
   retryDelay,
+  STORE_READ_TIMEOUT_MS,
   UNREADABLE_FILE,
 } from "../src/upload/queue";
 import { S3UploadError } from "../src/upload/s3Post";
 import type { UploadItem } from "../src/upload/store";
 import {
   controlledPost,
+  FakeLocks,
   MemoryUploadStore,
   testFile,
   testId,
@@ -83,6 +85,7 @@ describe("upload queue (§12.4, FR-UP-1/5/6)", () => {
       fileName: "IMG_1.jpg",
       contentType: "image/jpeg",
       sizeBytes: 1234,
+      uploadId: "local-1",
     });
     expect(calls[0]!.upload).toEqual(UPLOAD);
     // Its own copy of the bytes (Android), not the picked File.
@@ -273,6 +276,14 @@ describe("upload queue (§12.4, FR-UP-1/5/6)", () => {
     expect(queue.getSnapshot()[0]!.photoId).toBe(testId(1));
   });
 
+  it("counts a 409 as done without a stored photoId too (found by uploadId)", async () => {
+    const { api } = uploadApi(() => new ApiRequestError("CONFLICT", "uploaded", 409));
+    const { queue } = testUploadQueue(api);
+    await queue.start(USER);
+    await queue.add([testFile("IMG_1.jpg")]);
+    await vi.waitFor(() => expect(statuses(queue)).toEqual(["done"]));
+  });
+
   it("counts a 409 on re-sign as done: an earlier attempt already reached S3", async () => {
     const { api } = uploadApi(() => new ApiRequestError("CONFLICT", "uploaded", 409));
     const post = vi.fn();
@@ -431,6 +442,72 @@ describe("upload queue: files from the device (Android, 2026-10-26)", () => {
     await vi.waitFor(() => expect(statuses(queue)).toEqual(["done"]));
     expect(uploadUrl).toHaveBeenCalledOnce();
     warn.mockRestore();
+  });
+
+  it("adds and uploads everything while IndexedDB writes never finish (Android, 2026-10-28)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const store = new MemoryUploadStore();
+    const { api } = uploadApi();
+    const { queue } = testUploadQueue(api, { store });
+    await queue.start(USER);
+    vi.spyOn(store, "put").mockReturnValue(new Promise(() => {}));
+    const files = [1, 2, 3, 4, 5].map((n) => testFile(`IMG_${n}.jpg`));
+    expect((await queue.add(files)).added).toBe(5);
+    // Each upload waits at most STORE_READ_TIMEOUT_MS for its photoId to be stored.
+    await vi.advanceTimersByTimeAsync(STORE_READ_TIMEOUT_MS * 2);
+    await vi.waitFor(() => expect(statuses(queue)).toEqual(Array(5).fill("done")));
+  });
+
+  it("stores the photoId before the file goes out, so a closed app doesn't upload a duplicate", async () => {
+    const store = new MemoryUploadStore();
+    const { api } = uploadApi();
+    const { post, calls } = controlledPost();
+    let release!: () => void;
+    const { queue } = testUploadQueue(api, { store, post });
+    await queue.start(USER);
+    const put = store.put.bind(store);
+    vi.spyOn(store, "put").mockImplementation(async (item) => {
+      // The write with the photoId is slow (a big Blob), but lands.
+      if (item.photoId) await new Promise<void>((resolve) => (release = resolve));
+      await put(item);
+    });
+    await queue.add([testFile("IMG_1.jpg")]);
+    await vi.waitFor(() => expect(release).toBeDefined());
+    expect(calls).toHaveLength(0);
+    release();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect([...store.items.values()][0]!.photoId).toBe(testId(1));
+  });
+
+  it("starts uploading the first picked files while the rest are still being read", async () => {
+    const { api } = uploadApi();
+    const { post, calls } = controlledPost();
+    const { queue } = testUploadQueue(api, { post });
+    await queue.start(USER);
+    let finishRead!: (bytes: ArrayBuffer) => void;
+    const slow = testFile("IMG_2.jpg");
+    vi.spyOn(slow, "arrayBuffer").mockReturnValue(new Promise((resolve) => (finishRead = resolve)));
+    const added = queue.add([testFile("IMG_1.jpg"), slow]);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    finishRead(new ArrayBuffer(1000));
+    expect((await added).added).toBe(2);
+  });
+
+  it("starts uploading when reading the stored queue never finishes", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const store = new MemoryUploadStore();
+    vi.spyOn(store, "list").mockReturnValue(new Promise(() => {}));
+    const { api } = uploadApi();
+    const { queue } = testUploadQueue(api, {
+      store,
+      locks: new FakeLocks() as unknown as LockManager,
+    });
+    const started = queue.start(USER);
+    await vi.advanceTimersByTimeAsync(STORE_READ_TIMEOUT_MS);
+    await started;
+    await queue.add([testFile("IMG_1.jpg")]);
+    await vi.advanceTimersByTimeAsync(STORE_READ_TIMEOUT_MS);
+    await vi.waitFor(() => expect(statuses(queue)).toEqual(["done"]));
   });
 
   it("Retry still uploads when saving fails", async () => {

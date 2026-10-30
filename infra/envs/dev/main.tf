@@ -40,6 +40,8 @@ module "auth" {
 
   # Built by `pnpm build` (services/auth-triggers); run it before planning.
   pre_sign_up_source_dir = "${path.root}/../../../services/auth-triggers/dist"
+  # Managed login styled like the app, with its icon (single source: the web app's).
+  branding_logo_svg = "${path.root}/../../../apps/web/public/logo.svg"
 }
 
 module "thumbnails" {

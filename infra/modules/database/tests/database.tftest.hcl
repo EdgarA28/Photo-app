@@ -55,3 +55,12 @@ run "prod_settings" {
     error_message = "PITR must be enabled when requested."
   }
 }
+
+run "expiring_items" {
+  command = plan
+
+  assert {
+    condition     = one(aws_dynamodb_table.main.ttl).attribute_name == "ttl" && one(aws_dynamodb_table.main.ttl).enabled
+    error_message = "Items with a `ttl` attribute expire (photo links, FR-SHR-8)."
+  }
+}

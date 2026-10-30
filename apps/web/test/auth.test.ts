@@ -94,9 +94,9 @@ describe("login request", () => {
     expect(params.state).toMatch(/^[0-9a-f]{32}$/);
   });
 
-  it("shows Cognito's managed login for email", async () => {
+  it("shows only Cognito's email + password form for email", async () => {
     const url = await startLogin(openTab(), "email");
-    expect(url.searchParams.has("identity_provider")).toBe(false);
+    expect(url.searchParams.get("identity_provider")).toBe("COGNITO");
   });
 
   it("uses a new state and PKCE challenge every time", async () => {

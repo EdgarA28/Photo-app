@@ -5,7 +5,7 @@ import { ApiRequestError } from "../src/api/errors";
 import { focusManager, onlineManager, type QueryClient } from "@tanstack/react-query";
 import { IDBFactory } from "fake-indexeddb";
 import { createIdbKeyValue, createPersistedQueryCache } from "../src/queries/persistedCache";
-import { fakeApi, fakeAuth, testConfig, testPhotoPage, testUser } from "./fakes";
+import { fakeApi, fakeAuth, fakeMedia, testConfig, testPhotoPage, testUser } from "./fakes";
 import { defaultResponses, renderAt } from "./render";
 
 afterEach(cleanup);
@@ -76,14 +76,15 @@ describe("routes (§12.1)", () => {
   });
 
   // 7.3: the first images would fail with 403 without the cookies.
-  it("renders signed-in pages only after the media cookies are set", async () => {
+  it("renders signed-in pages only once the media cookies are ready", async () => {
     let release!: () => void;
     const media = {
-      ensure: vi.fn(() => new Promise<void>((resolve) => (release = resolve))),
+      ensure: vi.fn(async () => {}),
+      ready: vi.fn(() => new Promise<void>((resolve) => (release = resolve))),
       clear: vi.fn(async () => {}),
     };
     const rendered = renderAt("/gallery", { media });
-    await waitFor(() => expect(media.ensure).toHaveBeenCalled());
+    await waitFor(() => expect(media.ready).toHaveBeenCalledWith(testUser.sub));
     expect(screen.queryByRole("heading", { name: "Gallery" })).toBeNull();
 
     release();
@@ -92,9 +93,9 @@ describe("routes (§12.1)", () => {
   });
 
   it("doesn't ask for media cookies without a session", async () => {
-    const media = { ensure: vi.fn(async () => {}), clear: vi.fn(async () => {}) };
+    const media = fakeMedia();
     await renderAt("/gallery", { auth: fakeAuth(), media });
-    expect(media.ensure).not.toHaveBeenCalled();
+    expect(media.ready).not.toHaveBeenCalled();
   });
 
   it("shows the signed-in email in the side rail", async () => {
@@ -123,7 +124,24 @@ describe("authentication guard (FR-AUTH-6)", () => {
   it("lets signed-in users through", async () => {
     const { router, auth } = await renderAt("/gallery");
     expect(router.state.location.pathname).toBe("/gallery");
-    expect(auth.getUser).toHaveBeenCalled();
+    expect(auth.getStoredUser).toHaveBeenCalled();
+  });
+
+  // 8.25b: the token refresh is the first API call's business, not the guard's.
+  it("opens the app from the stored session without waiting for Cognito", async () => {
+    const auth = fakeAuth({ signedIn: true });
+    auth.getUser.mockReturnValue(new Promise(() => {}));
+    await renderAt("/gallery", { auth });
+    expect(await screen.findByRole("heading", { name: "Gallery" })).toBeTruthy();
+    expect(auth.getUser).not.toHaveBeenCalled();
+  });
+
+  it("restores the saved cache while the media cookies are requested (8.25b)", async () => {
+    const media = { ...fakeMedia(), ready: vi.fn(() => new Promise<void>(() => {})) };
+    const persistedCache = { start: vi.fn(() => new Promise<void>(() => {})), clear: vi.fn() };
+    void renderAt("/gallery", { media, persistedCache });
+    await waitFor(() => expect(media.ready).toHaveBeenCalled());
+    expect(persistedCache.start).toHaveBeenCalledWith(testUser.sub);
   });
 
   it("deletes the saved cache when the session has ended without a logout (9.3)", async () => {

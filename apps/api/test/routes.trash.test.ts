@@ -1,5 +1,5 @@
 /** The trash (FR-DEL-3): GET /trash, restore, delete forever, empty, and the daily purge. */
-import { GetCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import {
   TRASH_RETENTION_DAYS,
   apiErrorSchema,
@@ -12,7 +12,7 @@ import {
   thumbKey,
   trashListSchema,
 } from "@photo-app/shared";
-import { beforeAll, beforeEach, describe, expect, test } from "vitest";
+import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { purgeExpired } from "../src/lib/trash";
 import type { Db, Repositories } from "../src/repo";
 import {
@@ -283,6 +283,36 @@ describe("DELETE /trash/{photoId} and DELETE /trash", () => {
     expect(await gallery(user)).toEqual([kept.photoId]);
     expect(await repos.usage.get(user)).toMatchObject({ photoCount: 1, bytesUsed: 1000 });
     expect(await trash(other)).toHaveLength(1);
+  });
+
+  test("empty the trash survives deletes clashing on Usage (TransactionConflict)", async () => {
+    // Emptying deletes several photos in parallel, each updating Usage: DynamoDB cancels the
+    // clashing transactions; the trash answered 500 (dev 2026-10-28).
+    const user = newUserId();
+    const photos = [await readyPhoto(user), await readyPhoto(user), await readyPhoto(user)];
+    for (const photo of photos) await api(user, "DELETE", `/photos/${photo.photoId}`);
+    const send = db.client.send.bind(db.client);
+    let conflicts = 0;
+    const spy = vi.spyOn(db.client, "send").mockImplementation(((command: unknown) => {
+      if (command instanceof TransactWriteCommand && conflicts < 2) {
+        conflicts++;
+        return Promise.reject(
+          Object.assign(new Error("Transaction cancelled"), {
+            name: "TransactionCanceledException",
+            CancellationReasons: [{ Code: "None" }, { Code: "TransactionConflict" }],
+          }),
+        );
+      }
+      return send(command as never);
+    }) as typeof db.client.send);
+    try {
+      expect((await api(user, "DELETE", "/trash")).status).toBe(204);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(conflicts).toBe(2);
+    expect(await trash(user)).toEqual([]);
+    expect(await repos.usage.get(user)).toMatchObject({ photoCount: 0, bytesUsed: 0 });
   });
 
   test("anonymous → 401, invalid ID → 400", async () => {

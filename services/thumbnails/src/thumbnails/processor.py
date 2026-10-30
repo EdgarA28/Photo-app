@@ -31,6 +31,8 @@ else (S3/DynamoDB/network) is transient and raised, so Lambda retries and then u
 """
 
 import logging
+import random
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -363,7 +365,33 @@ class Processor:
         """Applies the final status and counts the original in Usage, atomically: `size` is the
         stored size, `declared` the size the API reserved when it created the item.
 
-        Returns False if the photo is gone or no longer `pending`."""
+        Returns False if the photo is gone or no longer `pending`.
+
+        Parallel uploads all update Usage, so DynamoDB can cancel this for clashing with another
+        transaction (`TransactionConflict`): retried here at once, since Lambda's own retry comes
+        a minute later and the photo showed as "processing" that long (dev, 2026-10-28)."""
+        for attempt in range(5):
+            try:
+                return self._finish_once(
+                    update_expression, user_id, photo_id, size, declared, values, extra_items
+                )
+            except ClientError as e:
+                codes = {r.get("Code") for r in e.response.get("CancellationReasons") or []}
+                if attempt == 4 or "TransactionConflict" not in codes:
+                    raise
+                time.sleep(random.uniform(0, 0.1 * 2**attempt))
+        raise AssertionError("unreachable")
+
+    def _finish_once(
+        self,
+        update_expression: str,
+        user_id: str,
+        photo_id: str,
+        size: int,
+        declared: int,
+        values: dict[str, Any],
+        extra_items: list[dict[str, Any]] | None,
+    ) -> bool:
         try:
             self._dynamodb.transact_write_items(
                 TransactItems=[

@@ -31,6 +31,7 @@ import {
   type ReactNode,
 } from "react";
 import { useImageFailed } from "@/components/useImageFailed";
+import { ShareLinkButton } from "@/links/ShareLinkDialog";
 import { errorMessage } from "@/api/errors";
 import {
   AlertDialog,
@@ -254,7 +255,7 @@ function SharedByLine({ album }: { album: string }) {
 }
 
 /**
- * Download (FR-DL-1/2) and delete to the trash (FR-DEL-1/2/3). Delete is offered for own photos only: in an album
+ * Download (FR-DL-1/2), a public link (FR-SHR-8) and delete to the trash (FR-DEL-1/2/3). Delete is offered for own photos only: in an album
  * that isn't in my album list (shared with me) the photo belongs to someone else.
  */
 function PhotoActions({
@@ -324,6 +325,9 @@ function PhotoActions({
           <Download className="size-5" />
         )}
       </Button>
+      {own && photo.status === "ready" && (
+        <ShareLinkButton photoId={photo.photoId} setOverlay={setOverlay} className={iconButton} />
+      )}
       {own && (
         <AlbumActions photo={photo} album={album} setOverlay={setOverlay} onRemoved={onDeleted} />
       )}

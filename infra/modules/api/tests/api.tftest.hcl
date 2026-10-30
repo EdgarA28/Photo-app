@@ -121,7 +121,12 @@ run "jwt_protects_everything_but_health" {
 
   assert {
     condition     = aws_apigatewayv2_route.health.route_key == "GET /api/health" && aws_apigatewayv2_route.health.authorization_type == "NONE"
-    error_message = "Only the health check is public (5.5)."
+    error_message = "The health check is public (5.5)."
+  }
+
+  assert {
+    condition     = aws_apigatewayv2_route.photo_links.route_key == "GET /api/links/{proxy+}" && aws_apigatewayv2_route.photo_links.authorization_type == "NONE"
+    error_message = "Public photo links (FR-SHR-8): GET only, under /api/links/ only."
   }
 
   assert {

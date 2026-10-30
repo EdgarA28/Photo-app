@@ -1,7 +1,7 @@
 import { photoSortSchema, TRASH_RETENTION_DAYS, type PhotoSort } from "@photo-app/shared";
 import { useQuery, useSuspenseInfiniteQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useRouter, type ErrorComponentProps } from "@tanstack/react-router";
-import { MapPin, X } from "lucide-react";
+import { Link2, MapPin, X } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { AddToAlbumDialog } from "@/albums/AddToAlbumDialog";
 import { errorMessage } from "@/api/errors";
@@ -29,6 +29,7 @@ import { gallerySearchSchema } from "@/gallery/search";
 import { SelectButton } from "@/gallery/SelectButton";
 import { SelectionBar } from "@/gallery/SelectionBar";
 import { useSelection } from "@/gallery/useSelection";
+import { ShareLinkDialog } from "@/links/ShareLinkDialog";
 import { albumsQuery, useAddToAlbum } from "@/queries/albums";
 import { galleryQuery, useDeletePhotos } from "@/queries/photos";
 import { placesQuery } from "@/queries/places";
@@ -162,8 +163,8 @@ function Gallery() {
 const photosText = (count: number) => (count === 1 ? "1 photo" : `${count} photos`);
 
 /**
- * Select mode in the gallery (8.11): add the picked photos to an album (FR-ALB-2), or delete them
- * (FR-DEL-1/2, own photos only).
+ * Select mode in the gallery (8.11): add the picked photos to an album (FR-ALB-2), delete them
+ * (FR-DEL-1/2) or make a public link to them (FR-SHR-8); the last two for own photos only.
  */
 function SelectionActions({
   photoIds,
@@ -183,6 +184,23 @@ function SelectionActions({
   return (
     <SelectionBar count={photoIds.length} onCancel={onCancel}>
       {own && <DeleteSelected photoIds={photoIds} onDeleted={onDeleted} onDone={onDone} />}
+      {own && (
+        <ShareLinkDialog
+          photoIds={photoIds}
+          trigger={({ open, busy }) => (
+            <Button
+              variant="outline"
+              size="icon"
+              aria-label="Share link"
+              title="Link anyone can open for 15 minutes"
+              disabled={photoIds.length === 0 || busy}
+              onClick={open}
+            >
+              <Link2 aria-hidden />
+            </Button>
+          )}
+        />
+      )}
       <Button disabled={photoIds.length === 0} onClick={() => setChoosing(true)}>
         Add to album
       </Button>
