@@ -123,7 +123,24 @@ describe("authentication guard (FR-AUTH-6)", () => {
   it("lets signed-in users through", async () => {
     const { router, auth } = await renderAt("/gallery");
     expect(router.state.location.pathname).toBe("/gallery");
-    expect(auth.getUser).toHaveBeenCalled();
+    expect(auth.getStoredUser).toHaveBeenCalled();
+  });
+
+  // 8.25b: the token refresh is the first API call's business, not the guard's.
+  it("opens the app from the stored session without waiting for Cognito", async () => {
+    const auth = fakeAuth({ signedIn: true });
+    auth.getUser.mockReturnValue(new Promise(() => {}));
+    await renderAt("/gallery", { auth });
+    expect(await screen.findByRole("heading", { name: "Gallery" })).toBeTruthy();
+    expect(auth.getUser).not.toHaveBeenCalled();
+  });
+
+  it("restores the saved cache while the media cookies are requested (8.25b)", async () => {
+    const media = { ensure: vi.fn(() => new Promise<void>(() => {})), clear: vi.fn() };
+    const persistedCache = { start: vi.fn(() => new Promise<void>(() => {})), clear: vi.fn() };
+    void renderAt("/gallery", { media, persistedCache });
+    await waitFor(() => expect(media.ensure).toHaveBeenCalled());
+    expect(persistedCache.start).toHaveBeenCalledWith(testUser.sub);
   });
 
   it("deletes the saved cache when the session has ended without a logout (9.3)", async () => {

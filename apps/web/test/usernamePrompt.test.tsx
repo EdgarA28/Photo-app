@@ -95,7 +95,7 @@ describe("first-login username prompt (FR-ACC-3, 8.15)", () => {
   it("still asks another account on the same device", async () => {
     skipPrompt(testUser.sub);
     const auth = fakeAuth({ signedIn: true });
-    auth.getUser.mockResolvedValue({ ...testUser, sub: OTHER });
+    auth.getStoredUser.mockResolvedValue({ sub: OTHER, email: undefined, name: undefined });
     const { api } = setup();
     await renderAt("/gallery", { api, auth });
     expect(await prompt()).toBeTruthy();

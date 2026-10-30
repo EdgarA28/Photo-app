@@ -20,9 +20,15 @@ const auth = createAuth(config);
 const api = createApi(
   createRequest({
     auth,
-    // The API rejected even a fresh token: drop the session and log in again, coming back here.
+    // The API rejected even a fresh token, or Cognito the refresh (the guard doesn't wait for it,
+    // 8.25b): drop the session and its saved data (FR-AUTH-5), then log in again, coming back here.
     onUnauthorized: () => {
-      void auth.clearSession().then(() =>
+      void Promise.all([
+        auth.clearSession(),
+        persistedCache
+          .clear()
+          .catch((error: unknown) => console.warn("Deleting the saved query cache failed", error)),
+      ]).then(() =>
         router.navigate({
           to: "/login",
           search: { redirect: router.state.location.href, reason: "expired" },
