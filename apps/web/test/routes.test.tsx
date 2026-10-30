@@ -311,13 +311,7 @@ describe("settings", () => {
     }).api;
     await renderAt("/settings", { api });
     expect(
-      await screen.findByText(
-        "Something went wrong on our side. Try again later.",
-        {},
-        {
-          timeout: 5000,
-        },
-      ),
+      await screen.findByText("Something went wrong on our side. Try again later."),
     ).toBeTruthy();
   });
 });
