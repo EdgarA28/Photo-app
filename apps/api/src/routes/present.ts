@@ -39,6 +39,7 @@ export function toPhoto(record: PhotoRecord): Photo {
     previewUrl: ready ? `/${previewKey(record.userId, record.photoId)}` : null,
     trashedAt: record.trashedAt ?? null,
     purgeAt: record.purgeAt ?? null,
+    ownerId: record.userId,
   };
 }
 
@@ -69,12 +70,13 @@ export function toAlbum(record: AlbumRecord, cover: PhotoRecord | null | undefin
     coverPhotoId: record.coverPhotoId ?? null,
     coverThumbUrl: cover ? toPhoto(cover).thumbUrl : null,
     photoCount: Math.max(0, record.photoCount),
+    membersCanAdd: record.membersCanAdd ?? false,
   };
 }
 
 /**
- * A photo from an album shared with the caller (FR-SHR-4). The owner's image paths aren't covered
- * by the recipient's media cookie (own prefix only), so each image gets a 15-min signed URL for
+ * Someone else's photo in an album: shared with the caller (FR-SHR-4), or added by a member
+ * (FR-SHR-9). Its owner's image paths aren't covered by the caller's media cookie (own prefix only), so each image gets a 15-min signed URL for
  * exactly that file (7.4, §9). Callers pass only photos visible to recipients (ready).
  *
  * Signing is the expensive part (one RSA operation per URL), so album pages sign thumbnails only

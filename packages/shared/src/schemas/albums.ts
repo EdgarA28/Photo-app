@@ -11,6 +11,11 @@ export const albumSchema = z.object({
   coverPhotoId: idSchema.nullable(),
   coverThumbUrl: z.string().nullable(),
   photoCount: z.number().int().nonnegative(),
+  /**
+   * Everyone the album is shared with (accepted) may add their own photos to it (FR-SHR-9), set by
+   * the owner. Missing (an API from before FR-SHR-9) reads as false.
+   */
+  membersCanAdd: z.boolean().default(false),
 });
 export type Album = z.infer<typeof albumSchema>;
 
@@ -22,15 +27,23 @@ export type AlbumList = z.infer<typeof albumListSchema>;
 export const createAlbumRequestSchema = z.object({ name: albumNameSchema });
 export type CreateAlbumRequest = z.infer<typeof createAlbumRequestSchema>;
 
-/** PATCH /albums/{albumId}: rename and/or set cover (null clears it). */
+/**
+ * PATCH /albums/{albumId}: rename, set the cover (null clears it; only the owner's own photos)
+ * and/or let members add photos (FR-SHR-9).
+ */
 export const updateAlbumRequestSchema = z
   .object({
     name: albumNameSchema.optional(),
     coverPhotoId: idSchema.nullable().optional(),
+    membersCanAdd: z.boolean().optional(),
   })
-  .refine((body) => body.name !== undefined || body.coverPhotoId !== undefined, {
-    message: "Provide name and/or coverPhotoId",
-  });
+  .refine(
+    (body) =>
+      body.name !== undefined ||
+      body.coverPhotoId !== undefined ||
+      body.membersCanAdd !== undefined,
+    { message: "Provide name, coverPhotoId and/or membersCanAdd" },
+  );
 export type UpdateAlbumRequest = z.infer<typeof updateAlbumRequestSchema>;
 
 /** POST /albums/{albumId}/photos (FR-ALB-2) */
@@ -73,7 +86,10 @@ export const createShareRequestSchema = z.union([
 ]);
 export type CreateShareRequest = z.infer<typeof createShareRequestSchema>;
 
-/** An album someone else shared with me (FR-SHR-3). Read-only for the recipient. */
+/**
+ * An album someone else shared with me (FR-SHR-3). Read-only for the recipient, except that they
+ * may add their own photos while `membersCanAdd` is on (FR-SHR-9).
+ */
 export const sharedAlbumSchema = albumSchema.extend({
   ownerId: userIdSchema,
   /** The owner's current username, null if they have none. */

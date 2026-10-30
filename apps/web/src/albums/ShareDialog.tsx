@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useUpdateAlbum } from "@/queries/albums";
 import { sharesQuery, useRevokeShare, useShareAlbum } from "@/queries/shares";
 import { parseShareTarget } from "./shareTarget";
 
@@ -24,9 +25,10 @@ const nameOf = (share: AlbumShare) =>
   share.username ? `@${share.username}` : (share.email ?? "Someone");
 
 /**
- * Sharing an own album read-only (FR-SHR-1/2/5): one field for an email or a username, the people
- * it's shared with, and revoking. Revoking needs no confirmation: nothing is deleted and sharing
- * again restores it.
+ * Sharing an own album (FR-SHR-1/2/5): one field for an email or a username, whether the people
+ * it's shared with may add their own photos (FR-SHR-9), the people it's shared with, and
+ * revoking. Revoking needs no confirmation: nothing is deleted (photos they added only leave the
+ * album) and sharing again restores access.
  */
 export function ShareDialog({
   album,
@@ -44,7 +46,7 @@ export function ShareDialog({
           <DialogTitle>Share “{album.name}”</DialogTitle>
           <DialogDescription>
             People you share with get an invitation. Once they accept, they can view and download
-            the photos, but not change anything.
+            the photos{album.membersCanAdd ? " and add their own" : ", but not change anything"}.
           </DialogDescription>
         </DialogHeader>
         {/* Remounted per opening: empty field, no old messages. */}
@@ -63,6 +65,11 @@ function ShareForm({ album }: { album: Album }) {
   const share = useShareAlbum(album.albumId);
   const revoke = useRevokeShare(album.albumId);
   const shares = useQuery(sharesQuery(api, album.albumId));
+  const permission = useUpdateAlbum(album.albumId);
+  // Shows the new setting while it is being saved.
+  const saving = permission.isPending ? permission.variables : undefined;
+  const membersCanAdd =
+    saving && "membersCanAdd" in saving ? saving.membersCanAdd : album.membersCanAdd;
 
   const target = parseShareTarget(value);
   // Explain a malformed value only once the user tried to send it.
@@ -125,6 +132,33 @@ function ShareForm({ album }: { album: Album }) {
         ) : null}
       </form>
 
+      <div className="grid gap-1">
+        <label className="flex items-start gap-3">
+          <input
+            type="checkbox"
+            className="mt-0.5 size-4 shrink-0 accent-primary"
+            checked={membersCanAdd}
+            disabled={permission.isPending}
+            onChange={(event) => {
+              setStatus(null);
+              permission.mutate({ membersCanAdd: event.currentTarget.checked });
+            }}
+          />
+          <span className="grid gap-0.5">
+            <span className="text-sm font-medium">Members can add photos</span>
+            <span className="text-sm text-muted-foreground">
+              Everyone you shared with can add photos from their own library. Their photos stay
+              theirs, and you can remove any photo from the album.
+            </span>
+          </span>
+        </label>
+        {permission.isError && (
+          <p role="alert" className="text-sm text-destructive">
+            {errorMessage(permission.error)}
+          </p>
+        )}
+      </div>
+
       <section aria-labelledby={`${id}-list`} className="grid gap-2">
         <h3 id={`${id}-list`} className="text-sm font-medium">
           Shared with
@@ -169,7 +203,9 @@ function ShareForm({ album }: { album: Album }) {
                         setStatus(
                           s.status === "pending"
                             ? `Invitation to ${nameOf(s)} withdrawn.`
-                            : `${nameOf(s)} no longer has access.`,
+                            : `${nameOf(s)} no longer has access.${
+                                album.membersCanAdd ? " Photos they added left the album." : ""
+                              }`,
                         ),
                     });
                   }}

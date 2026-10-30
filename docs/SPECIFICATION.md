@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.25 |
+| **Version** | 0.26 |
 | **Date** | 2026-10-30 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -286,10 +286,11 @@ IDs are stable — reference them in issues, PRs and tests.
 | FR-SHR-1 | Album owners can share an album read-only with another registered user by email. |
 | FR-SHR-2 | Owners can revoke a share at any time. |
 | FR-SHR-3 | Users see albums shared with them in a separate "Shared with me" section. |
-| FR-SHR-4 | Recipients can view and download, but not modify, delete or re-share. |
+| FR-SHR-4 | Recipients can view and download, but not modify, delete or re-share (except adding their own photos where the owner allows it, FR-SHR-9). |
 | FR-SHR-5 | Owners can also share with a user by their username instead of their email; sharing by username never reveals the recipient's email to the owner. |
 | FR-SHR-6 | A new share is an invitation: the recipient sees the album's name, photo count and who shared it, and gets access only after accepting it. Owners see which shares are not accepted yet. |
 | FR-SHR-8 | Owners can make a **public link** to their own processed photos: one photo (Share link button next to Download in the viewer) or up to 100 picked in the gallery's select mode (Share link next to Delete). For 15 minutes anyone with the link, without an account, sees the photos (one full screen, several as a grid that opens each one large) and can download each original under its file name (with its EXIF data, location included). Photos still processing or in the trash are left out (the owner is told); a photo deleted or trashed later drops out of the link; after 15 minutes, or with nothing left, the link shows "expired". Each press makes a new link; links can't be revoked early. |
+| FR-SHR-9 | **Albums members can add to:** the owner can let everyone the album is shared with (accepted) add photos from their own library ("Members can add photos" in the share dialog, off by default, can be switched off again; photos already added stay). An added photo stays its adder's (their storage and quota, their trash) and is seen by everyone in the album; the adder can remove it from the album, the owner can remove any photo. When a member leaves or the owner removes them, the photos they added leave the album (not their library). Only the owner's own photos can be the cover. Upload straight into a shared album is not planned: members add photos already in their gallery. |
 | FR-SHR-7 | Recipients can decline an invitation, or remove an accepted shared album from their albums; access ends at once. The owner's album is unchanged; the person simply drops off the owner's share list (no "declined" state), and the owner can share again, which sends a new invitation. |
 
 ### 6.6 Account & quota
@@ -398,8 +399,8 @@ Initial design; refine during implementation.
 | Entity | PK | SK | GSI1PK | GSI1SK | Attributes |
 |---|---|---|---|---|---|
 | Photo | `USER#{userId}` | `PHOTO#{photoId}` | `USER#{userId}`; `TRASH` while in the trash | `TAKEN#{takenAt}#{photoId}`; `PURGE#{purgeAt}#{userId}#{photoId}` while in the trash | status (`pending`/`ready`/`failed`), fileName, contentType, sizeBytes, width, height, takenAt, uploadedAt, originalKey, originalETag, latitude, longitude, place `{city, region, country, countryCode}`, placeIds; in the trash: trashedAt, purgeAt, trashedAlbumIds |
-| Album | `USER#{ownerId}` | `ALBUM#{albumId}` | — | — | name, createdAt, coverPhotoId, photoCount |
-| Album membership | `ALBUM#{albumId}` | `PHOTO#{photoId}` | `ALBUM#{albumId}` | `TAKEN#{takenAt}#{photoId}` (the photo's) | ownerId, addedAt |
+| Album | `USER#{ownerId}` | `ALBUM#{albumId}` | — | — | name, createdAt, coverPhotoId, photoCount, membersCanAdd (FR-SHR-9; absent = false) |
+| Album membership | `ALBUM#{albumId}` | `PHOTO#{photoId}` | `ALBUM#{albumId}` | `TAKEN#{takenAt}#{photoId}` (the photo's) | ownerId (the album's), photoOwnerId (the photo's: a member's when they added it, FR-SHR-9; absent = ownerId), addedAt |
 | Photo link | `LINK#{token}` | `LINK` | — | — | ownerId, photoIds (≤ 100, newest first), createdAt, expiresAt, ttl (epoch seconds, DynamoDB TTL) |
 | Album share | `ALBUM#{albumId}` | `SHARE#{userId}` | `INVITED#{userId}` while pending, `SHAREDWITH#{userId}` once accepted | `ALBUM#{albumId}` | ownerId, email (shares by email only), status (`pending`/`accepted`; absent = accepted, shares from before v0.17), sharedAt, acceptedAt |
 | Usage | `USER#{userId}` | `USAGE` | — | — | bytesUsed, photoCount, quotaBytes |
@@ -428,7 +429,7 @@ Access patterns:
 | User by username | `PK = USERNAME#{username}, SK = USERNAME` (ignored while `heldUntil` is set) |
 | My username | `PK = USER#{id}, SK = PROFILE` |
 | One import | `PK = USER#{id}, SK = IMPORT#{importId}` |
-| Can user X see photo P? | Owner check, else an accepted share of an album containing P (resolved via album membership + share) |
+| Can user X see photo P? | Owner check, else an album of X's or shared with X (accepted) containing P: the membership names P's owner (`photoOwnerId`), under whom P is read; others' photos only once `ready` |
 
 `takenAt` = EXIF `DateTimeOriginal`, falling back to Google's creation time for imported photos (§10), then to upload time. Imported photos also carry `importId`.
 
@@ -450,7 +451,7 @@ Access patterns:
 | `PUT` | `/me/username` | Set or change own username `{username}`; `409 USERNAME_TAKEN` if someone else has it |
 | `POST` | `/photos/upload-url` | Body `{fileName, contentType, sizeBytes}` → `{photoId, upload: {url, fields}}`; creates `pending` item, checks quota |
 | `GET` | `/photos` | List own photos `?cursor&limit&sort` |
-| `GET` | `/photos/{photoId}` | Photo metadata; with `?albumId=` a photo of an album shared with the caller, with signed image URLs |
+| `GET` | `/photos/{photoId}` | Photo metadata; with `?albumId=` someone else's photo in an album of the caller's or shared with them (a member's photo, FR-SHR-9), with signed image URLs |
 | `GET` | `/photos/{photoId}/download-url` | 5-min pre-signed GET with `attachment` disposition |
 | `DELETE` | `/photos/{photoId}` | Move to the trash (FR-DEL-3): out of gallery, albums and places, files and usage stay; a `pending` upload is deleted at once (files + metadata + usage) |
 | `POST` | `/imports/google` | Start an import (FR-IMP-1): body `{code, codeVerifier, redirectUri}` (Google authorization code) → `201 {importId, pickerUri, expiresAt}`; exchanges the code server-side and creates the Picker session; `400 GOOGLE_AUTH_FAILED` when Google rejects the code |
@@ -468,22 +469,22 @@ Access patterns:
 | `GET` | `/places/{placeId}/photos` | Photos at an own place by date taken `?sort&cursor&limit`; 404 for a place the caller doesn't have |
 | `GET` | `/albums` | List own albums |
 | `POST` | `/albums` | Create album `{name}` |
-| `PATCH` | `/albums/{albumId}` | Rename / set cover |
+| `PATCH` | `/albums/{albumId}` | Rename / set cover (own photos only) / `membersCanAdd` (FR-SHR-9) |
 | `DELETE` | `/albums/{albumId}` | Delete album (not photos) |
 | `GET` | `/albums/{albumId}/photos` | Photos in album by date taken (owner or share recipient) `?sort&cursor&limit`, like `/photos` |
-| `POST` | `/albums/{albumId}/photos` | Add photos `{photoIds: []}` |
-| `DELETE` | `/albums/{albumId}/photos/{photoId}` | Remove photo from album |
+| `POST` | `/albums/{albumId}/photos` | Add own photos `{photoIds: []}`; members of a shared album too while `membersCanAdd` (else `403 FORBIDDEN`) (FR-SHR-9) |
+| `DELETE` | `/albums/{albumId}/photos/{photoId}` | Remove photo from album: the owner any photo, a member their own (FR-SHR-9) |
 | `GET` | `/albums/{albumId}/shares` | List shares (owner only) |
 | `POST` | `/albums/{albumId}/shares` | Share with `{email}` or `{username}`: creates a pending invitation (FR-SHR-6) |
-| `DELETE` | `/albums/{albumId}/shares/{userId}` | Revoke share |
+| `DELETE` | `/albums/{albumId}/shares/{userId}` | Revoke share; photos the member added leave the album (FR-SHR-9) |
 | `GET` | `/shared-albums` | Albums shared with me (accepted) |
 | `GET` | `/share-invitations` | Invitations I haven't answered `?cursor&limit` (FR-SHR-6) |
 | `POST` | `/shared-albums/{albumId}/accept` | Accept an invitation (FR-SHR-6) |
-| `DELETE` | `/shared-albums/{albumId}` | Decline an invitation or remove an accepted shared album (FR-SHR-7) |
+| `DELETE` | `/shared-albums/{albumId}` | Decline an invitation or remove an accepted shared album (FR-SHR-7); photos I added leave it (FR-SHR-9) |
 
 Image URLs in responses:
 - Own photos: stable CloudFront paths (`/users/{userId}/thumbs/{photoId}.jpg`), authorized by the media cookie.
-- Photos in albums shared with me: **CloudFront signed URLs** per image (the cookie only covers the user's own prefix).
+- Photos in albums shared with me, and members' photos in my albums (FR-SHR-9): **CloudFront signed URLs** per image (the cookie only covers the user's own prefix).
 
 URL / cookie lifetimes:
 
@@ -597,7 +598,7 @@ TypeScript Lambda, arm64, in `apps/api` (same bundle as the API, own handler and
 | `/gallery` | Main gallery; search params `album`, `place` (not both), `sort` (Zod-validated); place search box at the top (FR-SRCH-2) |
 | `/photos/$photoId` | Full-screen viewer |
 | `/albums` | Invitations (accept / decline) + my albums + shared with me |
-| `/albums/$albumId` | Album view |
+| `/albums/$albumId` | Album view; a shared album shows Add photos (→ `/gallery?addTo=`) and removing own photos while members can add (FR-SHR-9) |
 | `/map` | Map of own photos with GPS (FR-SRCH-5); MapLibre, loaded only with this page |
 | `/upload` | Upload page / queue status |
 | `/import/google/callback` | Return from Google's consent (§11.5): checks `state`, starts the import, shows "Choose photos in Google Photos", then progress and the summary (FR-IMP-1/5). Started from Settings |
@@ -835,6 +836,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.26 | 2026-10-30 | Albums members can add to: FR-SHR-9, FR-SHR-4 adjusted; album `membersCanAdd`, membership `photoOwnerId`, access rule (§8.2); `PATCH /albums/{id}`, album photo routes, revoke/leave, `GET /photos/{id}?albumId=`, signed URLs for members' photos (§9); album route (§12.1) |
 | 0.25 | 2026-10-30 | B-11: optional SQS queue in front of the thumbnail Lambda (§17) |
 | 0.24 | 2026-10-30 | Import from Google Photos (planned, 13.5): FR-IMP-1–6 (§6.9), NFR-SEC-10, flow (§5.2), Import item (§8.2), `/imports` routes (§9), import worker + date fallback (§10, §10.1), Google Photos access (§11.5), callback route (§12.1), location note (§12.6), `api` module (§13.1), scope (§2), B-10 |
 | 0.23 | 2026-10-28 | `uploadId` on `POST /photos/upload-url` + Upload claim item: an app closed right after the request no longer leaves a pending photo behind (§8.2, §10) |

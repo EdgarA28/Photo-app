@@ -14,6 +14,7 @@ import {
   ALBUM_SK_PREFIX,
   GSI1,
   GSI1_KEY_ATTRIBUTES,
+  PHOTO_SK_PREFIX,
   albumKey,
   albumPk,
   membershipKey,
@@ -30,19 +31,29 @@ export interface AlbumRecord {
   createdAt: string;
   photoCount: number;
   coverPhotoId?: string;
+  /** Members may add their own photos (FR-SHR-9); absent = false. */
+  membersCanAdd?: boolean;
 }
 
 export interface MembershipRecord {
   albumId: string;
   photoId: string;
+  /** The album's owner. */
   ownerId: string;
+  /** The photo's owner when a member added it (FR-SHR-9); absent on older items = `ownerId`. */
+  photoOwnerId?: string;
   addedAt: string;
 }
+
+/** Whose photo a membership points at (FR-SHR-9). */
+export const photoOwnerOf = (membership: MembershipRecord) =>
+  membership.photoOwnerId ?? membership.ownerId;
 
 export interface AlbumUpdate {
   name?: string | undefined;
   /** null clears the cover. */
   coverPhotoId?: string | null | undefined;
+  membersCanAdd?: boolean | undefined;
 }
 
 export function albumsRepo(db: Db) {
@@ -89,8 +100,10 @@ export function albumsRepo(db: Db) {
     },
 
     /**
-     * Rename and/or set/clear the cover (PATCH /albums/{id}). A new cover must be a photo in the
-     * album; returns "cover-not-in-album" otherwise. Returns null if the album does not exist.
+     * Rename, set/clear the cover and/or switch `membersCanAdd` (PATCH /albums/{id}). A new cover
+     * must be one of the owner's own photos in the album (members' photos aren't covered by the
+     * owner's media cookie, FR-SHR-9); returns "cover-not-in-album" otherwise. Returns null if
+     * the album does not exist.
      */
     async update(
       ownerId: string,
@@ -108,6 +121,9 @@ export function albumsRepo(db: Db) {
           }),
         );
         if (!membership.Item) return "cover-not-in-album";
+        if (photoOwnerOf(stripKeys<MembershipRecord>(membership.Item)) !== ownerId) {
+          return "cover-not-in-album";
+        }
       }
 
       const set: string[] = [];
@@ -116,6 +132,10 @@ export function albumsRepo(db: Db) {
       if (changes.name !== undefined) {
         set.push("#name = :name");
         values[":name"] = changes.name;
+      }
+      if (changes.membersCanAdd !== undefined) {
+        set.push("membersCanAdd = :membersCanAdd");
+        values[":membersCanAdd"] = changes.membersCanAdd;
       }
       if (changes.coverPhotoId === null) remove.push("coverPhotoId");
       else if (changes.coverPhotoId !== undefined) {
@@ -163,13 +183,20 @@ export function albumsRepo(db: Db) {
       const children = await queryAll(db, {
         KeyConditionExpression: "PK = :pk",
         ExpressionAttributeValues: { ":pk": albumPk(albumId) },
-        ProjectionExpression: "PK, SK, photoId",
+        ProjectionExpression: "PK, SK, photoId, ownerId, photoOwnerId",
       });
       // Unlink photos first so no photo keeps pointing at the deleted album.
       await Promise.all(
         children
           .filter((child) => typeof child.photoId === "string")
-          .map((child) => unlinkPhoto(db, ownerId, albumId, child.photoId as string)),
+          .map((child) =>
+            unlinkPhoto(
+              db,
+              photoOwnerOf(child as unknown as MembershipRecord),
+              albumId,
+              child.photoId as string,
+            ),
+          ),
       );
       await batchDelete(
         db,
@@ -189,23 +216,56 @@ export function albumsRepo(db: Db) {
       return true;
     },
 
-    /** Adds the owner's photos to the album (FR-ALB-2). One result per distinct photo ID. */
+    /**
+     * Adds `photoOwnerId`'s photos (by default the album owner's, FR-ALB-2; a member's, FR-SHR-9)
+     * to `ownerId`'s album. One result per distinct photo ID.
+     */
     async addPhotos(
       ownerId: string,
       albumId: string,
       photoIds: string[],
       addedAt: string,
+      photoOwnerId: string = ownerId,
     ): Promise<Map<string, AddResult>> {
       const results = new Map<string, AddResult>();
       for (const photoId of new Set(photoIds)) {
-        results.set(photoId, await addMembership(db, ownerId, albumId, photoId, addedAt));
+        results.set(
+          photoId,
+          await addMembership(db, ownerId, albumId, photoId, addedAt, photoOwnerId),
+        );
       }
       return results;
     },
 
-    /** Returns false if the photo was not in the album, or the album is not `ownerId`'s. */
-    removePhoto: (ownerId: string, albumId: string, photoId: string) =>
-      removeMembership(db, ownerId, albumId, photoId),
+    /**
+     * Returns false if the photo was not in the album, or `userId` is neither the album's owner
+     * nor the photo's (a member removing their own photo, FR-SHR-9).
+     */
+    removePhoto: (userId: string, albumId: string, photoId: string) =>
+      removeMembership(db, userId, albumId, photoId),
+
+    /**
+     * Takes all of `photoOwnerId`'s photos out of someone else's album: a member left it or the
+     * owner removed them (FR-SHR-9). Their photos themselves stay. Returns how many were removed.
+     */
+    async removePhotosOf(albumId: string, photoOwnerId: string): Promise<number> {
+      const items = await queryAll(db, {
+        KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
+        // Never the album owner's own photos (their memberships carry photoOwnerId too).
+        FilterExpression: "photoOwnerId = :owner AND ownerId <> :owner",
+        ExpressionAttributeValues: {
+          ":pk": albumPk(albumId),
+          ":prefix": PHOTO_SK_PREFIX,
+          ":owner": photoOwnerId,
+        },
+        ProjectionExpression: "photoId",
+      });
+      let removed = 0;
+      for (const item of items) {
+        if (await removeMembership(db, photoOwnerId, albumId, item.photoId as string)) removed++;
+      }
+      return removed;
+    },
 
     /**
      * Memberships by the photos' date taken, newest first unless `taken-asc` (GSI1, §12.3).
@@ -229,6 +289,17 @@ export function albumsRepo(db: Db) {
         cursor: options.cursor,
       });
       return { ...page, items: page.items.map((item) => stripKeys<MembershipRecord>(item)) };
+    },
+
+    /**
+     * The membership of this photo in this album, or null. Not scoped to a user: only meaningful
+     * after an ownership or share check on the album.
+     */
+    async getMembership(albumId: string, photoId: string): Promise<MembershipRecord | null> {
+      const output = await db.client.send(
+        new GetCommand({ TableName: db.table, Key: membershipKey(albumId, photoId) }),
+      );
+      return output.Item ? stripKeys<MembershipRecord>(output.Item) : null;
     },
 
     /**

@@ -77,7 +77,10 @@ export function useShareAlbum(albumId: string) {
   });
 }
 
-/** Revokes a share at once (FR-SHR-2); the recipient loses access immediately (5.13). */
+/**
+ * Revokes a share at once (FR-SHR-2); the recipient loses access immediately (5.13), and photos
+ * they added leave the album (FR-SHR-9), so its photos and count are refreshed too.
+ */
 export function useRevokeShare(albumId: string) {
   const api = useApi();
   const queryClient = useQueryClient();
@@ -88,7 +91,11 @@ export function useRevokeShare(albumId: string) {
       queryClient.setQueryData<AlbumShareList>(key, (data) =>
         data ? { items: data.items.filter((s) => s.userId !== share.userId) } : data,
       );
-      return queryClient.invalidateQueries({ queryKey: key });
+      return Promise.all([
+        queryClient.invalidateQueries({ queryKey: key }),
+        queryClient.invalidateQueries({ queryKey: ["photos", { album: albumId }] }),
+        queryClient.invalidateQueries({ queryKey: ["albums"] }),
+      ]);
     },
   });
 }

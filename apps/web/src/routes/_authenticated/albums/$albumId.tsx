@@ -1,4 +1,4 @@
-import type { Album } from "@photo-app/shared";
+import type { Album, Photo } from "@photo-app/shared";
 import {
   useInfiniteQuery,
   useSuspenseInfiniteQuery,
@@ -41,7 +41,8 @@ import { sharedAlbumsQuery } from "@/queries/shares";
 const listOf = (albumId: string): GallerySearch => ({ album: albumId, sort: "taken-desc" });
 
 // Album view (FR-ALB-1/2, 8.11): the album's photos, add/remove, rename, cover, delete, share
-// (FR-SHR-1/2, 8.12). Albums shared with me open read-only (FR-SHR-4).
+// (FR-SHR-1/2, 8.12). Albums shared with me open read-only (FR-SHR-4), unless the owner lets
+// members add photos: then I add mine and remove them again (FR-SHR-9).
 export const Route = createFileRoute("/_authenticated/albums/$albumId")({
   loader: ({ context: { queryClient, api }, params: { albumId } }) =>
     Promise.all([
@@ -64,7 +65,7 @@ function AlbumPage() {
 }
 
 function AlbumView({ album }: { album: Album }) {
-  const { api } = Route.useRouteContext();
+  const { api, user } = Route.useRouteContext();
   const navigate = useNavigate();
   const search = listOf(album.albumId);
   const { data, hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } =
@@ -101,6 +102,9 @@ function AlbumView({ album }: { album: Album }) {
     );
 
   const error = remove.error ?? cover.error;
+  // Members' photos (FR-SHR-9) can't be the cover: the API takes only the owner's own.
+  const selectedPhoto = photos.find((photo) => photo.photoId === selection.ids[0]);
+  const canBeCover = !!selectedPhoto && isMine(selectedPhoto, user.sub, { inOwnAlbum: true });
 
   return (
     <main className="space-y-5">
@@ -206,7 +210,7 @@ function AlbumView({ album }: { album: Album }) {
               {errorMessage(error)}
             </span>
           ) : null}
-          {selection.selected.size === 1 && (
+          {selection.selected.size === 1 && canBeCover && (
             <Button variant="outline" disabled={cover.isPending} onClick={setCover}>
               Set as cover
             </Button>
@@ -242,14 +246,18 @@ function AlbumView({ album }: { album: Album }) {
 }
 
 /**
- * An album someone shared with me (FR-SHR-3/4): view and download only, or remove it from my
- * albums (FR-SHR-7). Its name and owner come from `GET /shared-albums` (there is no single-album
- * route), paged through until it turns up.
+ * An album someone shared with me (FR-SHR-3/4): view and download, or remove it from my albums
+ * (FR-SHR-7). While the owner lets members add photos (FR-SHR-9) I add my own and can remove
+ * those again. Its name and owner come from `GET /shared-albums` (there is no single-album route),
+ * paged through until it turns up.
  */
 function SharedAlbumView({ albumId }: { albumId: string }) {
-  const { api } = Route.useRouteContext();
+  const { api, user } = Route.useRouteContext();
   const navigate = useNavigate();
   const [leaving, setLeaving] = useState(false);
+  const selection = useSelection();
+  const remove = useRemoveFromAlbum(albumId);
+  const [status, setStatus] = useState<string | null>(null);
   const search = listOf(albumId);
   const { data: photoPages, ...photos } = useSuspenseInfiniteQuery(galleryQuery(api, search));
   const shared = useInfiniteQuery(sharedAlbumsQuery(api));
@@ -260,6 +268,25 @@ function SharedAlbumView({ albumId }: { albumId: string }) {
   }, [album, hasNextPage, isFetchingNextPage, fetchNextPage]);
   const searching = !album && (shared.isPending || hasNextPage);
   const items = useMemo(() => photoPages.pages.flatMap((page) => page.items), [photoPages]);
+  const canAdd = album?.membersCanAdd ?? false;
+  // Only my own photos can leave the album through me; the owner's and others' stay.
+  const mine = new Set(
+    items.filter((photo) => isMine(photo, user.sub, { inOwnAlbum: false })).map((p) => p.photoId),
+  );
+  const removable = selection.ids.filter((photoId) => mine.has(photoId));
+  const hasMine = mine.size > 0;
+
+  const removeSelected = () =>
+    remove.mutate(removable, {
+      onSuccess: () => {
+        setStatus(
+          removable.length === 1
+            ? "1 photo removed from the album."
+            : `${removable.length} photos removed from the album.`,
+        );
+        selection.stop();
+      },
+    });
 
   return (
     <main className="space-y-5">
@@ -271,32 +298,67 @@ function SharedAlbumView({ albumId }: { albumId: string }) {
           <ChevronLeft aria-hidden className="size-4" />
           Albums
         </Link>
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
+        <div className="flex flex-wrap items-start gap-3">
+          <div className="min-w-0 flex-1">
             <h1 className="truncate text-2xl font-semibold tracking-tight">
               {album?.name ?? (searching ? "\u00a0" : "Shared album")}
             </h1>
             <p className="text-sm text-muted-foreground">
-              {album ? sharedBy(album) : "Shared with you"} · view only
+              {album ? sharedBy(album) : "Shared with you"} ·{" "}
+              {canAdd ? "you can add photos" : "view only"}
             </p>
           </div>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" aria-label="Album actions">
-                <Ellipsis aria-hidden />
+          <div className="flex items-center gap-2">
+            {(hasMine || selection.active) && (
+              <SelectButton
+                active={selection.active}
+                onSelect={() => {
+                  setStatus(null);
+                  selection.start();
+                }}
+                onUnselect={selection.stop}
+              />
+            )}
+            {canAdd && (
+              <Button asChild>
+                <Link to="/gallery" search={{ addTo: albumId }}>
+                  <ImagePlus aria-hidden />
+                  Add photos
+                </Link>
               </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem variant="destructive" onSelect={() => setLeaving(true)}>
-                <LogOut aria-hidden />
-                Remove from my albums
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+            )}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" aria-label="Album actions">
+                  <Ellipsis aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem variant="destructive" onSelect={() => setLeaving(true)}>
+                  <LogOut aria-hidden />
+                  Remove from my albums
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
+        {status && (
+          <p role="status" className="text-sm text-muted-foreground">
+            {status}
+          </p>
+        )}
       </header>
       {items.length === 0 ? (
-        <p className="py-24 text-center text-muted-foreground">This album has no photos yet.</p>
+        <div className="flex flex-col items-center gap-4 py-24 text-center">
+          <p className="text-muted-foreground">This album has no photos yet.</p>
+          {canAdd && (
+            <Button asChild variant="outline">
+              <Link to="/gallery" search={{ addTo: albumId }}>
+                Add photos
+              </Link>
+            </Button>
+          )}
+        </div>
       ) : (
         <PhotoGrid
           photos={items}
@@ -305,7 +367,32 @@ function SharedAlbumView({ albumId }: { albumId: string }) {
           fetchNextPage={photos.fetchNextPage}
           viewerSearch={search}
           months
+          selection={selection.grid}
+          onSelectionChange={(photoIds) => {
+            setStatus(null);
+            selection.replace(photoIds);
+          }}
         />
+      )}
+      {selection.active && (
+        <SelectionBar count={selection.selected.size} onCancel={selection.stop}>
+          {remove.error ? (
+            <span role="alert" className="text-sm text-destructive">
+              {errorMessage(remove.error)}
+            </span>
+          ) : removable.length < selection.ids.length ? (
+            <span className="text-sm text-muted-foreground">
+              Only your own photos can be removed.
+            </span>
+          ) : null}
+          <Button
+            variant="destructive"
+            disabled={removable.length === 0 || remove.isPending}
+            onClick={removeSelected}
+          >
+            {remove.isPending ? "Removing…" : "Remove from album"}
+          </Button>
+        </SelectionBar>
       )}
       {photos.isFetchNextPageError && (
         <div role="alert" className="flex items-center justify-center gap-3 py-4 text-sm">
@@ -325,6 +412,13 @@ function SharedAlbumView({ albumId }: { albumId: string }) {
     </main>
   );
 }
+
+/**
+ * My own photo, as opposed to the owner's or another member's (FR-SHR-9). Lists cached from an
+ * API without `ownerId` only ever held the album owner's photos.
+ */
+const isMine = (photo: Photo, userId: string, { inOwnAlbum }: { inOwnAlbum: boolean }) =>
+  (photo.ownerId ?? (inOwnAlbum ? userId : null)) === userId;
 
 // 404 from the album's photo list: unknown, deleted, or no longer shared with me. Or no network.
 function AlbumError({ error }: ErrorComponentProps) {

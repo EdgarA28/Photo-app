@@ -37,7 +37,8 @@ const toShare = (share: ShareRecord, usernames: Map<string, string>): AlbumShare
 });
 
 /**
- * Sharing albums read-only by email or username (FR-SHR-1..5). Managing shares is owner-only: every
+ * Sharing albums by email or username (FR-SHR-1..5), read-only unless the owner lets members add
+ * photos (FR-SHR-9, albums.ts). Managing shares is owner-only: every
  * `/albums/{id}/shares` route first looks the album up under the caller's partition, so
  * recipients and everyone else get 404 and can't re-share or revoke (FR-SHR-4, NFR-SEC-2).
  * A new share is an invitation the recipient accepts or declines (FR-SHR-6); the recipient's routes
@@ -107,11 +108,17 @@ export function shareRoutes(app: Hono<AppEnv>, { repos, users, media }: Deps): v
     },
   );
 
-  /** Revokes a share (FR-SHR-2). The recipient loses access straight away. */
+  /**
+   * Revokes a share (FR-SHR-2). The recipient loses access straight away, and the photos they
+   * added go out of the album (FR-SHR-9; they stay in their library). The share goes first, so
+   * they can't add more meanwhile; a retry after a failure in between still clears their photos.
+   */
   app.delete("/albums/:albumId/shares/:userId", validate("param", albumShareParam), async (c) => {
     const { albumId, userId } = c.req.valid("param");
     orNotFound(await repos.albums.get(c.get("userId"), albumId), "Album not found");
-    if (!(await repos.shares.delete(albumId, userId))) throw notFound("Share not found");
+    const deleted = await repos.shares.delete(albumId, userId);
+    const removed = await repos.albums.removePhotosOf(albumId, userId);
+    if (!deleted && removed === 0) throw notFound("Share not found");
     return c.body(null, 204);
   });
 
@@ -158,14 +165,17 @@ export function shareRoutes(app: Hono<AppEnv>, { repos, users, media }: Deps): v
 
   /**
    * The recipient declines an invitation or removes an accepted album (FR-SHR-7): the share is
-   * deleted, so access ends at once and the owner's list no longer shows them. The owner can
-   * share again, which sends a new invitation.
+   * deleted, so access ends at once and the owner's list no longer shows them. Photos they added
+   * go out of the album too (FR-SHR-9; they stay in their library). The owner can share again,
+   * which sends a new invitation.
    */
   app.delete("/shared-albums/:albumId", validate("param", albumParam), async (c) => {
     const { albumId } = c.req.valid("param");
-    if (!(await repos.shares.delete(albumId, c.get("userId")))) {
-      throw notFound("Shared album not found");
-    }
+    const userId = c.get("userId");
+    const deleted = await repos.shares.delete(albumId, userId);
+    // Only the caller's own photos, so this is safe even without a share.
+    const removed = await repos.albums.removePhotosOf(albumId, userId);
+    if (!deleted && removed === 0) throw notFound("Shared album not found");
     return c.body(null, 204);
   });
 

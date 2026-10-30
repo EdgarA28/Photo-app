@@ -28,6 +28,7 @@ const MESSAGES: Record<ClientErrorCode, string> = {
   QUOTA_EXCEEDED: "Your storage is full. Delete some photos to upload more.",
   UNSUPPORTED_MEDIA_TYPE: "This file type isn't supported. Use JPEG, PNG, WebP or HEIC.",
   PAYLOAD_TOO_LARGE: "This file is too large.",
+  FORBIDDEN: "You aren't allowed to do this here. The owner may have changed the album.",
   CONFLICT: "This changed in the meantime. Reload and try again.",
   SHARE_TARGET_NOT_FOUND: "No user with this email or username.",
   USERNAME_TAKEN: "This username is already taken.",

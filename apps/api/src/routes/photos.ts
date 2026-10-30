@@ -22,7 +22,7 @@ import { AppError, orNotFound } from "../lib/errors";
 import { validate } from "../lib/validation";
 import type { PhotoRecord } from "../repo";
 import type { Deps } from ".";
-import { sharedPhoto } from "./access";
+import { albumPhoto } from "./access";
 import { toPhoto, toSharedPhoto } from "./present";
 
 const photoParam = z.object({ photoId: idSchema });
@@ -112,8 +112,9 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, media, config }
   });
 
   /**
-   * One own photo, or with `?albumId=` a photo of that album if it is shared with the caller
-   * (5.13 rule), with signed thumb and preview URLs (7.4). Anything else is 404 (NFR-SEC-2).
+   * One own photo, or with `?albumId=` someone else's photo in that album if the album is the
+   * caller's or shared with them (5.13 rule; members' photos, FR-SHR-9), with signed thumb and
+   * preview URLs (7.4). Anything else is 404 (NFR-SEC-2).
    */
   app.get(
     "/photos/:photoId",
@@ -125,7 +126,7 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, media, config }
       const { albumId } = c.req.valid("query");
       const own = await repos.photos.get(userId, photoId);
       if (own) return c.json(toPhoto(own) satisfies Photo);
-      const shared = albumId ? await sharedPhoto(repos, userId, albumId, photoId) : null;
+      const shared = albumId ? await albumPhoto(repos, userId, albumId, photoId) : null;
       const record = orNotFound(shared, "Photo not found");
       const body: Photo = await toSharedPhoto(record, media, new Date(), { preview: true });
       return c.json(body);
@@ -135,7 +136,8 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, media, config }
   /**
    * Download of an original under its file name (FR-DL-1/2): 5-min pre-signed GET with
    * `Content-Disposition: attachment`, so the browser fetches it straight from S3. Own photos, or
-   * with `?albumId=` a photo in that album if it is shared with the caller (5.13).
+   * with `?albumId=` a photo in that album if the album is the caller's or shared with them (5.13,
+   * FR-SHR-9).
    */
   app.get(
     "/photos/:photoId/download-url",
@@ -146,7 +148,7 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, media, config }
       const { photoId } = c.req.valid("param");
       const { albumId } = c.req.valid("query");
       const own = await repos.photos.get(userId, photoId);
-      const shared = !own && albumId ? await sharedPhoto(repos, userId, albumId, photoId) : null;
+      const shared = !own && albumId ? await albumPhoto(repos, userId, albumId, photoId) : null;
       const record = orNotFound(own ?? shared, "Photo not found");
       // Until the upload is processed there may be no original yet. Failed photos keep theirs.
       if (record.status === "pending") {

@@ -31,7 +31,7 @@ import {
   usageKey,
   userPk,
 } from "./keys";
-import { addMembership, removeMembership } from "./memberships";
+import { addMembership, albumOwnerFor, removeMembership } from "./memberships";
 
 /** Photo item without key attributes (spec §8.2). */
 export interface PhotoRecord {
@@ -434,9 +434,12 @@ export function photosRepo(db: Db) {
           if (conditionFailedAt(err, 0)) continue; // Restored or purged meanwhile: re-read.
           throw err;
         }
-        // Albums deleted meanwhile are skipped ("album-not-found").
+        // Albums deleted meanwhile are skipped ("album-not-found"), and so are shared albums the
+        // user left or that no longer let members add photos (FR-SHR-9).
         for (const albumId of record.trashedAlbumIds ?? []) {
-          await addMembership(db, userId, albumId, photoId, now.toISOString());
+          const albumOwnerId = await albumOwnerFor(db, userId, albumId);
+          if (!albumOwnerId) continue;
+          await addMembership(db, albumOwnerId, albumId, photoId, now.toISOString(), userId);
         }
         const { trashedAt: _t, purgeAt: _p, trashedAlbumIds: _a, ...restored } = record;
         return { ...restored, albumIds: record.trashedAlbumIds };

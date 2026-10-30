@@ -255,8 +255,9 @@ function SharedByLine({ album }: { album: string }) {
 }
 
 /**
- * Download (FR-DL-1/2), a public link (FR-SHR-8) and delete to the trash (FR-DEL-1/2/3). Delete is offered for own photos only: in an album
- * that isn't in my album list (shared with me) the photo belongs to someone else.
+ * Download (FR-DL-1/2), a public link (FR-SHR-8) and delete to the trash (FR-DEL-1/2/3). Delete is
+ * offered for own photos only: in a shared album a photo can belong to its owner or to a member
+ * who added it (FR-SHR-9).
  */
 function PhotoActions({
   photo,
@@ -273,12 +274,16 @@ function PhotoActions({
   setOverlay: (open: boolean) => void;
   onDeleted: () => Promise<void>;
 }) {
-  const { api } = Route.useRouteContext();
+  const { api, user } = Route.useRouteContext();
   const queryClient = useQueryClient();
   const { data: albums } = useQuery({ ...albumsQuery(api), enabled: album !== undefined });
-  // A photo in the trash (opened by its URL) can only be restored there (FR-DEL-3).
+  const albumIsMine = album !== undefined && !!albums?.items.some((a) => a.albumId === album);
+  // A photo in the trash (opened by its URL) can only be restored there (FR-DEL-3). In a shared
+  // album, photos can be the owner's or any member's (FR-SHR-9); without `ownerId` (an older API)
+  // only the album's owner had photos there.
   const own =
-    !photo.trashedAt && (album === undefined || !!albums?.items.some((a) => a.albumId === album));
+    !photo.trashedAt &&
+    (photo.ownerId !== null ? photo.ownerId === user.sub : album === undefined || albumIsMine);
 
   // A 5-minute pre-signed URL with `attachment` disposition: the browser saves the original
   // under its file name straight from S3. A shared photo needs its album (5.13).
@@ -328,8 +333,15 @@ function PhotoActions({
       {own && photo.status === "ready" && (
         <ShareLinkButton photoId={photo.photoId} setOverlay={setOverlay} className={iconButton} />
       )}
-      {own && (
-        <AlbumActions photo={photo} album={album} setOverlay={setOverlay} onRemoved={onDeleted} />
+      {(own || (albumIsMine && !photo.trashedAt)) && (
+        <AlbumActions
+          photo={photo}
+          album={album}
+          own={own}
+          albumIsMine={albumIsMine}
+          setOverlay={setOverlay}
+          onRemoved={onDeleted}
+        />
       )}
       {own && (
         <AlertDialog
@@ -384,17 +396,23 @@ function PhotoActions({
 }
 
 /**
- * Album actions for own photos (FR-ALB-2): add to an album; inside an album, make it the cover or
- * take it out (the photo stays in the library, the viewer moves on as after a delete).
+ * Album actions (FR-ALB-2): add an own photo to an album; inside an album, make an own photo the
+ * cover of an own album, or take the photo out (the photo stays in the library, the viewer moves
+ * on as after a delete). In a shared album members add to (FR-SHR-9), the owner can take out any
+ * photo and a member only their own.
  */
 function AlbumActions({
   photo,
   album,
+  own,
+  albumIsMine,
   setOverlay,
   onRemoved,
 }: {
   photo: Photo;
   album: string | undefined;
+  own: boolean;
+  albumIsMine: boolean;
   setOverlay: (open: boolean) => void;
   onRemoved: () => Promise<void>;
 }) {
@@ -424,24 +442,28 @@ function AlbumActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <DropdownMenuItem onSelect={() => setAdding(true)}>
-            <FolderPlus aria-hidden />
-            Add to album…
-          </DropdownMenuItem>
+          {own && (
+            <DropdownMenuItem onSelect={() => setAdding(true)}>
+              <FolderPlus aria-hidden />
+              Add to album…
+            </DropdownMenuItem>
+          )}
           {album && (
             <>
-              <DropdownMenuItem
-                disabled={photo.status !== "ready" || cover.isPending}
-                onSelect={() =>
-                  cover.mutate(
-                    { coverPhotoId: photo.photoId },
-                    { onSuccess: () => setStatus("Set as album cover") },
-                  )
-                }
-              >
-                <ImageUp aria-hidden />
-                Set as album cover
-              </DropdownMenuItem>
+              {own && albumIsMine && (
+                <DropdownMenuItem
+                  disabled={photo.status !== "ready" || cover.isPending}
+                  onSelect={() =>
+                    cover.mutate(
+                      { coverPhotoId: photo.photoId },
+                      { onSuccess: () => setStatus("Set as album cover") },
+                    )
+                  }
+                >
+                  <ImageUp aria-hidden />
+                  Set as album cover
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 disabled={remove.isPending}
                 onSelect={() => remove.mutate([photo.photoId])}

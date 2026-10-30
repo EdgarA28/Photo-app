@@ -438,7 +438,8 @@ const cases: Case[] = [
   },
   {
     route: "POST /api/albums/:albumId/photos",
-    name: "recipient adds a photo to the shared album",
+    // Members may add their own photos (FR-SHR-9), never the owner's or anyone else's.
+    name: "recipient adds someone else's photo to the shared album",
     foreign: () => ({
       as: w.bob,
       method: "POST",
@@ -448,7 +449,7 @@ const cases: Case[] = [
     missing: () => ({
       as: w.bob,
       method: "POST",
-      path: `/albums/${id()}/photos`,
+      path: `/albums/${w.albumA}/photos`,
       body: { photoIds: [id()] },
     }),
   },

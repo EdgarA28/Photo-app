@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ALLOWED_CONTENT_TYPES, MAX_FILE_NAME_LENGTH, MAX_UPLOAD_BYTES } from "../constants";
-import { idSchema, isoDateTimeSchema, pageQuerySchema, pageSchema } from "./common";
+import { idSchema, isoDateTimeSchema, pageQuerySchema, pageSchema, userIdSchema } from "./common";
 import { photoPlaceSchema } from "./places";
 
 export const photoStatusSchema = z.enum(["pending", "ready", "failed"]);
@@ -34,6 +34,11 @@ export const photoSchema = z.object({
    */
   trashedAt: isoDateTimeSchema.nullable().default(null),
   purgeAt: isoDateTimeSchema.nullable().default(null),
+  /**
+   * Whose photo it is: in a shared album, photos can come from the owner or from members who
+   * added their own (FR-SHR-9). Missing (an API from before FR-SHR-9) reads as null.
+   */
+  ownerId: userIdSchema.nullable().default(null),
 });
 export type Photo = z.infer<typeof photoSchema>;
 

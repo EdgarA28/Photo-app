@@ -7,7 +7,7 @@ import { sharesRepo } from "./shares";
 import { usageRepo } from "./usage";
 import { usernamesRepo } from "./usernames";
 
-export type { AlbumRecord, AlbumUpdate, MembershipRecord } from "./albums";
+export { photoOwnerOf, type AlbumRecord, type AlbumUpdate, type MembershipRecord } from "./albums";
 export { createDocumentClient, type Db } from "./db";
 export type { LinkRecord } from "./links";
 export type { AddResult } from "./memberships";

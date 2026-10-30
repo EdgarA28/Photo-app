@@ -92,12 +92,14 @@ describe("photoSchema", () => {
       thumbUrl: null,
       previewUrl: null,
     };
-    // Without `place` (an API from before 13.2) or the trash dates (FR-DEL-3) they read as null.
+    // Without `place` (an API from before 13.2), the trash dates (FR-DEL-3) or the owner
+    // (FR-SHR-9) they read as null.
     expect(photoSchema.parse(pending)).toEqual({
       ...pending,
       place: null,
       trashedAt: null,
       purgeAt: null,
+      ownerId: null,
     });
   });
 

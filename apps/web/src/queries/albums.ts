@@ -63,8 +63,9 @@ export function useUpdateAlbum(albumId: string) {
   const api = useApi();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (changes: { name: string } | { coverPhotoId: string | null }) =>
-      api.albums.update(albumId, changes),
+    mutationFn: (
+      changes: { name: string } | { coverPhotoId: string | null } | { membersCanAdd: boolean },
+    ) => api.albums.update(albumId, changes),
     // The answer is the updated album: show it at once, then confirm with the list.
     onSuccess: (album: Album) => {
       queryClient.setQueryData<{ items: Album[] }>(["albums"], (data) =>
@@ -112,6 +113,8 @@ export function useAddToAlbum() {
       Promise.all([
         queryClient.invalidateQueries({ queryKey: ["albums"] }),
         queryClient.invalidateQueries({ queryKey: albumPhotosKey(albumId) }),
+        // A shared album I added to (FR-SHR-9): its photo count.
+        queryClient.invalidateQueries({ queryKey: ["shared-albums"] }),
       ]),
   });
 }
@@ -141,6 +144,7 @@ export function useRemoveFromAlbum(
       Promise.all([
         queryClient.invalidateQueries({ queryKey: ["albums"] }),
         queryClient.invalidateQueries({ queryKey: albumPhotosKey(albumId) }),
+        queryClient.invalidateQueries({ queryKey: ["shared-albums"] }),
       ]),
   });
 }

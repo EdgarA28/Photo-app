@@ -2,7 +2,7 @@ import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/re
 import { afterEach, describe, expect, it } from "vitest";
 import { parseShareTarget } from "../src/albums/shareTarget";
 import { ApiRequestError } from "../src/api/errors";
-import { fakeApi, testId, testPhotoPage } from "./fakes";
+import { fakeApi, testId, testPhoto, testPhotoPage, testUser } from "./fakes";
 import { defaultResponses, renderAt } from "./render";
 
 afterEach(cleanup);
@@ -457,5 +457,76 @@ describe("invitations (FR-SHR-6/7)", () => {
     await screen.findByRole("heading", { name: "Albums" });
     expect(screen.queryByRole("region", { name: "Invitations" })).toBeNull();
     expect(screen.queryByLabelText(/album invitation/)).toBeNull();
+  });
+});
+
+describe("albums members can add to (FR-SHR-9)", () => {
+  it("the owner lets members add photos from the share dialog", async () => {
+    let album: typeof myAlbum & { membersCanAdd?: boolean } = myAlbum;
+    const { api, request } = ownerSetup({
+      "GET /albums": () => ({ items: [album] }),
+      [`PATCH /albums/${MINE}`]: () => (album = { ...myAlbum, membersCanAdd: true }),
+    });
+    await renderAt(`/albums/${MINE}`, { api });
+    const dialog = await openShareDialog();
+    const box = within(dialog).getByRole("checkbox", { name: /Members can add photos/ });
+    expect((box as HTMLInputElement).checked).toBe(false);
+
+    fireEvent.click(box);
+
+    await waitFor(() => expect((box as HTMLInputElement).checked).toBe(true));
+    expect(dialog.textContent).toContain("view and download the photos and add their own");
+    expect(
+      request.mock.calls.some(
+        ([m, p, o]) =>
+          m === "PATCH" &&
+          p === `/albums/${MINE}` &&
+          JSON.stringify((o as { body?: unknown })?.body) === '{"membersCanAdd":true}',
+      ),
+    ).toBe(true);
+  });
+
+  /** A shared album that lets members add, with one photo of Ana's and one of mine. */
+  function memberSetup(responses: Record<string, unknown> = {}) {
+    return fakeApi({
+      ...defaultResponses,
+      "GET /albums": { items: [myAlbum] },
+      "GET /shared-albums": {
+        items: [sharedAlbum(0, { membersCanAdd: true })],
+        nextCursor: null,
+      },
+      [`GET /albums/${SHARED}/photos`]: {
+        items: [testPhoto(0, { ownerId: ANA }), testPhoto(1, { ownerId: testUser.sub })],
+        nextCursor: null,
+      },
+      [`DELETE /albums/${SHARED}/photos/${testId(1)}`]: undefined,
+      ...responses,
+    });
+  }
+
+  it("a member sees Add photos, which picks from their gallery", async () => {
+    const { api } = memberSetup();
+    await renderAt(`/albums/${SHARED}`, { api });
+    expect(await screen.findByText("Shared by @ana · you can add photos")).toBeTruthy();
+    const add = await screen.findByRole("link", { name: /Add photos/ });
+    expect(add.getAttribute("href")).toBe(`/gallery?addTo=${SHARED}`);
+  });
+
+  it("a member removes only their own photos", async () => {
+    const { api, request } = memberSetup();
+    await renderAt(`/albums/${SHARED}`, { api });
+    fireEvent.click(await screen.findByRole("button", { name: "Select" }));
+    fireEvent.click(await screen.findByRole("button", { name: "IMG_0.jpg" }));
+    expect(screen.getByText("Only your own photos can be removed.")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Remove from album" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    fireEvent.click(await screen.findByRole("button", { name: "IMG_1.jpg" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove from album" }));
+    expect(await screen.findByText("1 photo removed from the album.")).toBeTruthy();
+    expect(request.mock.calls.filter(([m]) => m === "DELETE").map(([, p]) => p)).toEqual([
+      `/albums/${SHARED}/photos/${testId(1)}`,
+    ]);
   });
 });
