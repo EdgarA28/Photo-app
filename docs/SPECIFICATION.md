@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Version** | 0.23 |
-| **Date** | 2026-10-28 |
+| **Version** | 0.25 |
+| **Date** | 2026-10-30 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
 
@@ -62,6 +62,7 @@ A private photo storage and gallery app, similar in spirit to Google Photos, bui
 - Per-user storage quota
 - PWA: installable, cached app shell, cached thumbnails, resilient upload queue
 - Search photos by place (town, region, country from EXIF GPS; owner only) and a map of own photos
+- Import photos picked in Google Photos (Google Photos Picker API; photos only, §6.9)
 
 ### 2.2 Out of scope for v1
 
@@ -72,6 +73,7 @@ A private photo storage and gallery app, similar in spirit to Google Photos, bui
 - Search other than by place (dates, tags), face/object recognition
 - Native mobile apps
 - Photo editing
+- Importing a whole Google Photos library: since 2025-03-31 Google's Library API only reads media the app itself created, and Google Takeout archives aren't read (§6.9)
 
 ---
 
@@ -86,7 +88,7 @@ Accounts, tools and decisions needed before implementation.
 | AWS Organization | Hosting everything | Accounts: **dev**, **prod**, **management** (budget only). Daily access via IAM Identity Center (SSO); MFA on every root user |
 | AWS Budgets alert | Cost protection | One organization-wide budget in the management account: $5 / month, email alerts at 80 % and 100 % actual + 100 % forecast |
 | GitHub account + private repo | Code + CI/CD | GitHub Actions free minutes are sufficient |
-| Google Cloud project | "Sign in with Google" | OAuth client ID (Web application) + consent screen |
+| Google Cloud project | "Sign in with Google", import from Google Photos | OAuth client ID (Web application) + consent screen; Google Photos Picker API enabled (§11.5) |
 | Domain name | `photos.<domain>` | Optional for dev; needed for prod. Can be registered in Route 53 or elsewhere |
 
 ### 3.2 Local tools
@@ -158,6 +160,12 @@ flowchart LR
     S3[(S3 photo bucket)]
     THUMB[Thumbnail Lambda<br/>Python]
     DLQ[[SQS DLQ]]
+    IMPQ[[SQS import queue<br/>+ DLQ]]
+    IMP[Import worker<br/>TypeScript]
+  end
+
+  subgraph Google
+    GP[Google Photos<br/>Picker API]
   end
 
   PWA -- login / tokens --> COG
@@ -172,6 +180,11 @@ flowchart LR
   THUMB --> S3
   THUMB --> DDB
   THUMB -. failures .-> DLQ
+  API -- "session, polling" --> GP
+  API -- "list / copy jobs" --> IMPQ --> IMP
+  IMP -- "download originals" --> GP
+  IMP --> DDB
+  IMP -- "upload original" --> S3
 ```
 
 ### 5.2 Key flows
@@ -188,6 +201,17 @@ flowchart LR
 3. App uploads the file **directly to S3** at `users/{userId}/originals/{photoId}.{ext}`.
 4. S3 triggers the thumbnail Lambda → creates thumb + preview → updates the DynamoDB item to `ready` with dimensions and date taken.
 5. App polls / refetches; the photo appears in the gallery.
+
+**Import from Google Photos** (§6.9, §10.1, §11.5)
+1. User taps "Import from Google Photos" (Settings) → the app redirects to Google's consent for the scope `photospicker.mediaitems.readonly` (authorization code + PKCE, `state` and verifier kept in `sessionStorage`).
+2. Google → `/import/google/callback?code=…&state=…` → the app checks `state` and calls `POST /api/imports/google` with the code and verifier.
+3. API exchanges the code for a Google access token (client secret, ~1 h, no refresh token), creates a Picker session, stores an Import item (`picking`, with the token) and returns `{importId, pickerUri}`.
+4. User taps "Choose photos in Google Photos" → `window.open(pickerUri + "/autoclose")` → picks photos in Google's picker → Done.
+5. App polls `GET /api/imports/{importId}`; the API asks Google about the session (at most once per its `pollInterval`). When the user is done (`mediaItemsSet`), a conditional update moves the import to `listing` and sends one `list` message to the import queue.
+6. Import worker (`list`): pages the picked items, skips videos and other types, sends one `copy` message per photo, moves the import to `copying`.
+7. Import worker (`copy`, up to 3 at a time): downloads the original (`baseUrl=d`) from Google, checks size and quota, creates the `pending` photo (as `POST /photos/upload-url`), streams it to `users/{userId}/originals/{photoId}.{ext}`.
+8. The thumbnail Lambda processes it like any upload (step 4 of Upload); the photo appears in the gallery by date taken.
+9. The last copy closes the import (`done`), deletes the Picker session and the token; the app shows the summary.
 
 **Viewing**
 1. App fetches `GET /api/photos?cursor=…` (metadata only).
@@ -295,6 +319,17 @@ IDs are stable — reference them in issues, PRs and tests.
 | FR-SRCH-4 | Places are the owner's only: share recipients see no place. Photos carry place names only; coordinates leave the backend only for the owner's map (FR-SRCH-5). |
 | FR-SRCH-5 | A map shows the user's own photos with GPS as thumbnail pins, clustered with a count; tapping a cluster zooms in (or lists its photos when they were taken at one spot), tapping a photo opens the viewer on its town's photos (prev/next as after searching that town). Coordinates are sent rounded to 3 decimals (~100 m), to the owner only. Map tiles come from OpenFreeMap (no key), which sees the area viewed but no photo coordinates. |
 
+### 6.9 Import from Google Photos
+
+| ID | Requirement |
+|---|---|
+| FR-IMP-1 | Users can import photos from their Google Photos library: they choose the photos in Google's own picker (Google Photos Picker API), and the app copies the originals into their library. Access to Google Photos is asked for only when an import starts, separately from login, so it also works for email/password accounts. |
+| FR-IMP-2 | Only the photos the user picks are read (scope `photospicker.mediaitems.readonly`), at most 500 per import. Importing the whole library is out of scope (§2.2). |
+| FR-IMP-3 | Imported photos follow the upload rules: formats of FR-UP-2 (anything else, including videos, is skipped and counted), 50 MB per photo (FR-UP-3) and the quota (FR-UP-7: photos that don't fit are not imported). |
+| FR-IMP-4 | The copy runs in the backend: photo bytes go from Google to S3, never through the user's device. The user can close the app and the import goes on. Imported photos show as processing tiles, then by date taken; a photo without an EXIF date uses its Google creation time. |
+| FR-IMP-5 | The app shows the import's progress and a summary (e.g. "Imported 48 photos · 2 videos skipped · 1 not imported: storage full"). The user can cancel an import; photos already copied stay. |
+| FR-IMP-6 | A retried copy never creates a second photo or counts its bytes twice. Photos imported again in a later import are new photos (no dedupe in v1). |
+
 ---
 
 ## 7. Non-functional requirements
@@ -312,6 +347,7 @@ IDs are stable — reference them in issues, PRs and tests.
 | NFR-SEC-7 | IAM least privilege per function (e.g. thumbnail Lambda can only read `originals/` and write `thumbs/`, `previews/`). |
 | NFR-SEC-8 | No long-lived AWS credentials in CI (GitHub OIDC). Secrets (Google client secret) stored outside git. |
 | NFR-SEC-9 | API Gateway throttling enabled; AWS WAF rate limiting on CloudFront before public launch. |
+| NFR-SEC-10 | Google Photos import (FR-IMP-1): the narrowest scope (`photospicker.mediaitems.readonly`); the Google access token is obtained and kept in the backend only (never sent to the browser), has no refresh token (~1 h) and is deleted when the import ends; the OAuth redirect is protected by `state` and PKCE; the Google client secret is read from SSM; neither the token nor Google's download URLs are logged. |
 
 ### 7.2 Performance
 
@@ -367,7 +403,8 @@ Initial design; refine during implementation.
 | Photo link | `LINK#{token}` | `LINK` | — | — | ownerId, photoIds (≤ 100, newest first), createdAt, expiresAt, ttl (epoch seconds, DynamoDB TTL) |
 | Album share | `ALBUM#{albumId}` | `SHARE#{userId}` | `INVITED#{userId}` while pending, `SHAREDWITH#{userId}` once accepted | `ALBUM#{albumId}` | ownerId, email (shares by email only), status (`pending`/`accepted`; absent = accepted, shares from before v0.17), sharedAt, acceptedAt |
 | Usage | `USER#{userId}` | `USAGE` | — | — | bytesUsed, photoCount, quotaBytes |
-| Upload claim | `USER#{userId}` | `UPLOAD#{uploadId}` | — | — | photoId, ttl (7 days) |
+| Upload claim | `USER#{userId}` | `UPLOAD#{uploadId}` | — | — | photoId, ttl (7 days). Imports use `uploadId = gp-{importId}-{mediaItemId}` |
+| Import | `USER#{userId}` | `IMPORT#{importId}` | — | — | source (`google-photos`), status (`picking`/`listing`/`copying`/`done`/`cancelled`/`expired`), sessionId, pickerUri, pollIntervalSec, lastPolledAt, accessToken (removed when the import ends), tokenExpiresAt, total, done, failed, skipped, failedReasons (`{code: count}`), createdAt, ttl (7 days) |
 | Profile | `USER#{userId}` | `PROFILE` | — | — | username, usernameChangedAt |
 | Place (list entry) | `USER#{userId}` | `PLACE#{placeId}` | — | — | kind (`city`/`region`/`country`), name, context, photoCount, trashedCount (its photos in the trash, so the entry survives for a restore) |
 | Place photo | `PLACE#{userId}#{placeId}` | `PHOTO#{photoId}` | `PLACE#{userId}#{placeId}` (removed while the photo is in the trash) | `TAKEN#{takenAt}#{photoId}` | ownerId, placeId |
@@ -390,9 +427,10 @@ Access patterns:
 | Photos at a place (by date taken) | GSI1: `GSI1PK = PLACE#{id}#{placeId}`, descending (or ascending), paginated |
 | User by username | `PK = USERNAME#{username}, SK = USERNAME` (ignored while `heldUntil` is set) |
 | My username | `PK = USER#{id}, SK = PROFILE` |
+| One import | `PK = USER#{id}, SK = IMPORT#{importId}` |
 | Can user X see photo P? | Owner check, else an accepted share of an album containing P (resolved via album membership + share) |
 
-`takenAt` = EXIF `DateTimeOriginal`, falling back to upload time.
+`takenAt` = EXIF `DateTimeOriginal`, falling back to Google's creation time for imported photos (§10), then to upload time. Imported photos also carry `importId`.
 
 ---
 
@@ -415,6 +453,9 @@ Access patterns:
 | `GET` | `/photos/{photoId}` | Photo metadata; with `?albumId=` a photo of an album shared with the caller, with signed image URLs |
 | `GET` | `/photos/{photoId}/download-url` | 5-min pre-signed GET with `attachment` disposition |
 | `DELETE` | `/photos/{photoId}` | Move to the trash (FR-DEL-3): out of gallery, albums and places, files and usage stay; a `pending` upload is deleted at once (files + metadata + usage) |
+| `POST` | `/imports/google` | Start an import (FR-IMP-1): body `{code, codeVerifier, redirectUri}` (Google authorization code) → `201 {importId, pickerUri, expiresAt}`; exchanges the code server-side and creates the Picker session; `400 GOOGLE_AUTH_FAILED` when Google rejects the code |
+| `GET` | `/imports/{importId}` | `{status, total, done, failed, skipped, failedReasons}`; while `picking` it checks the Picker session (at most once per `pollInterval`) and starts the copy when the user is done (FR-IMP-5) |
+| `DELETE` | `/imports/{importId}` | Cancel (FR-IMP-5): queued copies are dropped, the Picker session and the token deleted, photos already copied stay; `204` |
 | `POST` | `/links` | Public link `{photoIds}` (1–100 own photos; not ready / trashed / foreign left out), 15 min → `{token, path: /s/{token}, expiresAt, photoCount}`; none of the caller's → 404, none shareable → 409 (FR-SHR-8) |
 | `GET` | `/links/{token}` | **No login.** `{photos: [{photoId, thumbUrl, previewUrl, width, height}], expiresAt}`, newest first, images as CloudFront signed URLs valid until the link expires; 404 when unknown, expired or no photo left (FR-SHR-8) |
 | `GET` | `/links/{token}/photos/{photoId}/download-url` | **No login.** 5-min pre-signed GET of that original (only photos of the link), `attachment` with its file name; same 404 rule (FR-SHR-8) |
@@ -452,6 +493,7 @@ URL / cookie lifetimes:
 | Download pre-signed GET | 5 min |
 | CloudFront signed URLs (shared photos) | 15 min |
 | CloudFront media cookie | 8 h, refreshed with tokens |
+| Google token / Picker `baseUrl` (import) | ~1 h each (set by Google) |
 
 Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`, served from the same CloudFront domain as the app (first-party). Signatures use SHA-256, so there are four cookies (`CloudFront-Policy`, `-Signature`, `-Key-Pair-Id`, `-Hash-Algorithm`). `DELETE /session/media-cookie` sends the same four cookie names with the same `Path` and `Max-Age=0`. Signed cookies cannot be revoked server-side: a copy taken before logout stays valid until its expiry (≤ 8 h), and only for that user's own prefix.
 
@@ -478,6 +520,24 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 | Errors — transient | Raise → Lambda async retries (2×) → SQS DLQ (14-day retention) |
 | Packaging | Native wheels for `manylinux` aarch64 (`pip install --platform manylinux2014_aarch64 --only-binary=:all:`) or Docker build |
 | Logs | Structured JSON; 30-day retention |
+| Date fallback (imports) | Imported originals carry `x-amz-meta-taken-at` (Google's `createTime`); used when EXIF has no `DateTimeOriginal`, before the upload time (FR-IMP-4) |
+
+### 10.1 Import worker (FR-IMP-*)
+
+TypeScript Lambda, arm64, in `apps/api` (same bundle as the API, own handler and IAM role).
+
+| Aspect | Specification |
+|---|---|
+| Trigger | SQS queue `photo-app-{env}-imports`, batch size 1, event source **maximum concurrency 3** (keeps Lambda capacity for the API and thumbnails, 12.3a); DLQ after 5 receives, 14-day retention |
+| `list` message | `{userId, importId}`: pages the Picker media items (100 per page), keeps `PHOTO` items with a FR-UP-2 type, sends one `copy` per photo (`SendMessageBatch`, 10 per call), sets `total`, `skipped`, status `copying` |
+| `copy` message | `{userId, importId, mediaItemId, baseUrl, fileName, contentType, createTime}` |
+| Copy steps | Upload claim `gp-{importId}-{mediaItemId}` (a redelivered message reuses its photoId, FR-IMP-6) → `GET {baseUrl}=d` with the Bearer token, streamed → ≤ 50 MB → quota check + `pending` Photo item in one transaction (as `POST /photos/upload-url`) → multipart upload to `users/{userId}/originals/{photoId}.{ext}` with `taken-at` metadata → `done += 1` → the thumbnail Lambda takes over |
+| Errors — permanent | Too large, over quota, gone at Google (404): no photo (or the pending one set `failed`), `failed += 1` with a reason (`TOO_LARGE`, `QUOTA_EXCEEDED`, `NOT_FOUND`), message deleted |
+| Errors — transient | Google 429/5xx, DynamoDB `TransactionConflict`: throw → SQS redelivers after the visibility timeout; after 5 receives → DLQ. An import still `copying` when its token has expired is closed by `GET /imports/{id}`: the rest count as failed (`EXPIRED`) |
+| Finish | The update that makes `done + failed = total` (conditional) sets `done`, deletes the Picker session and removes `accessToken` |
+| Cancel | `DELETE /imports/{id}` sets `cancelled`; queued `copy` messages see it and are dropped |
+| Limits | Timeout 120 s, memory 512 MB (everything streamed), visibility timeout 720 s; 500 photos ≈ 3 min with 3 workers, well within the token's hour |
+| Logs | Structured JSON; 30-day retention; never the token or `baseUrl` |
 
 ---
 
@@ -512,6 +572,15 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 - Backend identity = Cognito `sub` only (never Google's ID, never an email from the request).
 - Frontend keeps the access and ID tokens in memory; only the refresh token is stored, in IndexedDB, so sessions survive restarts (FR-AUTH-4) and the service worker can refresh tokens for Background Sync uploads (§12.4). IndexedDB rather than `localStorage` because service workers can't read `localStorage`; the exposure is the same (readable by scripts on the app's origin only). Refresh token handling via `oidc-client-ts` (D-2). The refresh token is revoked on logout.
 
+### 11.5 Google Photos access (import, FR-IMP-1)
+
+- Not through Cognito: Cognito doesn't hand out the Google tokens it receives, and asking for Photos at login would show that consent to every user. A separate Google consent is asked for when an import starts.
+- Same Google OAuth client as §11.2, with extra redirect URIs `https://photos.<domain>/import/google/callback`, the dev CloudFront domain's, and `http://localhost:5173/import/google/callback`.
+- Google Cloud project: **Google Photos Picker API** enabled; consent screen scope `https://www.googleapis.com/auth/photospicker.mediaitems.readonly` (testing mode: the listed test users only; Google's verification before public launch).
+- Web: authorization code + PKCE, `access_type=online` (no refresh token), optional `login_hint`; `state` and the verifier in `sessionStorage`. The code goes to `POST /imports/google`, which exchanges it with the client secret (SSM SecureString), so the browser never holds the Google token (NFR-SEC-10).
+- Picker: opened with `window.open(pickerUri + "/autoclose")` from a tap (popup blockers), never embedded; on Android it can open in the Google Photos app.
+- The Library API isn't used: since 2025-03-31 it only reads media the app itself created.
+
 ---
 
 ## 12. Frontend & PWA
@@ -531,6 +600,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 | `/albums/$albumId` | Album view |
 | `/map` | Map of own photos with GPS (FR-SRCH-5); MapLibre, loaded only with this page |
 | `/upload` | Upload page / queue status |
+| `/import/google/callback` | Return from Google's consent (§11.5): checks `state`, starts the import, shows "Choose photos in Google Photos", then progress and the summary (FR-IMP-1/5). Started from Settings |
 | `/settings` | Usage, quota, link to the trash, logout |
 | `/s/$token` | Public photo link (FR-SHR-8), no login, no app shell: one photo full screen, or a grid ("N shared photos") whose tiles open the photo large with prev/next; "Link works until …", Download original per photo; "expired" message |
 | `/trash` | Trash (FR-DEL-3): trashed photos with days left; pick to restore or delete forever; empty trash |
@@ -579,6 +649,7 @@ Caching strategies:
 - iOS: installation only via Share → Add to Home Screen; storage may be evicted for unused sites; Web Push only for installed PWAs; no `share_target`.
 - **Test Google/Cognito login in installed (standalone) mode on iOS early.**
 - **Location can be removed before upload** (FR-SRCH-1): sharing a photo directly from Google Photos (Android) sends a copy with the GPS fields blanked (seen 2026-10-27: tags present, values 0/0, empty refs); downloading it first and sharing the file keeps the location, and so does taking the photo with the camera from the app (FR-UP-1). Some photos picked on the phone arrived with no GPS tags at all. Such photos simply get no place; the app can't recover it.
+- **Imported photos probably have no location** (FR-IMP-1): Google documents that the `=d` download keeps EXIF "except location metadata" (Library API docs; to check for the Picker during 13.5). Such photos get no place (FR-SRCH-1).
 
 ---
 
@@ -592,7 +663,7 @@ OpenTofu, region `us-east-1`. AWS Organization with separate accounts: **dev**, 
 |---|---|
 | `storage` | Photo bucket: public access block, SSE-S3, CORS (app origins only), lifecycle (abort incomplete multipart uploads after 2 days), optional versioning |
 | `thumbnails` | Python Lambda, IAM role (least privilege), S3 notification + Lambda permission, SQS DLQ, log group (30 days) |
-| `api` | API Gateway HTTP API, JWT authorizer, API Lambda, IAM, throttling, log group; trash purge Lambda (same bundle, own role) run daily by an EventBridge rule (FR-DEL-3) |
+| `api` | API Gateway HTTP API, JWT authorizer, API Lambda, IAM, throttling, log group; trash purge Lambda (same bundle, own role) run daily by an EventBridge rule (FR-DEL-3); import worker Lambda (same bundle, own role) + SQS import queue and DLQ + Google client secret in SSM (§10.1) |
 | `auth` | Cognito user pool, domain, Google IdP, app client, pre-sign-up trigger |
 | `database` | DynamoDB table (on-demand, PITR in prod), GSI1, TTL on `ttl` (photo links) |
 | `frontend` | Site bucket, CloudFront distribution (OAC; behaviors for `/`, `/api/*`, `/users/*`), security headers with a strict Content-Security-Policy on the site (self only, plus Cognito, the photo bucket and the OpenFreeMap tiles for `connect-src`), SPA fallback (CloudFront Function on the default behavior: extension-less paths → `/index.html`; no distribution-wide error responses, so API/image 403/404 stay real), CloudFront key group for signed cookies/URLs, ACM cert, optional WAF |
@@ -712,6 +783,7 @@ Indicative AWS list prices (us-east-1, 2026). Small scale (≈ 10 users, ≈ 100
 | API Gateway HTTP API | < $0.10 |
 | DynamoDB on-demand | < $0.10 |
 | Cognito (free tier for MAUs) | $0 |
+| SQS import queue (free tier: 1M requests) | $0 |
 | CloudFront (always-free tier: 1 TB out, 10M requests) | $0 |
 | CloudWatch logs | < $0.50 |
 | Route 53 hosted zone (if used) | $0.50 |
@@ -736,6 +808,8 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | B-7 | Video support | Needs transcoding (e.g. MediaConvert) and different storage/egress planning | Idea |
 | B-8 | Search & metadata | Date ranges, tags (places and map done: §6.8); location off switch | Idea |
 | B-9 | On-the-fly image resizing | Only if many sizes are needed; current fixed sizes are simpler | Idea |
+| B-11 | SQS queue in front of the thumbnail Lambda | S3 → SQS → thumbnail Lambda with an event source maximum concurrency (e.g. 5), so big upload bursts can't use up the account's Lambda capacity and throttle the API. Only if raising the concurrency quota (12.3a) and reserved concurrency on the thumbnail Lambda aren't enough. Costs: new queue (+ its DLQ replaces the async-invoke DLQ), S3 notification target changes, handler reads SQS records | Idea |
+| B-10 | Import from Google Photos | Picker API, backend copy (§6.9, §10.1, §11.5); whole library / Takeout not planned | Planned (13.5) |
 | | | | |
 
 ---
@@ -761,6 +835,8 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.25 | 2026-10-30 | B-11: optional SQS queue in front of the thumbnail Lambda (§17) |
+| 0.24 | 2026-10-30 | Import from Google Photos (planned, 13.5): FR-IMP-1–6 (§6.9), NFR-SEC-10, flow (§5.2), Import item (§8.2), `/imports` routes (§9), import worker + date fallback (§10, §10.1), Google Photos access (§11.5), callback route (§12.1), location note (§12.6), `api` module (§13.1), scope (§2), B-10 |
 | 0.23 | 2026-10-28 | `uploadId` on `POST /photos/upload-url` + Upload claim item: an app closed right after the request no longer leaves a pending photo behind (§8.2, §10) |
 | 0.22 | 2026-10-28 | FR-SHR-8: several photos per link (gallery select mode, up to 100); `POST /links` replaces `POST /photos/{id}/links`, link page lists the photos, download per photo `/links/{token}/photos/{photoId}/download-url` (§8.2, §9, §12.1) |
 | 0.21 | 2026-10-28 | Public photo links: FR-SHR-8 (15 min, see + download original, no login), NFR-SEC-1 exception; link item + table TTL (§8.2, §13.1); `POST /photos/{id}/links`, public `GET /links/{token}` and `/download-url` (§9); `/s/$token` page (§12.1) |

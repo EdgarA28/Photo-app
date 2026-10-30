@@ -54,6 +54,7 @@
 | Thumbnail Lambda | `services/thumbnails` | 🚧 | Handler, image pipeline, S3-key mirror, orphan cleanup + 76 pytest tests (6.1–6.7, 6.12); arm64 package `build.sh` → `dist/` (6.8); not deployed yet (6.9–6.10) |
 | Auth trigger Lambda | `services/auth-triggers` | ✅ (dev) | Pre sign-up handler (Google → native account linking, refuses duplicate email sign-ups) + 24 tests (4.5); **deployed in dev** (4.6), linking verified manually |
 | Web app / PWA | `apps/web` | 🚧 | 8.1 scaffold: Vite + React, file routes of spec §12.1 (placeholder pages), Query client, Zod-validated gallery search, `/api` dev proxy. 8.2 Tailwind CSS 4 + shadcn/ui (D-3). 8.3 login (oidc-client-ts, PKCE, refresh, guard, logout). 8.4 API client (bearer, Zod, 401 retry); settings shows `GET /me`. 8.5 app shell (side rail / bottom tab bar, full-screen viewer, system dark mode). 8.6 gallery (infinite query, virtualized justified rows, album/sort filters in the URL). 8.7 processing/failed tiles + polling while photos process. 8.8 full-screen viewer (preview, prev/next through the gallery list, arrow keys, Escape, swipe). 8.9 download original + delete with confirmation in the viewer. 8.10 upload queue (IndexedDB, picker / drag & drop / camera, 3 parallel, progress, automatic retry, one uploading tab, gallery tiles + nav badge). 8.11 albums (list, create, rename, delete, album view, select mode, add/remove photos, cover; album actions in the viewer). 8.12 sharing (share dialog by email or @username, revoke, "Shared with me", read-only shared album view, "Shared by" in the viewer). 8.13 settings (account, quota bar, username set/change, logout clearing the upload queue and Query cache). 8.14 storage-full handling (space warning, grouped banner, Retry all), session-expired and offline messages. 8.15 "choose a username" prompt after login. **Phase 8 complete.** Thumbnails and previews show once Phase 7 serves them. 9.1 web app manifest + icons (installable metadata). 9.2 service worker caching: precached shell, offline navigation fallback, CacheFirst thumbnails. 9.4 service worker registered (`registerType: 'prompt'`) with an "Update available" prompt and hourly update checks. 9.3 Query cache saved to IndexedDB per user and restored on start; offline start with the stored session's `sub`. 9.5 Background Sync: the service worker uploads the queue after the app is closed or frozen (Chromium); refresh token now in IndexedDB. 9.6 Android share target: photos shared to the app land in the upload queue |
+| Import from Google Photos | `apps/api` (routes + worker), `infra/modules/api`, `apps/web` | 📋 | Planned (13.5, spec v0.24 §6.9): Picker API, `/imports` routes, SQS import queue + DLQ, import worker Lambda; nothing built yet (§10.8) |
 | CI/CD workflows | `.github/workflows` | 🚧 | `ci.yml` (10.1: checks, build, dev `tofu plan` + PR comment); `deploy.yml` (10.2: dev deploy after CI passes on `main`; running since `87fbe5c`) |
 
 ---
@@ -808,6 +809,39 @@ flowchart LR
 
 Bootstrap uses local state per workspace instead of S3.
 
+### 10.8 Import from Google Photos 📋 (planned, 13.5)
+
+Designed in spec §5.2, §6.9, §10.1 and §11.5; nothing exists yet. The user picks photos in Google's picker; the backend copies them.
+
+```mermaid
+sequenceDiagram
+  participant W as 📋 Web (callback route)
+  participant G as Google (OAuth + Picker API)
+  participant A as 📋 API /imports
+  participant Q as 📋 SQS import queue
+  participant I as 📋 Import worker
+  participant S as ✅ S3 originals
+  participant T as ✅ Thumbnail Lambda
+  W->>G: consent (scope photospicker.mediaitems.readonly, PKCE)
+  G-->>W: /import/google/callback?code
+  W->>A: POST /imports/google {code, verifier}
+  A->>G: code → token, create session
+  A-->>W: {importId, pickerUri}
+  W->>G: window.open(pickerUri/autoclose), user picks
+  loop every pollInterval
+    W->>A: GET /imports/{id}
+    A->>G: session mediaItemsSet?
+  end
+  A->>Q: list
+  Q->>I: list → one copy per photo
+  Q->>I: copy (max 3 at a time)
+  I->>G: GET baseUrl=d
+  I->>S: pending photo + original (quota as upload-url)
+  S->>T: ObjectCreated → ready
+```
+
+New pieces: Import item (`USER#{id}` / `IMPORT#{importId}`), upload claim `gp-{importId}-{mediaItemId}`, `x-amz-meta-taken-at` date fallback in the thumbnail Lambda, Google client secret in SSM.
+
 ---
 
 ## 11. Security model
@@ -1225,3 +1259,4 @@ Target design: spec §12 (TanStack Router file routes with an authenticated layo
 | 2026-10-30 | 8.25a: launch splash in `index.html` (app icon until the first route renders), styled from `index.css` because of the CSP (§5, §14.1). |
 | 2026-10-30 | 8.25b: the guard opens from the stored session without waiting for Cognito; cache restore and media cookie request in parallel; `onUnauthorized` also deletes the saved cache; side rail email from `/me` (§10.1, §14.1). |
 | 2026-10-30 | 8.25c: media cookie expiry remembered in localStorage per user; the guard's `media.ready(sub)` waits for new cookies only when the remembered ones run out within 5 min, otherwise renews in the background (§10.1, §14.1). |
+| 2026-10-30 | 13.5 Import from Google Photos planned (spec v0.24): 📋 status row and §10.8 flow; nothing built. |
