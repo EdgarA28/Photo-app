@@ -49,6 +49,11 @@ export async function renderAt(
   } = {},
 ) {
   const queryClient = createQueryClient();
+  // The app's retry rules stay, without the 1 s + 2 s pauses (a failing request cost 3 s per test).
+  queryClient.setDefaultOptions({
+    ...queryClient.getDefaultOptions(),
+    queries: { ...queryClient.getDefaultOptions().queries, retryDelay: 0 },
+  });
   const cache =
     typeof persistedCache === "function"
       ? persistedCache(queryClient)
