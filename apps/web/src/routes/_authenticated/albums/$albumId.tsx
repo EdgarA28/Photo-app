@@ -112,8 +112,9 @@ function AlbumView({ album }: { album: Album }) {
           <ChevronLeft aria-hidden className="size-4" />
           Albums
         </Link>
+        {/* On a phone the name gets its own row: next to the buttons it was squeezed to nothing. */}
         <div className="flex flex-wrap items-center gap-3">
-          <div className="min-w-0 flex-1">
+          <div className="w-full min-w-0 sm:w-auto sm:flex-1">
             <h1 className="truncate text-2xl font-semibold tracking-tight">{album.name}</h1>
             <p className="text-sm text-muted-foreground tabular-nums">
               {album.photoCount === 1 ? "1 photo" : `${album.photoCount} photos`}
@@ -133,12 +134,12 @@ function AlbumView({ album }: { album: Album }) {
             <Button asChild>
               <Link to="/gallery" search={{ addTo: album.albumId }}>
                 <ImagePlus aria-hidden />
-                Add photos
+                <span className="sr-only sm:not-sr-only">Add photos</span>
               </Link>
             </Button>
             <Button variant="outline" onClick={() => setDialog("share")}>
               <Share2 aria-hidden />
-              Share
+              <span className="sr-only sm:not-sr-only">Share</span>
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
