@@ -290,8 +290,8 @@ export const TEST_DOWNLOAD_URL = "https://photos.test.example/download";
 /**
  * The real app and routes on a fresh DynamoDB Local table, with a fake Cognito directory
  * (`profiles`, also searched by email) and a fake photo bucket that records upload targets (`uploads`), download targets
- * (`downloads`) and object deletes (`deletes`, one entry per call; `onDelete` runs inside each
- * call, to simulate races). `api(as, …)` sends a request as user `as` (null = anonymous), the
+ * (`downloads`), object deletes (`deletes`, one entry per call; `onDelete` runs inside each
+ * call, to simulate races) and copies (`copies`, after `onCopy`, which can make one fail). `api(as, …)` sends a request as user `as` (null = anonymous), the
  * way API Gateway delivers it: the JWT `sub` in the authorizer claims.
  */
 export async function createTestApi() {
@@ -309,7 +309,11 @@ export async function createTestApi() {
   const uploads: UploadTarget[] = [];
   const downloads: DownloadTarget[] = [];
   const deletes: string[][] = [];
-  const hooks: { onDelete?: (keys: string[]) => Promise<void> } = {};
+  const copies: { from: string; to: string }[] = [];
+  const hooks: {
+    onDelete?: (keys: string[]) => Promise<void>;
+    onCopy?: (from: string, to: string) => Promise<void>;
+  } = {};
   const storage: PhotoStorage = {
     createUploadPost: async (target) => {
       uploads.push(target);
@@ -325,6 +329,10 @@ export async function createTestApi() {
     deleteObjects: async (keys) => {
       deletes.push(keys);
       await hooks.onDelete?.(keys);
+    },
+    copyObject: async (from, to) => {
+      await hooks.onCopy?.(from, to);
+      copies.push({ from, to });
     },
   };
   const deps = {
@@ -355,5 +363,5 @@ export async function createTestApi() {
     return { status: res.status, body: (text ? JSON.parse(text) : null) as unknown };
   }
 
-  return { db, repos, profiles, uploads, downloads, deletes, hooks, storage, app, api };
+  return { db, repos, profiles, uploads, downloads, deletes, copies, hooks, storage, app, api };
 }

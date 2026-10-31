@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { ALLOWED_CONTENT_TYPES, MAX_FILE_NAME_LENGTH, MAX_UPLOAD_BYTES } from "../constants";
+import {
+  ALLOWED_CONTENT_TYPES,
+  MAX_FILE_NAME_LENGTH,
+  MAX_PHOTOS_PER_SAVE_REQUEST,
+  MAX_UPLOAD_BYTES,
+} from "../constants";
 import { idSchema, isoDateTimeSchema, pageQuerySchema, pageSchema } from "./common";
 import { photoPlaceSchema } from "./places";
 
@@ -99,3 +104,36 @@ export const downloadUrlResponseSchema = z.object({
   expiresAt: isoDateTimeSchema,
 });
 export type DownloadUrlResponse = z.infer<typeof downloadUrlResponseSchema>;
+
+/** POST /shared-albums/{albumId}/save: photos of that album to copy into my gallery (FR-SHR-10). */
+export const saveSharedPhotosRequestSchema = z.object({
+  photoIds: z.array(idSchema).min(1).max(MAX_PHOTOS_PER_SAVE_REQUEST),
+});
+export type SaveSharedPhotosRequest = z.infer<typeof saveSharedPhotosRequestSchema>;
+
+/**
+ * What happened to one photo: `saved` (a new copy, processing like an upload), `already-saved`
+ * (my earlier copy, still there; `inTrash` if it is in my trash), `unavailable` (not in the album,
+ * not processed, or gone) or `quota-exceeded` (doesn't fit in my storage).
+ */
+export const saveSharedPhotoResultSchema = z.enum([
+  "saved",
+  "already-saved",
+  "unavailable",
+  "quota-exceeded",
+]);
+export type SaveSharedPhotoResult = z.infer<typeof saveSharedPhotoResultSchema>;
+
+export const saveSharedPhotosResponseSchema = z.object({
+  /** One per requested photo, in request order. */
+  items: z.array(
+    z.object({
+      photoId: idSchema,
+      result: saveSharedPhotoResultSchema,
+      /** My copy, for `saved` and `already-saved`. */
+      savedPhotoId: idSchema.nullable(),
+      inTrash: z.boolean(),
+    }),
+  ),
+});
+export type SaveSharedPhotosResponse = z.infer<typeof saveSharedPhotosResponseSchema>;

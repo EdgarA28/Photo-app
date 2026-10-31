@@ -12,6 +12,7 @@ import {
   photoPageSchema,
   placeListSchema,
   photoSchema,
+  saveSharedPhotosResponseSchema,
   setUsernameResponseSchema,
   sharedAlbumPageSchema,
   shareInvitationPageSchema,
@@ -121,6 +122,12 @@ export function createApi(request: Request) {
       accept: (albumId: string) => request("POST", `/shared-albums/${enc(albumId)}/accept`),
       /** Declines an invitation or removes an accepted album (FR-SHR-7). */
       leave: (albumId: string) => request("DELETE", `/shared-albums/${enc(albumId)}`),
+      /** Copies these photos into my gallery (FR-SHR-10), at most `MAX_PHOTOS_PER_SAVE_REQUEST`. */
+      save: (albumId: string, photoIds: string[]) =>
+        request("POST", `/shared-albums/${enc(albumId)}/save`, {
+          schema: saveSharedPhotosResponseSchema,
+          body: { photoIds },
+        }),
     },
 
     shareInvitations: {

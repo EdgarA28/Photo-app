@@ -16,6 +16,7 @@ import {
   FolderMinus,
   FolderPlus,
   ImageOff,
+  ImagePlus,
   ImageUp,
   LoaderCircle,
   Trash2,
@@ -56,7 +57,7 @@ import { gallerySearchSchema } from "@/gallery/search";
 import { startDownload } from "@/lib/download";
 import { albumsQuery, useRemoveFromAlbum, useUpdateAlbum } from "@/queries/albums";
 import { galleryQuery, needsOwnFetch, photoQuery, removePhotoFromCache } from "@/queries/photos";
-import { sharedAlbumsQuery } from "@/queries/shares";
+import { saveSummary, sharedAlbumsQuery, useSaveSharedPhotos } from "@/queries/shares";
 import { ZoomableImage } from "@/viewer/ZoomableImage";
 
 /** Horizontal travel that counts as a swipe; it must also be mostly sideways. */
@@ -256,7 +257,8 @@ function SharedByLine({ album }: { album: string }) {
 
 /**
  * Download (FR-DL-1/2), a public link (FR-SHR-8) and delete to the trash (FR-DEL-1/2/3). Delete is offered for own photos only: in an album
- * that isn't in my album list (shared with me) the photo belongs to someone else.
+ * that isn't in my album list (shared with me) the photo belongs to someone else, and can be
+ * saved to my gallery instead (FR-SHR-10).
  */
 function PhotoActions({
   photo,
@@ -279,6 +281,8 @@ function PhotoActions({
   // A photo in the trash (opened by its URL) can only be restored there (FR-DEL-3).
   const own =
     !photo.trashedAt && (album === undefined || !!albums?.items.some((a) => a.albumId === album));
+  // Known only once my albums are loaded, so an own album never shows the button meanwhile.
+  const shared = album !== undefined && !!albums && !albums.items.some((a) => a.albumId === album);
 
   // A 5-minute pre-signed URL with `attachment` disposition: the browser saves the original
   // under its file name straight from S3. A shared photo needs its album (5.13).
@@ -325,6 +329,9 @@ function PhotoActions({
           <Download className="size-5" />
         )}
       </Button>
+      {shared && photo.status === "ready" && (
+        <SaveToGalleryButton photoId={photo.photoId} albumId={album} />
+      )}
       {own && photo.status === "ready" && (
         <ShareLinkButton photoId={photo.photoId} setOverlay={setOverlay} className={iconButton} />
       )}
@@ -379,6 +386,55 @@ function PhotoActions({
           </AlertDialogContent>
         </AlertDialog>
       )}
+    </>
+  );
+}
+
+/**
+ * "Save to my gallery" for a photo of an album shared with me (FR-SHR-10): a copy becomes my own
+ * photo. The result (saved, already saved, storage full) shows under the toolbar.
+ */
+function SaveToGalleryButton({ photoId, albumId }: { photoId: string; albumId: string }) {
+  const save = useSaveSharedPhotos(albumId);
+  // A result belongs to the photo it was for: prev/next reuse this component.
+  const [savedFor, setSavedFor] = useState<string | null>(null);
+  const message = savedFor === photoId && save.data ? saveSummary(save.data) : null;
+  return (
+    <>
+      {save.isError && savedFor === photoId && (
+        <p
+          role="alert"
+          className="absolute top-full right-2 max-w-[calc(100%-1rem)] rounded-md bg-black/80 px-3 py-2 text-sm text-red-300"
+        >
+          {errorMessage(save.error)}
+        </p>
+      )}
+      {message && (
+        <p
+          role="status"
+          className="absolute top-full right-2 max-w-[calc(100%-1rem)] rounded-md bg-black/80 px-3 py-2 text-sm text-white"
+        >
+          {message}
+        </p>
+      )}
+      <Button
+        variant="ghost"
+        size="icon-lg"
+        aria-label="Save to my gallery"
+        title="Save to my gallery"
+        disabled={save.isPending}
+        onClick={() => {
+          setSavedFor(photoId);
+          save.mutate([photoId]);
+        }}
+        className={iconButton}
+      >
+        {save.isPending ? (
+          <LoaderCircle className="size-5 motion-safe:animate-spin" />
+        ) : (
+          <ImagePlus className="size-5" />
+        )}
+      </Button>
     </>
   );
 }

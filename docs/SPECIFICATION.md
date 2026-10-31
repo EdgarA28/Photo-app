@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Version** | 0.25 |
-| **Date** | 2026-10-30 |
+| **Version** | 0.26 |
+| **Date** | 2026-10-31 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
 
@@ -286,11 +286,12 @@ IDs are stable — reference them in issues, PRs and tests.
 | FR-SHR-1 | Album owners can share an album read-only with another registered user by email. |
 | FR-SHR-2 | Owners can revoke a share at any time. |
 | FR-SHR-3 | Users see albums shared with them in a separate "Shared with me" section. |
-| FR-SHR-4 | Recipients can view and download, but not modify, delete or re-share. |
+| FR-SHR-4 | Recipients can view and download, but not modify, delete or re-share. They can save a copy to their own gallery (FR-SHR-10). |
 | FR-SHR-5 | Owners can also share with a user by their username instead of their email; sharing by username never reveals the recipient's email to the owner. |
 | FR-SHR-6 | A new share is an invitation: the recipient sees the album's name, photo count and who shared it, and gets access only after accepting it. Owners see which shares are not accepted yet. |
 | FR-SHR-8 | Owners can make a **public link** to their own processed photos: one photo (Share link button next to Download in the viewer) or up to 100 picked in the gallery's select mode (Share link next to Delete). For 15 minutes anyone with the link, without an account, sees the photos (one full screen, several as a grid that opens each one large) and can download each original under its file name (with its EXIF data, location included). Photos still processing or in the trash are left out (the owner is told); a photo deleted or trashed later drops out of the link; after 15 minutes, or with nothing left, the link shows "expired". Each press makes a new link; links can't be revoked early. |
 | FR-SHR-7 | Recipients can decline an invitation, or remove an accepted shared album from their albums; access ends at once. The owner's album is unchanged; the person simply drops off the owner's share list (no "declined" state), and the owner can share again, which sends a new invitation. |
+| FR-SHR-10 | Recipients can **save photos of an album shared with them to their own gallery**: "Save to my gallery" next to Download in the viewer, and for several photos in the shared album's select mode. The backend copies the original (bytes never pass through the device); the copy is processed like an upload (date taken, place), becomes the recipient's own photo, independent of the owner's (it stays when the owner deletes theirs or stops sharing) and counts against the recipient's quota (FR-UP-7: photos that don't fit are not saved). Only processed photos can be saved. Saving the same photo again saves nothing new and says "already in your gallery" (or "in your trash"); once the copy is deleted for good it can be saved anew. The app sums up the result (e.g. "Saved 8 photos · 1 already saved · 1 didn't fit in your storage"). |
 
 ### 6.6 Account & quota
 
@@ -403,7 +404,7 @@ Initial design; refine during implementation.
 | Photo link | `LINK#{token}` | `LINK` | — | — | ownerId, photoIds (≤ 100, newest first), createdAt, expiresAt, ttl (epoch seconds, DynamoDB TTL) |
 | Album share | `ALBUM#{albumId}` | `SHARE#{userId}` | `INVITED#{userId}` while pending, `SHAREDWITH#{userId}` once accepted | `ALBUM#{albumId}` | ownerId, email (shares by email only), status (`pending`/`accepted`; absent = accepted, shares from before v0.17), sharedAt, acceptedAt |
 | Usage | `USER#{userId}` | `USAGE` | — | — | bytesUsed, photoCount, quotaBytes |
-| Upload claim | `USER#{userId}` | `UPLOAD#{uploadId}` | — | — | photoId, ttl (7 days). Imports use `uploadId = gp-{importId}-{mediaItemId}` |
+| Upload claim | `USER#{userId}` | `UPLOAD#{uploadId}` | — | — | photoId, ttl (7 days). Imports use `uploadId = gp-{importId}-{mediaItemId}`. A saved shared photo (FR-SHR-10) uses `uploadId = shared-{photoId}` (the owner's photo ID) **without ttl**: it remembers the copy; released once the copy is deleted for good |
 | Import | `USER#{userId}` | `IMPORT#{importId}` | — | — | source (`google-photos`), status (`picking`/`listing`/`copying`/`done`/`cancelled`/`expired`), sessionId, pickerUri, pollIntervalSec, lastPolledAt, accessToken (removed when the import ends), tokenExpiresAt, total, done, failed, skipped, failedReasons (`{code: count}`), createdAt, ttl (7 days) |
 | Profile | `USER#{userId}` | `PROFILE` | — | — | username, usernameChangedAt |
 | Place (list entry) | `USER#{userId}` | `PLACE#{placeId}` | — | — | kind (`city`/`region`/`country`), name, context, photoCount, trashedCount (its photos in the trash, so the entry survives for a restore) |
@@ -480,6 +481,7 @@ Access patterns:
 | `GET` | `/share-invitations` | Invitations I haven't answered `?cursor&limit` (FR-SHR-6) |
 | `POST` | `/shared-albums/{albumId}/accept` | Accept an invitation (FR-SHR-6) |
 | `DELETE` | `/shared-albums/{albumId}` | Decline an invitation or remove an accepted shared album (FR-SHR-7) |
+| `POST` | `/shared-albums/{albumId}/save` | Save photos of an accepted shared album to my gallery `{photoIds}` (1–10; the app sends more in batches) → `200 {items: [{photoId, result: saved / already-saved / unavailable / quota-exceeded, savedPhotoId, inTrash}]}` in request order; server-side S3 copy into `users/{me}/originals/`, then processed like an upload; not shared with me (or only invited) → 404 (FR-SHR-10) |
 
 Image URLs in responses:
 - Own photos: stable CloudFront paths (`/users/{userId}/thumbs/{photoId}.jpg`), authorized by the media cookie.
@@ -835,6 +837,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.26 | 2026-10-31 | Save shared photos to my gallery: FR-SHR-10 (FR-SHR-4 note), `POST /shared-albums/{albumId}/save` (§9), permanent upload claim `shared-{photoId}` (§8.2) |
 | 0.25 | 2026-10-30 | B-11: optional SQS queue in front of the thumbnail Lambda (§17) |
 | 0.24 | 2026-10-30 | Import from Google Photos (planned, 13.5): FR-IMP-1–6 (§6.9), NFR-SEC-10, flow (§5.2), Import item (§8.2), `/imports` routes (§9), import worker + date fallback (§10, §10.1), Google Photos access (§11.5), callback route (§12.1), location note (§12.6), `api` module (§13.1), scope (§2), B-10 |
 | 0.23 | 2026-10-28 | `uploadId` on `POST /photos/upload-url` + Upload claim item: an app closed right after the request no longer leaves a pending photo behind (§8.2, §10) |

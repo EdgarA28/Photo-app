@@ -1,4 +1,9 @@
-import { DeleteObjectsCommand, GetObjectCommand, type S3Client } from "@aws-sdk/client-s3";
+import {
+  CopyObjectCommand,
+  DeleteObjectsCommand,
+  GetObjectCommand,
+  type S3Client,
+} from "@aws-sdk/client-s3";
 import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import {
@@ -32,6 +37,11 @@ export interface PhotoStorage {
   createDownloadUrl(target: DownloadTarget): Promise<string>;
   /** Deletes the objects; keys that don't exist are fine (FR-DEL-1). */
   deleteObjects(keys: string[]): Promise<void>;
+  /**
+   * Copies an original inside the bucket, bytes and metadata unchanged (FR-SHR-10): a shared photo
+   * saved to the recipient's gallery. The new object starts the thumbnail Lambda like an upload.
+   */
+  copyObject(from: string, to: string): Promise<void>;
 }
 
 export function s3PhotoStorage(client: S3Client, bucket: string): PhotoStorage {
@@ -82,6 +92,19 @@ export function s3PhotoStorage(client: S3Client, bucket: string): PhotoStorage {
       if (failed.length > 0) {
         throw new Error(`Failed to delete ${failed.map((e) => `${e.Key} (${e.Code})`).join(", ")}`);
       }
+    },
+
+    async copyObject(from, to) {
+      // Server-side, so the bytes never pass through the Lambda (≤ 50 MB, one request). The storage
+      // class is set again, as on upload (§8.1); Content-Type and EXIF come with the object.
+      await client.send(
+        new CopyObjectCommand({
+          Bucket: bucket,
+          CopySource: `${bucket}/${from.split("/").map(encodeURIComponent).join("/")}`,
+          Key: to,
+          StorageClass: "INTELLIGENT_TIERING",
+        }),
+      );
     },
   };
 }

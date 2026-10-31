@@ -311,9 +311,11 @@ describe("albums shared with me (FR-SHR-3/4)", () => {
     expect(screen.getByText("Shared by @ana · view only")).toBeTruthy();
     const link = await screen.findByRole("link", { name: "IMG_0.jpg" });
     expect(link.getAttribute("href")).toBe(`/photos/${testId(0)}?album=${SHARED}&sort=taken-desc`);
-    for (const name of ["Select", "Add photos", "Share"]) {
+    for (const name of ["Add photos", "Share"]) {
       expect(screen.queryByRole("button", { name })).toBeNull();
     }
+    // Select is there, but only to save photos to my gallery (FR-SHR-10).
+    expect(screen.getByRole("button", { name: "Select" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: /Add photos/ })).toBeNull();
   });
 
@@ -362,7 +364,7 @@ describe("albums shared with me (FR-SHR-3/4)", () => {
     expect(await screen.findByRole("heading", { name: "From Ana 0" })).toBeTruthy();
   });
 
-  it("shows who shared it in the viewer, with download as the only action", async () => {
+  it("shows who shared it in the viewer, with download and save as the only actions", async () => {
     const { api } = recipientSetup();
     await renderAt(`/albums/${SHARED}`, { api });
     fireEvent.click(await screen.findByRole("link", { name: "IMG_1.jpg" }));
@@ -371,8 +373,108 @@ describe("albums shared with me (FR-SHR-3/4)", () => {
     );
     expect(await screen.findByText("Shared by @ana")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Download original" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Save to my gallery" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Delete photo" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Album actions" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Share link" })).toBeNull();
+  });
+});
+
+describe("saving shared photos to my gallery (FR-SHR-10)", () => {
+  const saved = (n: number, result = "saved", inTrash = false) => ({
+    photoId: testId(n),
+    result,
+    savedPhotoId: result === "saved" || result === "already-saved" ? testId(500 + n) : null,
+    inTrash,
+  });
+
+  function setup(responses: Record<string, unknown> = {}) {
+    return fakeApi({
+      ...defaultResponses,
+      "GET /albums": { items: [myAlbum] },
+      "GET /shared-albums": { items: [sharedAlbum(0)], nextCursor: null },
+      [`GET /albums/${SHARED}/photos`]: testPhotoPage(0, 12),
+      [`GET /albums/${MINE}/photos`]: testPhotoPage(0, 3),
+      ...responses,
+    });
+  }
+
+  const saves = (request: Request) =>
+    request.mock.calls
+      .filter(([m, p]) => m === "POST" && p === `/shared-albums/${SHARED}/save`)
+      .map(([, , options]) => options?.body);
+
+  it("saves the photo open in the viewer", async () => {
+    const { api, request } = setup({
+      [`POST /shared-albums/${SHARED}/save`]: { items: [saved(1)] },
+    });
+    await renderAt(`/photos/${testId(1)}?album=${SHARED}`, { api });
+    fireEvent.click(await screen.findByRole("button", { name: "Save to my gallery" }));
+    expect((await screen.findByRole("status")).textContent).toBe("Saved to your gallery.");
+    expect(saves(request)).toEqual([{ photoIds: [testId(1)] }]);
+  });
+
+  it("says when my earlier copy is in the trash", async () => {
+    const { api } = setup({
+      [`POST /shared-albums/${SHARED}/save`]: { items: [saved(1, "already-saved", true)] },
+    });
+    await renderAt(`/photos/${testId(1)}?album=${SHARED}`, { api });
+    fireEvent.click(await screen.findByRole("button", { name: "Save to my gallery" }));
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "You saved this photo before. It's in your trash: restore it from there.",
+    );
+  });
+
+  it("explains a failed save", async () => {
+    const { api } = setup({
+      [`POST /shared-albums/${SHARED}/save`]: new ApiRequestError("NETWORK_ERROR", "x", 0),
+    });
+    await renderAt(`/photos/${testId(1)}?album=${SHARED}`, { api });
+    fireEvent.click(await screen.findByRole("button", { name: "Save to my gallery" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Can't reach the server. Check your connection.",
+    );
+  });
+
+  it("is not offered for my own album's photos", async () => {
+    const { api } = setup();
+    await renderAt(`/photos/${testId(1)}?album=${MINE}`, { api });
+    await screen.findByRole("button", { name: "Delete photo" });
+    expect(screen.queryByRole("button", { name: "Save to my gallery" })).toBeNull();
+  });
+
+  it("saves the photos picked in select mode, in batches of 10, and sums up", async () => {
+    const { api, request } = setup({
+      [`POST /shared-albums/${SHARED}/save`]: () =>
+        saves(request).length === 1
+          ? {
+              items: [
+                ...Array.from({ length: 8 }, (_, i) => saved(i)),
+                saved(8, "already-saved"),
+                saved(9, "quota-exceeded"),
+              ],
+            }
+          : { items: [saved(10, "unavailable")] },
+    });
+    await renderAt(`/albums/${SHARED}`, { api });
+    fireEvent.click(await screen.findByRole("button", { name: "Select" }));
+    for (let n = 0; n <= 10; n++) {
+      fireEvent.click(await screen.findByRole("button", { name: `IMG_${n}.jpg` }));
+    }
+    expect(screen.getByText("11 selected")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save to my gallery" }));
+
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "Saved 8 photos to your gallery. 1 photo was already saved. " +
+        "1 photo didn't fit in your storage. 1 photo was no longer available.",
+    );
+    const bodies = saves(request) as { photoIds: string[] }[];
+    expect(bodies.map((body) => body.photoIds.length)).toEqual([10, 1]);
+    expect(bodies.flatMap((body) => body.photoIds).sort()).toEqual(
+      Array.from({ length: 11 }, (_, n) => testId(n)).sort(),
+    );
+    // Select mode ends.
+    expect(screen.queryByText("11 selected")).toBeNull();
   });
 });
 

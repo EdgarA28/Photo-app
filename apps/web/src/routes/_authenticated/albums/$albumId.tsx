@@ -35,7 +35,7 @@ import { SelectionBar } from "@/gallery/SelectionBar";
 import { useSelection } from "@/gallery/useSelection";
 import { albumsQuery, useRemoveFromAlbum, useUpdateAlbum } from "@/queries/albums";
 import { galleryQuery } from "@/queries/photos";
-import { sharedAlbumsQuery } from "@/queries/shares";
+import { saveSummary, sharedAlbumsQuery, useSaveSharedPhotos } from "@/queries/shares";
 
 // Album photos newest taken first, in month sections like the gallery (§12.3).
 const listOf = (albumId: string): GallerySearch => ({ album: albumId, sort: "taken-desc" });
@@ -242,8 +242,8 @@ function AlbumView({ album }: { album: Album }) {
 }
 
 /**
- * An album someone shared with me (FR-SHR-3/4): view and download only, or remove it from my
- * albums (FR-SHR-7). Its name and owner come from `GET /shared-albums` (there is no single-album
+ * An album someone shared with me (FR-SHR-3/4): view and download only, save photos to my
+ * gallery (FR-SHR-10, select mode), or remove it from my albums (FR-SHR-7). Its name and owner come from `GET /shared-albums` (there is no single-album
  * route), paged through until it turns up.
  */
 function SharedAlbumView({ albumId }: { albumId: string }) {
@@ -260,6 +260,17 @@ function SharedAlbumView({ albumId }: { albumId: string }) {
   }, [album, hasNextPage, isFetchingNextPage, fetchNextPage]);
   const searching = !album && (shared.isPending || hasNextPage);
   const items = useMemo(() => photoPages.pages.flatMap((page) => page.items), [photoPages]);
+
+  const selection = useSelection();
+  const save = useSaveSharedPhotos(albumId);
+  const [status, setStatus] = useState<string | null>(null);
+  const saveSelected = () =>
+    save.mutate(selection.ids, {
+      onSuccess: (results) => {
+        setStatus(saveSummary(results));
+        selection.stop();
+      },
+    });
 
   return (
     <main className="space-y-5">
@@ -280,20 +291,38 @@ function SharedAlbumView({ albumId }: { albumId: string }) {
               {album ? sharedBy(album) : "Shared with you"} · view only
             </p>
           </div>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" aria-label="Album actions">
-                <Ellipsis aria-hidden />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem variant="destructive" onSelect={() => setLeaving(true)}>
-                <LogOut aria-hidden />
-                Remove from my albums
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <div className="flex items-center gap-2">
+            {(items.length > 0 || selection.active) && (
+              <SelectButton
+                active={selection.active}
+                onSelect={() => {
+                  setStatus(null);
+                  save.reset();
+                  selection.start();
+                }}
+                onUnselect={selection.stop}
+              />
+            )}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" aria-label="Album actions">
+                  <Ellipsis aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem variant="destructive" onSelect={() => setLeaving(true)}>
+                  <LogOut aria-hidden />
+                  Remove from my albums
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
+        {status && (
+          <p role="status" className="text-sm text-muted-foreground">
+            {status}
+          </p>
+        )}
       </header>
       {items.length === 0 ? (
         <p className="py-24 text-center text-muted-foreground">This album has no photos yet.</p>
@@ -305,6 +334,11 @@ function SharedAlbumView({ albumId }: { albumId: string }) {
           fetchNextPage={photos.fetchNextPage}
           viewerSearch={search}
           months
+          selection={selection.grid}
+          onSelectionChange={(photoIds) => {
+            setStatus(null);
+            selection.replace(photoIds);
+          }}
         />
       )}
       {photos.isFetchNextPageError && (
@@ -314,6 +348,19 @@ function SharedAlbumView({ albumId }: { albumId: string }) {
             Try again
           </Button>
         </div>
+      )}
+      {selection.active && (
+        <SelectionBar count={selection.selected.size} onCancel={selection.stop}>
+          {save.isError ? (
+            <span role="alert" className="text-sm text-destructive">
+              {errorMessage(save.error)}
+            </span>
+          ) : null}
+          <Button disabled={selection.selected.size === 0 || save.isPending} onClick={saveSelected}>
+            <ImagePlus aria-hidden />
+            {save.isPending ? "Saving…" : "Save to my gallery"}
+          </Button>
+        </SelectionBar>
       )}
       <LeaveSharedAlbumDialog
         albumId={albumId}

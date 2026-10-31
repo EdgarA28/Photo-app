@@ -67,6 +67,12 @@ export const TRASH_RETENTION_DAYS = 15;
 export const PHOTO_LINK_TTL_SECONDS = 15 * 60;
 export const MAX_PHOTOS_PER_LINK = 100;
 
+/**
+ * Photos of a shared album saved to one's own gallery per request (FR-SHR-10): each is a server-side
+ * copy, and the API has 10 s, so the web app sends a bigger selection in batches of this size.
+ */
+export const MAX_PHOTOS_PER_SAVE_REQUEST = 10;
+
 /** URL / cookie lifetimes in seconds (§9). */
 export const UPLOAD_URL_TTL_SECONDS = 15 * 60;
 export const DOWNLOAD_URL_TTL_SECONDS = 5 * 60;
