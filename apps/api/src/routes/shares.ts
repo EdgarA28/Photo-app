@@ -19,7 +19,7 @@ import { validate } from "../lib/validation";
 import { shareStatus, type ShareRecord } from "../repo";
 import type { Deps } from ".";
 import { albumAccess, albumPhoto } from "./access";
-import { albumCovers, coverKey } from "./albums";
+import { albumCovers } from "./albums";
 import { coverThumbUrl, toSharedAlbum } from "./present";
 
 const albumParam = z.object({ albumId: idSchema });
@@ -246,7 +246,7 @@ export function shareRoutes(
             album,
             share,
             ownerNames.get(share.ownerId) ?? null,
-            await coverThumbUrl(covers.get(coverKey(album)), userId, media, now),
+            await coverThumbUrl(covers.get(album.albumId), userId, media, now),
           ),
         ),
       ),

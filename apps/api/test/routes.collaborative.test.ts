@@ -303,6 +303,32 @@ describe("viewer, download, cover and save for the owner", () => {
     });
   });
 
+  test("a former member's photo stops being the cover even if the clean-up didn't run", async () => {
+    const { alice, bob, albumId, bobPhoto } = await setup();
+    const dave = newUserId();
+    await repos.shares.create({
+      albumId,
+      ownerId: alice,
+      userId: dave,
+      status: "accepted",
+      sharedAt: nextIso(),
+    });
+    await add(bob, albumId, [bobPhoto.photoId]);
+    await api(alice, "PATCH", `/albums/${albumId}`, { coverPhotoId: bobPhoto.photoId });
+    await repos.shares.delete(albumId, bob); // no clean-up: the membership and cover stay
+
+    const own = albumListSchema.parse((await api(alice, "GET", "/albums")).body).items;
+    expect(own.find((a) => a.albumId === albumId)?.coverThumbUrl).toBeNull();
+    const forDave = sharedAlbumPageSchema.parse((await api(dave, "GET", "/shared-albums")).body);
+    expect(forDave.items.find((a) => a.albumId === albumId)?.coverThumbUrl).toBeNull();
+    // Nor can the leftover be picked as the cover again.
+    await api(alice, "PATCH", `/albums/${albumId}`, { coverPhotoId: null });
+    const again = await api(alice, "PATCH", `/albums/${albumId}`, {
+      coverPhotoId: bobPhoto.photoId,
+    });
+    expect(again.status).toBe(400);
+  });
+
   test("the owner saves a member's photo to her gallery; her own are already saved", async () => {
     const { alice, bob, albumId, alicePhoto, bobPhoto } = await setup();
     await add(bob, albumId, [bobPhoto.photoId]);

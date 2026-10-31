@@ -38,7 +38,7 @@ export function albumRoutes(app: Hono<AppEnv>, { repos, media }: Deps): void {
     const body: AlbumList = {
       items: await Promise.all(
         albums.map(async (album) =>
-          toAlbum(album, await coverThumbUrl(covers.get(coverKey(album)), userId, media, now)),
+          toAlbum(album, await coverThumbUrl(covers.get(album.albumId), userId, media, now)),
         ),
       ),
     };
@@ -64,7 +64,20 @@ export function albumRoutes(app: Hono<AppEnv>, { repos, media }: Deps): void {
     async (c) => {
       const userId = c.get("userId");
       const { albumId } = c.req.valid("param");
-      const result = await repos.albums.update(userId, albumId, c.req.valid("json"));
+      const changes = c.req.valid("json");
+      // A member's photo can become the cover only while they are a member (FR-SHR-11): a leftover
+      // of an interrupted leave counts as not in the album. Ownership first (no oracle).
+      if (typeof changes.coverPhotoId === "string") {
+        const own = await repos.albums.get(userId, albumId);
+        const membership = own && (await repos.albums.getMembership(albumId, changes.coverPhotoId));
+        if (own && membership && membership.ownerId !== userId) {
+          const active = await activeContributors(repos, own, [membership.ownerId]);
+          if (!active.has(membership.ownerId)) {
+            throw validationError("coverPhotoId: photo is not in this album");
+          }
+        }
+      }
+      const result = await repos.albums.update(userId, albumId, changes);
       if (result === "cover-not-in-album") {
         throw validationError("coverPhotoId: photo is not in this album");
       }
@@ -72,7 +85,7 @@ export function albumRoutes(app: Hono<AppEnv>, { repos, media }: Deps): void {
       const covers = await albumCovers(repos, [record]);
       const body: Album = toAlbum(
         record,
-        await coverThumbUrl(covers.get(coverKey(record)), userId, media, new Date()),
+        await coverThumbUrl(covers.get(record.albumId), userId, media, new Date()),
       );
       return c.json(body);
     },
@@ -203,23 +216,42 @@ export function albumRoutes(app: Hono<AppEnv>, { repos, media }: Deps): void {
  */
 const membersCantAdd = () => notFound("Album not found");
 
-/** Where an album's cover photo is: `ownerId/photoId` (a member's photo, FR-SHR-11, or the owner's). */
-export const coverKey = (album: AlbumRecord) =>
-  `${album.coverOwnerId ?? album.ownerId}/${album.coverPhotoId ?? ""}`;
-
-/** Cover photos of these albums by `coverKey`: one batch read per photo owner. */
+/**
+ * Cover photos of these albums, by album ID: one batch read per photo owner. A member's photo
+ * (FR-SHR-11) is a cover only while that member still holds an accepted share of the album, as
+ * for the photo lists (`activeContributors`): a leave whose clean-up was interrupted must not
+ * keep the former member's photo on show.
+ */
 export async function albumCovers(
   repos: Repositories,
   albums: AlbumRecord[],
 ): Promise<Map<string, PhotoRecord>> {
+  const withCover = await Promise.all(
+    albums.map(async (album) => {
+      if (!album.coverPhotoId) return null;
+      const owner = album.coverOwnerId ?? album.ownerId;
+      if (
+        owner !== album.ownerId &&
+        !(await activeContributors(repos, album, [owner])).has(owner)
+      ) {
+        return null;
+      }
+      return { album, owner, photoId: album.coverPhotoId };
+    }),
+  );
+  const covers = withCover.filter((c) => c !== null);
   const idsByOwner = new Map<string, string[]>();
-  for (const album of albums) {
-    if (!album.coverPhotoId) continue;
-    const owner = album.coverOwnerId ?? album.ownerId;
-    idsByOwner.set(owner, [...(idsByOwner.get(owner) ?? []), album.coverPhotoId]);
+  for (const { owner, photoId } of covers) {
+    idsByOwner.set(owner, [...(idsByOwner.get(owner) ?? []), photoId]);
   }
   const photos = await Promise.all(
     [...idsByOwner].map(([ownerId, ids]) => repos.photos.getMany(ownerId, ids)),
   );
-  return new Map(photos.flat().map((photo) => [`${photo.userId}/${photo.photoId}`, photo]));
+  const byKey = new Map(photos.flat().map((photo) => [`${photo.userId}/${photo.photoId}`, photo]));
+  return new Map(
+    covers.flatMap(({ album, owner, photoId }) => {
+      const photo = byKey.get(`${owner}/${photoId}`);
+      return photo ? [[album.albumId, photo] as const] : [];
+    }),
+  );
 }
