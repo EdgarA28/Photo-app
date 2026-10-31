@@ -45,6 +45,15 @@ export async function saveSharedPhotos(
       ...(await Promise.all(
         batch.map(async ({ photoId, photo }) => {
           if (!photo) return result(photoId, "unavailable");
+          // My own photo, e.g. one I added to a collaborative album (FR-SHR-11).
+          if (photo.userId === userId) {
+            return {
+              photoId,
+              result: "already-saved" as const,
+              savedPhotoId: photo.photoId,
+              inTrash: photo.trashedAt !== undefined,
+            };
+          }
           return saveOne(deps.repos, deps.storage, userId, photo, quotaBytes);
         }),
       )),

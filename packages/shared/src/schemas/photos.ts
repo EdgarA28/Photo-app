@@ -5,7 +5,7 @@ import {
   MAX_PHOTOS_PER_SAVE_REQUEST,
   MAX_UPLOAD_BYTES,
 } from "../constants";
-import { idSchema, isoDateTimeSchema, pageQuerySchema, pageSchema } from "./common";
+import { idSchema, isoDateTimeSchema, pageQuerySchema, pageSchema, userIdSchema } from "./common";
 import { photoPlaceSchema } from "./places";
 
 export const photoStatusSchema = z.enum(["pending", "ready", "failed"]);
@@ -39,6 +39,13 @@ export const photoSchema = z.object({
    */
   trashedAt: isoDateTimeSchema.nullable().default(null),
   purgeAt: isoDateTimeSchema.nullable().default(null),
+  /**
+   * Whose photo it is: in a collaborative album (FR-SHR-11) photos of several people show
+   * together. Missing (an API from before it) reads as null.
+   */
+  ownerId: userIdSchema.nullable().default(null),
+  /** The owner's current username; set in album photo lists only (who added it), else null. */
+  ownerUsername: z.string().nullable().default(null),
 });
 export type Photo = z.infer<typeof photoSchema>;
 

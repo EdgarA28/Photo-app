@@ -63,8 +63,9 @@ export function useUpdateAlbum(albumId: string) {
   const api = useApi();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (changes: { name: string } | { coverPhotoId: string | null }) =>
-      api.albums.update(albumId, changes),
+    mutationFn: (
+      changes: { name: string } | { coverPhotoId: string | null } | { membersCanAdd: boolean },
+    ) => api.albums.update(albumId, changes),
     // The answer is the updated album: show it at once, then confirm with the list.
     onSuccess: (album: Album) => {
       queryClient.setQueryData<{ items: Album[] }>(["albums"], (data) =>
@@ -96,8 +97,9 @@ export function useDeleteAlbum(
 }
 
 /**
- * Adds photos to an album (FR-ALB-2), in requests of at most 100 (the API's limit). The API is
- * idempotent, so photos already in the album and a repeated batch after a failure are fine.
+ * Adds photos to an album (FR-ALB-2), in requests of at most 100 (the API's limit): my own album,
+ * or a collaborative one shared with me (FR-SHR-11). The API is idempotent, so photos already in
+ * the album and a repeated batch after a failure are fine.
  */
 export function useAddToAlbum() {
   const api = useApi();
@@ -111,6 +113,8 @@ export function useAddToAlbum() {
     onSettled: (_data, _error, { albumId }) =>
       Promise.all([
         queryClient.invalidateQueries({ queryKey: ["albums"] }),
+        // A collaborative album shared with me: its photo count is in this list (FR-SHR-11).
+        queryClient.invalidateQueries({ queryKey: ["shared-albums"] }),
         queryClient.invalidateQueries({ queryKey: albumPhotosKey(albumId) }),
       ]),
   });
@@ -140,6 +144,8 @@ export function useRemoveFromAlbum(
     onSettled: () =>
       Promise.all([
         queryClient.invalidateQueries({ queryKey: ["albums"] }),
+        // A collaborative album shared with me: its photo count is in this list (FR-SHR-11).
+        queryClient.invalidateQueries({ queryKey: ["shared-albums"] }),
         queryClient.invalidateQueries({ queryKey: albumPhotosKey(albumId) }),
       ]),
   });

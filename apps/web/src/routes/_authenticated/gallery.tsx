@@ -1,5 +1,5 @@
 import { photoSortSchema, TRASH_RETENTION_DAYS, type PhotoSort } from "@photo-app/shared";
-import { useQuery, useSuspenseInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useSuspenseInfiniteQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useRouter, type ErrorComponentProps } from "@tanstack/react-router";
 import { Link2, MapPin, X } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
@@ -31,6 +31,7 @@ import { SelectionBar } from "@/gallery/SelectionBar";
 import { useSelection } from "@/gallery/useSelection";
 import { ShareLinkDialog } from "@/links/ShareLinkDialog";
 import { albumsQuery, useAddToAlbum } from "@/queries/albums";
+import { sharedAlbumsQuery } from "@/queries/shares";
 import { galleryQuery, useDeletePhotos } from "@/queries/photos";
 import { placesQuery } from "@/queries/places";
 import { GalleryUploads } from "@/upload/GalleryUploads";
@@ -328,7 +329,15 @@ function DeleteSelected({
 function AddToHeader({ albumId }: { albumId: string }) {
   const { api } = Route.useRouteContext();
   const { data: albums } = useQuery(albumsQuery(api));
-  const name = albums?.items.find((a) => a.albumId === albumId)?.name;
+  const own = albums?.items.find((a) => a.albumId === albumId);
+  // A collaborative album shared with me (FR-SHR-11): usually cached from its page.
+  const { data: shared } = useInfiniteQuery({
+    ...sharedAlbumsQuery(api),
+    enabled: !!albums && !own,
+  });
+  const name =
+    own?.name ??
+    shared?.pages.flatMap((page) => page.items).find((a) => a.albumId === albumId)?.name;
   return (
     <header className="space-y-1">
       <h1 className="text-2xl font-semibold tracking-tight">

@@ -160,14 +160,16 @@ export function useLeaveSharedAlbum({
  * "Save to my gallery" (FR-SHR-10): copies photos of an album shared with me into my library, in
  * batches the API accepts, one after another. Resolves to every photo's result.
  */
-export function useSaveSharedPhotos(albumId: string) {
+export function useSaveSharedPhotos(albumId: string, { asOwner = false } = {}) {
   const api = useApi();
   const queryClient = useQueryClient();
+  // The owner of a collaborative album saves members' photos through their own album (FR-SHR-11).
+  const save = asOwner ? api.albums.save : api.sharedAlbums.save;
   return useMutation({
     mutationFn: async (photoIds: string[]) => {
       const items: SaveSharedPhotosResponse["items"] = [];
       for (const batch of batches(photoIds, MAX_PHOTOS_PER_SAVE_REQUEST)) {
-        items.push(...(await api.sharedAlbums.save(albumId, batch)).items);
+        items.push(...(await save(albumId, batch)).items);
       }
       return items;
     },
