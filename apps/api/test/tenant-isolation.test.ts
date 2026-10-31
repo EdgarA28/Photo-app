@@ -560,6 +560,55 @@ const cases: Case[] = [
     foreign: () => ({ as: w.alice, method: "DELETE", path: `/shared-albums/${w.albumA}` }),
     missing: () => ({ as: w.alice, method: "DELETE", path: `/shared-albums/${id()}` }),
   },
+  // ---- saving shared photos (FR-SHR-10): only through an accepted share addressed to the caller ----
+  {
+    route: "POST /api/shared-albums/:albumId/save",
+    name: "stranger saves photos of an album shared with someone else",
+    foreign: () => ({
+      as: w.mallory,
+      method: "POST",
+      path: `/shared-albums/${w.albumA}/save`,
+      body: { photoIds: [w.p1] },
+    }),
+    missing: () => ({
+      as: w.mallory,
+      method: "POST",
+      path: `/shared-albums/${id()}/save`,
+      body: { photoIds: [w.p1] },
+    }),
+  },
+  {
+    route: "POST /api/shared-albums/:albumId/save",
+    name: "recipient saves from an album she is only invited to",
+    foreign: () => ({
+      as: w.bob,
+      method: "POST",
+      path: `/shared-albums/${w.albumC}/save`,
+      body: { photoIds: [w.p2] },
+    }),
+    missing: () => ({
+      as: w.bob,
+      method: "POST",
+      path: `/shared-albums/${id()}/save`,
+      body: { photoIds: [w.p2] },
+    }),
+  },
+  {
+    route: "POST /api/shared-albums/:albumId/save",
+    name: "owner saves from her own album as if shared with her",
+    foreign: () => ({
+      as: w.alice,
+      method: "POST",
+      path: `/shared-albums/${w.albumA}/save`,
+      body: { photoIds: [w.p1] },
+    }),
+    missing: () => ({
+      as: w.alice,
+      method: "POST",
+      path: `/shared-albums/${id()}/save`,
+      body: { photoIds: [w.p1] },
+    }),
+  },
 ];
 
 /**

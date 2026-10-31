@@ -2,9 +2,11 @@ import {
   createShareRequestSchema,
   idSchema,
   pageQuerySchema,
+  saveSharedPhotosRequestSchema,
   userIdSchema,
   type AlbumShare,
   type AlbumShareList,
+  type SaveSharedPhotosResponse,
   type SharedAlbumPage,
   type ShareInvitationPage,
 } from "@photo-app/shared";
@@ -12,8 +14,10 @@ import type { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../env";
 import { AppError, notFound, orNotFound, validationError } from "../lib/errors";
+import { saveSharedPhotos } from "../lib/save";
 import { validate } from "../lib/validation";
 import {
+  isAccepted,
   shareStatus,
   type AlbumRecord,
   type PhotoRecord,
@@ -21,7 +25,7 @@ import {
   type ShareRecord,
 } from "../repo";
 import type { Deps } from ".";
-import { isVisibleToRecipient } from "./access";
+import { isVisibleToRecipient, sharedPhoto } from "./access";
 import { toSharedAlbum } from "./present";
 
 const albumParam = z.object({ albumId: idSchema });
@@ -43,7 +47,10 @@ const toShare = (share: ShareRecord, usernames: Map<string, string>): AlbumShare
  * A new share is an invitation the recipient accepts or declines (FR-SHR-6); the recipient's routes
  * (`/share-invitations`, `/shared-albums/{id}`) only ever touch the share addressed to the caller.
  */
-export function shareRoutes(app: Hono<AppEnv>, { repos, users, media }: Deps): void {
+export function shareRoutes(
+  app: Hono<AppEnv>,
+  { repos, users, media, storage, config }: Deps,
+): void {
   /** Who the album is shared with, oldest share first. */
   app.get("/albums/:albumId/shares", validate("param", albumParam), async (c) => {
     const { albumId } = c.req.valid("param");
@@ -168,6 +175,37 @@ export function shareRoutes(app: Hono<AppEnv>, { repos, users, media }: Deps): v
     }
     return c.body(null, 204);
   });
+
+  /**
+   * "Save to my gallery" (FR-SHR-10): copies these photos of an album shared with me (accepted)
+   * into my own library, one result per photo (`lib/save.ts`). Photos not in the album, not
+   * processed or gone are `unavailable`, so the answer says nothing more about them (NFR-SEC-2).
+   */
+  app.post(
+    "/shared-albums/:albumId/save",
+    validate("param", albumParam),
+    validate("json", saveSharedPhotosRequestSchema),
+    async (c) => {
+      const userId = c.get("userId");
+      const { albumId } = c.req.valid("param");
+      const share = await repos.shares.get(albumId, userId);
+      if (!share || !isAccepted(share)) throw notFound("Shared album not found");
+      const photoIds = [...new Set(c.req.valid("json").photoIds)];
+      const sources = await Promise.all(
+        photoIds.map(async (photoId) => ({
+          photoId,
+          photo: await sharedPhoto(repos, userId, albumId, photoId),
+        })),
+      );
+      const items = await saveSharedPhotos(
+        { repos, storage, defaultQuotaBytes: config.defaultQuotaBytes },
+        userId,
+        sources,
+      );
+      const body: SaveSharedPhotosResponse = { items };
+      return c.json(body);
+    },
+  );
 
   /** Albums other users shared with the caller (FR-SHR-3), paginated. */
   app.get("/shared-albums", validate("query", pageQuerySchema), async (c) => {

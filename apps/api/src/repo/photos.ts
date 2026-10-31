@@ -103,78 +103,108 @@ export function photosRepo(db: Db) {
      */
     /**
      * With `uploadId`, also records which photo that client upload created (kept 7 days, DynamoDB
-     * TTL): "claimed" if another request with it got there first.
+     * TTL, or for good with `keepClaim`: a saved shared photo, FR-SHR-10): "claimed" if another
+     * request with it got there first.
+     *
+     * Parallel creates clash on the Usage item (`TransactionConflict`, nothing applied): retried
+     * after a short random pause, like `delete`.
      */
     async createPending(
       photo: NewPhoto,
-      { quotaBytes, uploadId }: { quotaBytes: number; uploadId?: string | undefined },
+      {
+        quotaBytes,
+        uploadId,
+        keepClaim = false,
+      }: { quotaBytes: number; uploadId?: string | undefined; keepClaim?: boolean },
     ): Promise<PhotoRecord | "quota-exceeded" | "claimed"> {
       if (photo.sizeBytes > quotaBytes) return "quota-exceeded";
       const record: PhotoRecord = { ...photo, status: "pending", takenAt: photo.uploadedAt };
-      try {
-        await db.client.send(
-          new TransactWriteCommand({
-            TransactItems: [
-              {
-                Put: {
-                  TableName: db.table,
-                  Item: {
-                    ...photoKey(photo.userId, photo.photoId),
-                    GSI1PK: userPk(photo.userId),
-                    GSI1SK: takenSk(record.takenAt, photo.photoId),
-                    entity: "photo",
-                    ...record,
-                  },
-                  ConditionExpression: "attribute_not_exists(PK)",
-                },
-              },
-              {
-                Update: {
-                  TableName: db.table,
-                  Key: usageKey(photo.userId),
-                  UpdateExpression: "ADD bytesReserved :size",
-                  // Conditions can't add, so the limit is precomputed: reserved + size <= quota.
-                  ConditionExpression:
-                    "attribute_not_exists(bytesReserved) OR bytesReserved <= :max",
-                  ExpressionAttributeValues: {
-                    ":size": photo.sizeBytes,
-                    ":max": quotaBytes - photo.sizeBytes,
-                  },
-                },
-              },
-              ...(uploadId
-                ? [
-                    {
-                      Put: {
-                        TableName: db.table,
-                        Item: {
-                          ...uploadClaimKey(photo.userId, uploadId),
-                          photoId: photo.photoId,
-                          ttl: Math.ceil(Date.now() / 1000) + 7 * 86_400,
-                        },
-                        ConditionExpression: "attribute_not_exists(PK)",
-                      },
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await db.client.send(
+            new TransactWriteCommand({
+              TransactItems: [
+                {
+                  Put: {
+                    TableName: db.table,
+                    Item: {
+                      ...photoKey(photo.userId, photo.photoId),
+                      GSI1PK: userPk(photo.userId),
+                      GSI1SK: takenSk(record.takenAt, photo.photoId),
+                      entity: "photo",
+                      ...record,
                     },
-                  ]
-                : []),
-            ],
-          }),
-        );
-      } catch (err) {
-        if (conditionFailedAt(err, 1)) return "quota-exceeded";
-        if (conditionFailedAt(err, 2)) return "claimed";
-        throw err;
+                    ConditionExpression: "attribute_not_exists(PK)",
+                  },
+                },
+                {
+                  Update: {
+                    TableName: db.table,
+                    Key: usageKey(photo.userId),
+                    UpdateExpression: "ADD bytesReserved :size",
+                    // Conditions can't add, so the limit is precomputed: reserved + size <= quota.
+                    ConditionExpression:
+                      "attribute_not_exists(bytesReserved) OR bytesReserved <= :max",
+                    ExpressionAttributeValues: {
+                      ":size": photo.sizeBytes,
+                      ":max": quotaBytes - photo.sizeBytes,
+                    },
+                  },
+                },
+                ...(uploadId
+                  ? [
+                      {
+                        Put: {
+                          TableName: db.table,
+                          Item: {
+                            ...uploadClaimKey(photo.userId, uploadId),
+                            photoId: photo.photoId,
+                            ...(!keepClaim && { ttl: Math.ceil(Date.now() / 1000) + 7 * 86_400 }),
+                          },
+                          ConditionExpression: "attribute_not_exists(PK)",
+                        },
+                      },
+                    ]
+                  : []),
+              ],
+            }),
+          );
+          return record;
+        } catch (err) {
+          if (conditionFailedAt(err, 1)) return "quota-exceeded";
+          if (conditionFailedAt(err, 2)) return "claimed";
+          if (!isTransactionConflict(err) || attempt >= 5) throw err;
+          await new Promise((resolve) => setTimeout(resolve, Math.random() * 50 * 2 ** attempt));
+        }
       }
-      return record;
     },
 
     /** The photo an earlier request with this client `uploadId` created, if it still exists. */
     async claimed(userId: string, uploadId: string): Promise<PhotoRecord | null> {
-      const claim = await db.client.send(
-        new GetCommand({ TableName: db.table, Key: uploadClaimKey(userId, uploadId) }),
-      );
-      const photoId: unknown = claim.Item?.photoId;
-      return typeof photoId === "string" ? getPhoto(db, userId, photoId) : null;
+      return (await claimOf(db, userId, uploadId))?.photo ?? null;
+    },
+
+    /** The claim itself: which photo it names, and that photo (null once it is deleted). */
+    claim: (userId: string, uploadId: string) => claimOf(db, userId, uploadId),
+
+    /**
+     * Removes a claim that still names `photoId`, a photo that no longer exists, so the next
+     * create can claim the ID again (FR-SHR-10: a deleted saved copy can be saved anew).
+     */
+    async releaseClaim(userId: string, uploadId: string, photoId: string): Promise<void> {
+      try {
+        await db.client.send(
+          new DeleteCommand({
+            TableName: db.table,
+            Key: uploadClaimKey(userId, uploadId),
+            ConditionExpression: "photoId = :photoId",
+            ExpressionAttributeValues: { ":photoId": photoId },
+          }),
+        );
+      } catch (err) {
+        // Already released, or claimed again in the meantime.
+        if (!isConditionalCheckFailed(err)) throw err;
+      }
     },
 
     get: (userId: string, photoId: string) => getPhoto(db, userId, photoId),
@@ -526,6 +556,24 @@ function placeMoves(
       },
     },
   ]);
+}
+
+async function claimOf(
+  db: Db,
+  userId: string,
+  uploadId: string,
+): Promise<{ photoId: string; photo: PhotoRecord | null } | null> {
+  // Consistent: a "claimed" answer from createPending must find the winner's claim.
+  const claim = await db.client.send(
+    new GetCommand({
+      TableName: db.table,
+      Key: uploadClaimKey(userId, uploadId),
+      ConsistentRead: true,
+    }),
+  );
+  const photoId: unknown = claim.Item?.photoId;
+  if (typeof photoId !== "string") return null;
+  return { photoId, photo: await getPhoto(db, userId, photoId, true) };
 }
 
 async function getPhoto(

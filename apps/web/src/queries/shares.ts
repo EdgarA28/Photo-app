@@ -1,9 +1,11 @@
-import type {
-  AlbumShare,
-  AlbumShareList,
-  CreateShareRequest,
-  ShareInvitationPage,
-  SharedAlbumPage,
+import {
+  MAX_PHOTOS_PER_SAVE_REQUEST,
+  type AlbumShare,
+  type AlbumShareList,
+  type CreateShareRequest,
+  type SaveSharedPhotosResponse,
+  type ShareInvitationPage,
+  type SharedAlbumPage,
 } from "@photo-app/shared";
 import {
   infiniteQueryOptions,
@@ -15,6 +17,7 @@ import {
 } from "@tanstack/react-query";
 import { useRouteContext } from "@tanstack/react-router";
 import type { Api } from "@/api/api";
+import { batches } from "./albums";
 import { signedUrlRefreshInterval } from "./signedUrls";
 
 /** GET /albums/{id}/shares: who an own album is shared with (FR-SHR-1/2, owner only). */
@@ -151,4 +154,59 @@ export function useLeaveSharedAlbum({
       ]);
     },
   });
+}
+
+/**
+ * "Save to my gallery" (FR-SHR-10): copies photos of an album shared with me into my library, in
+ * batches the API accepts, one after another. Resolves to every photo's result.
+ */
+export function useSaveSharedPhotos(albumId: string) {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (photoIds: string[]) => {
+      const items: SaveSharedPhotosResponse["items"] = [];
+      for (const batch of batches(photoIds, MAX_PHOTOS_PER_SAVE_REQUEST)) {
+        items.push(...(await api.sharedAlbums.save(albumId, batch)).items);
+      }
+      return items;
+    },
+    // New photos in my gallery (processing tiles first), and the storage they reserve.
+    onSettled: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["photos"] }),
+        queryClient.invalidateQueries({ queryKey: ["me"] }),
+      ]),
+  });
+}
+
+/** What the save did, in one sentence or two (FR-SHR-10). */
+export function saveSummary(items: SaveSharedPhotosResponse["items"]): string {
+  const count = (result: string) => items.filter((item) => item.result === result).length;
+  const saved = count("saved");
+  const already = items.filter((item) => item.result === "already-saved");
+  const inTrash = already.filter((item) => item.inTrash).length;
+  const full = count("quota-exceeded");
+  const unavailable = count("unavailable");
+  const photos = (n: number) => (n === 1 ? "1 photo" : `${n} photos`);
+  const was = (n: number) => (n === 1 ? "was" : "were");
+
+  if (items.length === 1) {
+    if (saved) return "Saved to your gallery.";
+    if (inTrash) return "You saved this photo before. It's in your trash: restore it from there.";
+    if (already.length) return "Already in your gallery.";
+    if (full) return "Not saved: your storage is full.";
+    return "This photo is no longer available.";
+  }
+  const parts: string[] = [];
+  if (saved) parts.push(`Saved ${photos(saved)} to your gallery.`);
+  if (already.length) {
+    parts.push(
+      `${photos(already.length)} ${was(already.length)} already saved` +
+        (inTrash ? ` (${inTrash} in your trash).` : "."),
+    );
+  }
+  if (full) parts.push(`${photos(full)} didn't fit in your storage.`);
+  if (unavailable) parts.push(`${photos(unavailable)} ${was(unavailable)} no longer available.`);
+  return parts.join(" ");
 }
