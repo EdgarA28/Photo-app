@@ -87,7 +87,8 @@ export async function purgeExpired(
   return { purged, failed };
 }
 
-async function inBatches<T, R>(
+/** Runs `fn` over `items`, `CONCURRENCY` at a time; every result, failures included. */
+export async function inBatches<T, R>(
   items: T[],
   fn: (item: T) => Promise<R>,
 ): Promise<PromiseSettledResult<R>[]> {

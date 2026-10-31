@@ -244,4 +244,14 @@ run "trash_purge" {
     condition     = toset(data.aws_iam_policy_document.purge.statement[1].actions) == toset(["s3:DeleteObject"]) && length(data.aws_iam_policy_document.purge.statement[1].resources) == 3
     error_message = "Purge deletes only photo objects (original, thumb, preview)."
   }
+
+  assert {
+    condition     = toset(data.aws_iam_policy_document.purge.statement[2].actions) == toset(["s3:GetObject"]) && toset(data.aws_iam_policy_document.purge.statement[2].resources) == toset(["arn:aws:s3:::photo-app-photos-test-123456789012/users/*/originals/*"])
+    error_message = "The stale-pending sweep reads (heads) originals only (6.11)."
+  }
+
+  assert {
+    condition     = toset(data.aws_iam_policy_document.purge.statement[3].actions) == toset(["s3:ListBucket"]) && toset(data.aws_iam_policy_document.purge.statement[3].resources) == toset(["arn:aws:s3:::photo-app-photos-test-123456789012"])
+    error_message = "ListBucket on the photo bucket, so a missing original is a 404, not a 403 (6.11)."
+  }
 }
