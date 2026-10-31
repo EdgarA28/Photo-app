@@ -5,6 +5,7 @@
 #   Album share       PK ALBUM#{albumId} SK SHARE#{userId}    GSI1 SHAREDWITH#{userId} / ALBUM#{albumId}
 #   Usage             PK USER#{userId}   SK USAGE
 #   Photo link        PK LINK#{token}    SK LINK              (expires: `ttl`, FR-SHR-8)
+#   Pending marker    PK PENDING         SK UPLOADED#{uploadedAt}#{userId}#{photoId}   (6.11, `ttl` 30 days)
 
 resource "aws_dynamodb_table" "main" {
   name         = var.table_name

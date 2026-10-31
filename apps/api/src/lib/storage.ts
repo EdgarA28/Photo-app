@@ -2,6 +2,8 @@ import {
   CopyObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
+  HeadObjectCommand,
+  NotFound,
   type S3Client,
 } from "@aws-sdk/client-s3";
 import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
@@ -42,6 +44,11 @@ export interface PhotoStorage {
    * saved to the recipient's gallery. The new object starts the thumbnail Lambda like an upload.
    */
   copyObject(from: string, to: string): Promise<void>;
+  /**
+   * Whether the object is in the bucket (6.11: did an abandoned upload's original ever arrive?).
+   * Needs `s3:ListBucket` besides `s3:GetObject`: without it S3 answers 403 for a missing key.
+   */
+  exists(key: string): Promise<boolean>;
 }
 
 export function s3PhotoStorage(client: S3Client, bucket: string): PhotoStorage {
@@ -105,6 +112,16 @@ export function s3PhotoStorage(client: S3Client, bucket: string): PhotoStorage {
           StorageClass: "INTELLIGENT_TIERING",
         }),
       );
+    },
+
+    async exists(key) {
+      try {
+        await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+        return true;
+      } catch (err) {
+        if (err instanceof NotFound) return false;
+        throw err;
+      }
     },
   };
 }

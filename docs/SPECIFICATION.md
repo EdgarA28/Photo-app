@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.26 |
+| **Version** | 0.27 |
 | **Date** | 2026-10-31 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -405,6 +405,7 @@ Initial design; refine during implementation.
 | Album share | `ALBUM#{albumId}` | `SHARE#{userId}` | `INVITED#{userId}` while pending, `SHAREDWITH#{userId}` once accepted | `ALBUM#{albumId}` | ownerId, email (shares by email only), status (`pending`/`accepted`; absent = accepted, shares from before v0.17), sharedAt, acceptedAt |
 | Usage | `USER#{userId}` | `USAGE` | — | — | bytesUsed, photoCount, quotaBytes |
 | Upload claim | `USER#{userId}` | `UPLOAD#{uploadId}` | — | — | photoId, ttl (7 days). Imports use `uploadId = gp-{importId}-{mediaItemId}`. A saved shared photo (FR-SHR-10) uses `uploadId = shared-{photoId}` (the owner's photo ID) **without ttl**: it remembers the copy; released once the copy is deleted for good |
+| Pending marker | `PENDING` | `UPLOADED#{uploadedAt}#{userId}#{photoId}` | — | — | userId, photoId, uploadedAt, ttl (30 days). Written with every `pending` photo; the daily sweep (§8.2 access patterns) removes it once the photo is no longer pending, or deletes the photo if its upload never arrived |
 | Import | `USER#{userId}` | `IMPORT#{importId}` | — | — | source (`google-photos`), status (`picking`/`listing`/`copying`/`done`/`cancelled`/`expired`), sessionId, pickerUri, pollIntervalSec, lastPolledAt, accessToken (removed when the import ends), tokenExpiresAt, total, done, failed, skipped, failedReasons (`{code: count}`), createdAt, ttl (7 days) |
 | Profile | `USER#{userId}` | `PROFILE` | — | — | username, usernameChangedAt |
 | Place (list entry) | `USER#{userId}` | `PLACE#{placeId}` | — | — | kind (`city`/`region`/`country`), name, context, photoCount, trashedCount (its photos in the trash, so the entry survives for a restore) |
@@ -424,6 +425,7 @@ Access patterns:
 | My invitations | GSI1: `GSI1PK = INVITED#{id}` |
 | My trash | `PK = USER#{id}, SK begins_with PHOTO#`, filter `attribute_exists(trashedAt)` (bounded by the quota) |
 | Trashed photos due for the purge (all users) | GSI1: `GSI1PK = TRASH`, `GSI1SK` between `PURGE#` and `PURGE#{now}~` |
+| Abandoned uploads (all users) | Table: `PK = PENDING`, `SK` between `UPLOADED#` and `UPLOADED#{now − 24 h}`; each photo is read, and deleted only if still `pending` and its original isn't in S3 (releases its `bytesReserved`) |
 | My places (search) | `PK = USER#{id}, SK begins_with PLACE#` |
 | Photos at a place (by date taken) | GSI1: `GSI1PK = PLACE#{id}#{placeId}`, descending (or ascending), paginated |
 | User by username | `PK = USERNAME#{username}, SK = USERNAME` (ignored while `heldUntil` is set) |
@@ -837,6 +839,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.27 | 2026-10-31 | Stale-pending sweep (6.11): Pending marker item and the "abandoned uploads" access pattern (§8.2); run by the daily purge |
 | 0.26 | 2026-10-31 | Save shared photos to my gallery: FR-SHR-10 (FR-SHR-4 note), `POST /shared-albums/{albumId}/save` (§9), permanent upload claim `shared-{photoId}` (§8.2) |
 | 0.25 | 2026-10-30 | B-11: optional SQS queue in front of the thumbnail Lambda (§17) |
 | 0.24 | 2026-10-30 | Import from Google Photos (planned, 13.5): FR-IMP-1–6 (§6.9), NFR-SEC-10, flow (§5.2), Import item (§8.2), `/imports` routes (§9), import worker + date fallback (§10, §10.1), Google Photos access (§11.5), callback route (§12.1), location note (§12.6), `api` module (§13.1), scope (§2), B-10 |

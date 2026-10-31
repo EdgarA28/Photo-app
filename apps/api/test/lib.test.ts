@@ -1,6 +1,6 @@
 /** Config loading, the Cognito user directory (5.5) and the photo bucket (5.6, 5.8, 5.9). */
 import type { CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
-import { DeleteObjectsCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectsCommand, HeadObjectCommand, NotFound, S3Client } from "@aws-sdk/client-s3";
 import { DOWNLOAD_URL_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS } from "@photo-app/shared";
 import { describe, expect, test, vi } from "vitest";
 import { loadConfig } from "../src/lib/config";
@@ -233,6 +233,23 @@ describe("s3PhotoStorage", () => {
     send.mockClear();
     await storage.deleteObjects([]);
     expect(send).not.toHaveBeenCalled();
+    send.mockRestore();
+  });
+
+  test("exists: HeadObject; 404 → false, other errors are thrown (6.11)", async () => {
+    const send = vi.spyOn(client, "send");
+    send.mockResolvedValueOnce({} as never);
+    expect(await storage.exists(key)).toBe(true);
+    const command = send.mock.calls[0]![0] as HeadObjectCommand;
+    expect(command).toBeInstanceOf(HeadObjectCommand);
+    expect(command.input).toEqual({ Bucket: "photo-bucket", Key: key });
+
+    send.mockRejectedValueOnce(new NotFound({ message: "Not Found", $metadata: {} }) as never);
+    expect(await storage.exists(key)).toBe(false);
+
+    // A 403 (e.g. missing s3:ListBucket) must not read as "missing": the photo would be deleted.
+    send.mockRejectedValueOnce(Object.assign(new Error("Forbidden"), { name: "403" }) as never);
+    await expect(storage.exists(key)).rejects.toThrow("Forbidden");
     send.mockRestore();
   });
 });

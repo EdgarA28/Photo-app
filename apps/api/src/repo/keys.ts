@@ -35,6 +35,18 @@ export const TRASH_PK = "TRASH";
 /** GSI1SK of a trashed photo: by purge date, so everything due is one key range. */
 export const purgeSk = (purgeAt: string, userId: string, photoId: string) =>
   `PURGE#${purgeAt}#${userId}#${photoId}`;
+/**
+ * Partition of the pending-upload markers, all users together (6.11): every `pending` photo gets
+ * one, so the daily sweep finds abandoned uploads with one query instead of a scan.
+ */
+export const PENDING_PK = "PENDING";
+/** Marker sort key: by upload start, so everything older than the cut-off is one key range. */
+export const pendingSk = (uploadedAt: string, userId: string, photoId: string) =>
+  `UPLOADED#${uploadedAt}#${userId}#${photoId}`;
+export const pendingMarkerKey = (uploadedAt: string, userId: string, photoId: string) => ({
+  PK: PENDING_PK,
+  SK: pendingSk(uploadedAt, userId, photoId),
+});
 /** A user's photos taken at one place (13.2c): table PK and GSI1PK of its place photo items. */
 export const placePhotosPk = (userId: string, placeId: string) => `PLACE#${userId}#${placeId}`;
 

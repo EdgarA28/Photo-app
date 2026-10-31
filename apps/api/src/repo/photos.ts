@@ -19,6 +19,8 @@ import {
 import {
   GSI1,
   GSI1_KEY_ATTRIBUTES,
+  PENDING_PK,
+  pendingMarkerKey,
   photoKey,
   placeKey,
   PHOTO_SK_PREFIX,
@@ -76,6 +78,19 @@ export interface ExpiredPhoto {
   photoId: string;
 }
 
+/** A pending-upload marker (6.11): which photo, and when its upload was started. */
+export interface PendingMarker {
+  userId: string;
+  photoId: string;
+  uploadedAt: string;
+}
+
+/**
+ * Markers outlive their check by this much at most (DynamoDB TTL), in case a sweep never gets to
+ * them; the sweep normally removes each one the first day it is older than the cut-off.
+ */
+const PENDING_MARKER_TTL_DAYS = 30;
+
 export type LocatedPhoto = Pick<PhotoRecord, "photoId" | "takenAt" | "placeIds"> & {
   latitude: number;
   longitude: number;
@@ -108,6 +123,9 @@ export function photosRepo(db: Db) {
      *
      * Parallel creates clash on the Usage item (`TransactionConflict`, nothing applied): retried
      * after a short random pause, like `delete`.
+     *
+     * Also writes the photo's pending marker (6.11, last in the transaction so the condition
+     * indexes above stay put), by which the daily sweep finds uploads that never arrived.
      */
     async createPending(
       photo: NewPhoto,
@@ -166,6 +184,21 @@ export function photosRepo(db: Db) {
                       },
                     ]
                   : []),
+                {
+                  Put: {
+                    TableName: db.table,
+                    Item: {
+                      ...pendingMarkerKey(photo.uploadedAt, photo.userId, photo.photoId),
+                      entity: "pendingMarker",
+                      userId: photo.userId,
+                      photoId: photo.photoId,
+                      uploadedAt: photo.uploadedAt,
+                      ttl:
+                        Math.ceil(Date.parse(photo.uploadedAt) / 1000) +
+                        PENDING_MARKER_TTL_DAYS * 86_400,
+                    },
+                  },
+                },
               ],
             }),
           );
@@ -489,6 +522,38 @@ export function photosRepo(db: Db) {
         .sort(
           (a, b) => b.trashedAt!.localeCompare(a.trashedAt!) || b.photoId.localeCompare(a.photoId),
         );
+    },
+
+    /**
+     * Pending markers of every user whose upload started before `before`, oldest first (6.11).
+     * The photo itself may be ready, failed or deleted by now: the sweep reads it.
+     */
+    async listPendingMarkers(before: Date): Promise<PendingMarker[]> {
+      const items = await queryAll(db, {
+        KeyConditionExpression: "PK = :pk AND SK BETWEEN :from AND :until",
+        ProjectionExpression: "userId, photoId, uploadedAt",
+        ExpressionAttributeValues: {
+          ":pk": PENDING_PK,
+          ":from": "UPLOADED#",
+          // Strictly before: a marker at exactly `before` continues with "#…", so it sorts after.
+          ":until": `UPLOADED#${before.toISOString()}`,
+        },
+      });
+      return items.map((item) => ({
+        userId: item.userId as string,
+        photoId: item.photoId as string,
+        uploadedAt: item.uploadedAt as string,
+      }));
+    },
+
+    /** Removes a pending marker once the sweep has dealt with its photo (6.11). */
+    async deletePendingMarker({ uploadedAt, userId, photoId }: PendingMarker): Promise<void> {
+      await db.client.send(
+        new DeleteCommand({
+          TableName: db.table,
+          Key: pendingMarkerKey(uploadedAt, userId, photoId),
+        }),
+      );
     },
 
     /** Trashed photos of every user whose `purgeAt` has passed, oldest first (daily purge). */

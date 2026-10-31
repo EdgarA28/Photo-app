@@ -48,7 +48,7 @@
 | Infra modules: database, storage | `infra/modules/{database,storage}` | ✅ (dev) | Offline `tofu test` suites (7 runs) |
 | Infra module: auth | `infra/modules/auth` | ✅ (dev) | User pool, prefix domain (managed login), PKCE web client (4.1), optional Google IdP (4.4), optional pre sign-up trigger Lambda (4.6) + 11 offline test runs; **deployed in dev** (with Google + trigger) |
 | Infra module: thumbnails | `infra/modules/thumbnails` | ✅ (dev) | Lambda, IAM, S3 notification, retries + SQS DLQ, logs (6.9) + 4 offline test runs; **deployed in dev** |
-| Infra module: api | `infra/modules/api` | ✅ (dev) | HTTP API, Cognito JWT authorizer, API Lambda, IAM, throttling, access + Lambda logs (5.4) + 7 offline test runs; **deployed in dev**. 🚧 Trash purge Lambda + daily EventBridge rule (FR-DEL-3, `purge.tf`): code + tests done, not applied yet |
+| Infra module: api | `infra/modules/api` | ✅ (dev) | HTTP API, Cognito JWT authorizer, API Lambda, IAM, throttling, access + Lambda logs (5.4) + 7 offline test runs; **deployed in dev**. Daily purge Lambda + EventBridge rule (`purge.tf`): trash purge (FR-DEL-3) ✅ in dev; 🚧 stale-pending sweep (6.11, + `s3:GetObject` originals / `s3:ListBucket`): code + tests done, deploys with the next `main` merge |
 | Infra module: frontend | `infra/modules/frontend` | 🚧 (dev) | 7.1: site bucket, CloudFront (OAC, `/api/*`, `/users/*`, SPA rewrite function); 7.2: media signing key, key group trusted by `/users/*`, private key in SSM; 7 offline test runs + function unit tests; **deployed in dev**. 7.3: the API issues the media cookies, so own images load in the app |
 | API Lambda | `apps/api` | 🚧 | Skeleton (5.1–5.3) + routes `GET /me`, `POST /photos/upload-url` (incl. retry), `GET /photos`, `GET /photos/{id}`, `GET /photos/{id}/download-url`, `DELETE /photos/{id}`, album CRUD, album photos, sharing, recipient read access and usernames (5.5, 5.6, 5.6a/b, 5.7–5.13, 5.15); 223 tests (incl. DynamoDB Local). Media cookies and signed URLs (Phase 7) not yet; **deployed in dev** behind API Gateway (5.4), checked with a real access token |
 | Thumbnail Lambda | `services/thumbnails` | 🚧 | Handler, image pipeline, S3-key mirror, orphan cleanup + 76 pytest tests (6.1–6.7, 6.12); arm64 package `build.sh` → `dist/` (6.8); not deployed yet (6.9–6.10) |
@@ -250,7 +250,8 @@ Photo-app/
 ├── .claude/settings.json        ✅ project Claude Code plugins (TS/Python LSP, aws-core, github, security-guidance)
 │
 ├── docs/
-│   └── SPECIFICATION.md         ✅ requirements & target design (v0.3)
+│   ├── SPECIFICATION.md         ✅ requirements & target design (v0.3)
+│   └── SCALING.md               📋 scaling analysis, cost model & backlog for millions of users (reference)
 │
 ├── packages/
 │   └── shared/                  ✅ @photo-app/shared (source-only, see §6)
@@ -307,9 +308,9 @@ Photo-app/
 │       ├── src/index.ts         Lambda entry: config, clients, repositories, routes, @hono/aws-lambda `handle`
 │       ├── src/app.ts           Hono app: /api base path, body limit, /health, requireUser, error envelope
 │       ├── src/env.ts           Hono env type (Lambda event binding, `userId` variable)
-│       ├── src/lib/             auth.ts (JWT sub), errors.ts (AppError, orNotFound), validation.ts (Zod), log.ts, config.ts, users.ts (Cognito directory: profile by sub, user by email), storage.ts (photo bucket: pre-signed POST, pre-signed download GET, object deletes, server-side copy), trash.ts (delete forever, empty trash, `purgeExpired`; FR-DEL-3), save.ts (save shared photos to my gallery; FR-SHR-10)
+│       ├── src/lib/             auth.ts (JWT sub), errors.ts (AppError, orNotFound), validation.ts (Zod), log.ts, config.ts, users.ts (Cognito directory: profile by sub, user by email), storage.ts (photo bucket: pre-signed POST, pre-signed download GET, object deletes, server-side copy, `exists`), trash.ts (delete forever, empty trash, `purgeExpired`; FR-DEL-3), pending.ts (`sweepStalePending`, 6.11), save.ts (save shared photos to my gallery; FR-SHR-10)
 │       ├── src/repo/            DynamoDB layer: keys, cursor, db helpers, photos, albums, memberships, shares, usage, usernames
-│       ├── src/purge.ts         Trash purge Lambda entry (`purge.handler` in dist/purge.mjs, FR-DEL-3): daily, `purgeExpired`
+│       ├── src/purge.ts         Daily maintenance Lambda entry (`purge.handler` in dist/purge.mjs): trash purge `purgeExpired` (FR-DEL-3), then stale-pending sweep `sweepStalePending` (6.11, `lib/pending.ts`)
 │       ├── src/routes/          index.ts (Deps, registerRoutes), me.ts, photos.ts, albums.ts, shares.ts, places.ts, trash.ts (FR-DEL-3), access.ts (shared-album access checks), present.ts (record → API object)
 │       └── test/                Vitest: app/middleware, cursor, config/directory, repositories and routes on DynamoDB Local, tenant-isolation suite (all routes)
 │
@@ -344,7 +345,7 @@ Photo-app/
 │       ├── storage/             ✅ photo bucket (+ tests/)
 │       ├── auth/                ✅ Cognito user pool, domain, web client, Google IdP, pre sign-up trigger (+ tests/)
 │       ├── thumbnails/          ✅ thumbnail Lambda, IAM, S3 notification, DLQ (+ tests/)
-│       ├── api/                 ✅ HTTP API, JWT authorizer, API Lambda, IAM, throttling; purge.tf: trash purge Lambda + daily rule (FR-DEL-3) (+ tests/)
+│       ├── api/                 ✅ HTTP API, JWT authorizer, API Lambda, IAM, throttling; purge.tf: daily Lambda (trash purge FR-DEL-3 + stale-pending sweep 6.11) + daily rule (+ tests/)
 │       └── frontend/            🚧 site bucket, CloudFront, SPA rewrite function (functions/), media signing keys (media-keys.tf) (+ tests/)
 │
 └── .github/workflows/           🚧 ci.yml ✅ (checks + dev plan), deploy.yml 🚧 (dev ✅; prod job 10.3 📋)
@@ -556,6 +557,7 @@ On-demand, `PK`/`SK` strings, one GSI `GSI1` (`GSI1PK`/`GSI1SK`, projection ALL)
 | Album share | `ALBUM#{albumId}` | `SHARE#{userId}` | `INVITED#{userId}` (pending) / `SHAREDWITH#{userId}` (accepted) | `ALBUM#{albumId}` | `AlbumShare`, `SharedAlbum`, `ShareInvitation` |
 | Usage | `USER#{userId}` | `USAGE` | — | — | `Usage` |
 | Upload claim | `USER#{userId}` | `UPLOAD#{uploadId}` | — | — | `photoId`, `ttl` (7 days); saved shared photo (FR-SHR-10): `uploadId = shared-{photoId}`, no `ttl` |
+| Pending marker (6.11) | `PENDING` | `UPLOADED#{uploadedAt}#{userId}#{photoId}` | — | — | `userId`, `photoId`, `uploadedAt`, `ttl` (30 days, safety net) |
 | Photo link (FR-SHR-8) | `LINK#{token}` | `LINK` | — | — | `PhotoLink`, `LinkedPhoto` |
 | Profile | `USER#{userId}` | `PROFILE` | — | — | `username` in `Me`, `AlbumShare`, `SharedAlbum.ownerUsername` |
 | Username claim | `USERNAME#{username}` | `USERNAME` | — | — | — (uniqueness; lookup for sharing) |
@@ -569,7 +571,7 @@ Access patterns and the "can user X see photo P" rule: see spec §8.2.
 - **Usage** has two byte counters (task 5.6b). Invariant: `bytesReserved = bytesUsed + declared size of every pending photo`.
   - `bytesUsed`/`photoCount`: stored originals, shown by `GET /me`. Incremented by the thumbnail Lambda, in the same transaction as the final status, once per stored original (`ready` *or* `failed`, because the original occupies storage either way).
   - `bytesReserved`: what the **quota is checked against**. The API adds the declared `sizeBytes` in the same transaction that creates the pending item, conditional on `attribute_not_exists(bytesReserved) OR bytesReserved <= quota − sizeBytes` (DynamoDB conditions can't add, so the API precomputes the limit). The thumbnail Lambda adds `actual − declared` (normally 0, the POST policy pins the size).
-  - Deletes (5.9): a pending photo releases its declared size from `bytesReserved`; a counted photo decrements `bytesUsed`, `photoCount` and `bytesReserved` by its `sizeBytes`. The stale-pending sweeper (6.11) will release like a pending delete. Trashed photos (FR-DEL-3) stay counted until they are deleted for good.
+  - Deletes (5.9): a pending photo releases its declared size from `bytesReserved`; a counted photo decrements `bytesUsed`, `photoCount` and `bytesReserved` by its `sizeBytes`. The stale-pending sweep (6.11) releases like a pending delete (it is one). Trashed photos (FR-DEL-3) stay counted until they are deleted for good.
   - `quotaBytes` (optional per-user override) is never written by the app.
 - All timestamps use the JS `toISOString()` format.
 
@@ -597,7 +599,7 @@ Access patterns and the "can user X see photo P" rule: see spec §8.2.
   - *Delete for good* = `photos.delete` with a guard (`trashedAt` set; the purge also `purgeAt ≤ now`), checked on every re-read; the delete is conditional on the `trashedAt` read, so a restore in between wins. For a trashed photo the place entries lose `trashedCount` instead of `photoCount`.
   - *Hidden while trashed*: gallery (GSI1 key), albums and shared albums (no membership), places and place photos (no GSI1 key, count moved), map (`listLocated` filters `attribute_not_exists(trashedAt)`). `GET /photos/{id}` still returns it to the owner, with the trash dates.
   - `listTrashed` reads the user's photo partition with a filter (like the map, bounded by the quota); `listExpired` queries GSI1 `TRASH` with `GSI1SK BETWEEN "PURGE#" AND "PURGE#{now}~"` (all users, oldest first, no scan).
-- Not yet covered: cleanup of `pending` items whose upload never happened (retries reuse the item via 5.6a; abandoned ones need the 6.11 sweeper).
+- **Stale-pending sweep (✅ code, 6.11, `lib/pending.ts`):** uploads started but never arrived (tab closed, batch cancelled) would hold their `bytesReserved` for good. `createPending` writes a **pending marker** (`PK = PENDING`, `SK = UPLOADED#{uploadedAt}#{userId}#{photoId}`, `ttl` 30 days) as the last item of its transaction, so the condition indexes (0 photo, 1 Usage, 2 claim) stay put. The daily purge Lambda then runs `sweepStalePending`: `listPendingMarkers(now − 24 h)` (one query, all users, no scan; 24 h ≫ the 15-min upload URL and the 6-h async thumbnail retries) → per marker, 5 at a time: photo gone / not pending → marker deleted (`cleared`); pending and **original not in S3** (`storage.exists`, HeadObject) → `photos.delete` with a guard (`pending`, not trashed: memberships, `bytesReserved`), then the marker (`removed`); pending but the original **is** there → left alone, marker kept, WARN log every day (`stuck`: processing failed, see the thumbnail DLQ). Stops starting chunks of 50 markers 30 s before the Lambda timeout (`deferred`, next day). A HeadObject error is a failure (never "missing"), so a 403 can't delete photos. Ready photos' markers are only removed by the sweep (one extra put per upload, one delete a day later); the thumbnail Lambda is unchanged. No backfill: dev had 0 pending items on 2026-10-31, prod isn't deployed. Edge case accepted: a device that re-signs a swept photo gets 404 and starts a fresh upload (8.10); one that uploads in the seconds of a sweep can leave an original without an item.
 
 ---
 
@@ -1268,3 +1270,6 @@ Target design: spec §12 (TanStack Router file routes with an authenticated layo
 | 2026-10-30 | Web tests: `renderAt` sets `retryDelay: 0` on the app's query client; a failing or uncanned request no longer waits 3 s per test (CI timeouts on `91f28e3`) (§5). |
 | 2026-10-31 | Save shared photos to my gallery (FR-SHR-10, spec v0.26): `POST /shared-albums/{id}/save`, `lib/save.ts`, `PhotoStorage.copyObject`, permanent upload claim `shared-{photoId}` + `repos.photos.claim`/`releaseClaim`; `createPending` retries `TransactionConflict` on Usage (random pause, 6 tries; also helps parallel `upload-url`); web: viewer button, select mode in shared albums, `useSaveSharedPhotos`/`saveSummary`. No infra change (§7.1, §7.4, §8.2, §9, §10.6, §14.1). |
 | 2026-10-31 | Album page header on phones (user report): the album name was squeezed to nothing by Select / Add photos / Share (the name's `flex-1` has a 0 basis, so the row never wrapped). Below `sm` the name now has its own row and Add photos / Share are icon-only (labels kept for screen readers) (§14.1). |
+| 2026-10-31 | 12.3a: dev Lambda account concurrency quota raised 10 → 1,000 (Service Quotas `L-B99A9384`, account setting, not in OpenTofu); prod still 10 until Phase 11. |
+| 2026-10-31 | 6.11 stale-pending sweep (code, not deployed): pending marker item written by `createPending`, `listPendingMarkers` / `deletePendingMarker`, `PhotoStorage.exists` (HeadObject), `lib/pending.ts` `sweepStalePending`, run by the daily purge Lambda after the trash purge; purge role + `s3:GetObject` on originals and `s3:ListBucket` (404 instead of 403 for missing keys). Spec v0.27 (§8.2). |
+| 2026-10-31 | `docs/SCALING.md`: scaling analysis (one bucket is fine, hot keys `PENDING`/`TRASH`, Cognito `ListUsers`, background jobs), prioritised backlog, cost model for 1M users, servers vs serverless (stay serverless). Reference only, nothing implemented (§5). |

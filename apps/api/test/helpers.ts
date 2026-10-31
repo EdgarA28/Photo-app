@@ -310,6 +310,8 @@ export async function createTestApi() {
   const downloads: DownloadTarget[] = [];
   const deletes: string[][] = [];
   const copies: { from: string; to: string }[] = [];
+  /** Keys `storage.exists` reports as present (6.11 sweep tests). */
+  const objects = new Set<string>();
   const hooks: {
     onDelete?: (keys: string[]) => Promise<void>;
     onCopy?: (from: string, to: string) => Promise<void>;
@@ -334,6 +336,7 @@ export async function createTestApi() {
       await hooks.onCopy?.(from, to);
       copies.push({ from, to });
     },
+    exists: async (key) => objects.has(key),
   };
   const deps = {
     repos,
@@ -363,5 +366,18 @@ export async function createTestApi() {
     return { status: res.status, body: (text ? JSON.parse(text) : null) as unknown };
   }
 
-  return { db, repos, profiles, uploads, downloads, deletes, copies, hooks, storage, app, api };
+  return {
+    db,
+    repos,
+    profiles,
+    uploads,
+    downloads,
+    deletes,
+    copies,
+    objects,
+    hooks,
+    storage,
+    app,
+    api,
+  };
 }

@@ -1,6 +1,10 @@
-# Trash purge (FR-DEL-3): once a day, a Lambda deletes every trashed photo whose 15 days are up
-# (files, item, place entries, Usage). Same bundle as the API (dist/purge.mjs), own role: it only
-# touches photo items and photo objects, and is invoked only by its schedule.
+# Daily maintenance, once a day (Lambda `trash-purge`, name kept from FR-DEL-3):
+# - trash purge (FR-DEL-3): deletes every trashed photo whose 15 days are up (files, item, place
+#   entries, Usage);
+# - stale-pending sweep (6.11): deletes `pending` photos over a day old whose original never
+#   arrived, releasing their quota reservation (album memberships, Usage `bytesReserved`).
+# Same bundle as the API (dist/purge.mjs), own role: it only touches photo items, pending markers
+# and photo objects, and is invoked only by its schedule.
 
 locals {
   purge_name = "photo-app-${var.environment}-trash-purge"
@@ -12,8 +16,9 @@ resource "aws_iam_role" "purge" {
 }
 
 data "aws_iam_policy_document" "purge" {
-  # Query on GSI1 (`TRASH`, by purge date), then the photo delete transaction: photo item,
-  # place items and Usage (apps/api/src/repo/photos.ts `delete`). No scans.
+  # Query on GSI1 (`TRASH`, by purge date) and on the `PENDING` marker partition, then the photo
+  # delete transaction: photo item, album memberships, place items and Usage
+  # (apps/api/src/repo/photos.ts `delete`), and the marker delete. No scans.
   statement {
     sid = "Table"
     actions = [
@@ -30,6 +35,21 @@ data "aws_iam_policy_document" "purge" {
     sid       = "DeletePhotoObjects"
     actions   = ["s3:DeleteObject"]
     resources = local.photo_object_arns
+  }
+
+  # Stale-pending sweep: did the original ever arrive? HeadObject needs s3:GetObject; without
+  # s3:ListBucket S3 answers 403 instead of 404 for a missing key, and the sweep would fail
+  # (never delete) on every abandoned upload.
+  statement {
+    sid       = "CheckOriginals"
+    actions   = ["s3:GetObject"]
+    resources = [local.originals_arn]
+  }
+
+  statement {
+    sid       = "ListForMissingOriginals"
+    actions   = ["s3:ListBucket"]
+    resources = [var.bucket_arn]
   }
 
   statement {
@@ -61,8 +81,9 @@ resource "aws_lambda_function" "purge" {
   architectures = ["arm64"]
   handler       = "purge.handler"
   memory_size   = 512
-  # Five photos at a time, a few calls each; a day's expired trash fits easily.
-  # No reserved concurrency: dev's account limit is 10 (12.3a), all unreserved. An overlapping
+  # Five photos at a time, a few calls each; a day's expired trash and stale uploads fit easily
+  # (the sweep stops 30 s before the timeout and leaves the rest for the next day).
+  # No reserved concurrency: the account limit is shared (dev 1,000 since 12.3a). An overlapping
   # run would be harmless anyway, every write is conditional.
   timeout = 300
 
@@ -85,7 +106,7 @@ resource "aws_lambda_function" "purge" {
 # Daily at 03:00 UTC. A photo is purged at most a day after its 15 days are up.
 resource "aws_cloudwatch_event_rule" "purge" {
   name                = local.purge_name
-  description         = "Daily trash purge (FR-DEL-3)"
+  description         = "Daily trash purge (FR-DEL-3) and stale-pending sweep (6.11)"
   schedule_expression = "cron(0 3 * * ? *)"
 }
 
