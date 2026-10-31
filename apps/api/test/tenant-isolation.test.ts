@@ -609,6 +609,44 @@ const cases: Case[] = [
       body: { photoIds: [w.p1] },
     }),
   },
+  {
+    route: "POST /api/albums/:albumId/save",
+    name: "stranger saves photos through an owner's album route (FR-SHR-11)",
+    foreign: () => ({
+      as: w.mallory,
+      method: "POST",
+      path: `/albums/${w.albumA}/save`,
+      body: { photoIds: [w.p1] },
+    }),
+    missing: () => ({
+      as: w.mallory,
+      method: "POST",
+      path: `/albums/${id()}/save`,
+      body: { photoIds: [w.p1] },
+    }),
+  },
+  {
+    route: "POST /api/albums/:albumId/save",
+    name: "recipient uses the owner's save route of a shared album",
+    foreign: () => ({
+      as: w.bob,
+      method: "POST",
+      path: `/albums/${w.albumA}/save`,
+      body: { photoIds: [w.p1] },
+    }),
+    missing: () => ({
+      as: w.bob,
+      method: "POST",
+      path: `/albums/${id()}/save`,
+      body: { photoIds: [w.p1] },
+    }),
+  },
+  {
+    route: "DELETE /api/shared-albums/:albumId",
+    name: "owner 'leaves' her own album: her photos stay in it (FR-SHR-11)",
+    foreign: () => ({ as: w.alice, method: "DELETE", path: `/shared-albums/${w.albumA}` }),
+    missing: () => ({ as: w.alice, method: "DELETE", path: `/shared-albums/${id()}` }),
+  },
 ];
 
 /**

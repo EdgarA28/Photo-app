@@ -113,6 +113,12 @@ export function createApi(request: Request) {
         request("POST", `/albums/${enc(albumId)}/shares`, { schema: albumShareSchema, body }),
       unshare: (albumId: string, userId: string) =>
         request("DELETE", `/albums/${enc(albumId)}/shares/${enc(userId)}`),
+      /** The owner saves members' photos of a collaborative album to their gallery (FR-SHR-11). */
+      save: (albumId: string, photoIds: string[]) =>
+        request("POST", `/albums/${enc(albumId)}/save`, {
+          schema: saveSharedPhotosResponseSchema,
+          body: { photoIds },
+        }),
     },
 
     sharedAlbums: {

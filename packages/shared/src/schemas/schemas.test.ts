@@ -92,12 +92,15 @@ describe("photoSchema", () => {
       thumbUrl: null,
       previewUrl: null,
     };
-    // Without `place` (an API from before 13.2) or the trash dates (FR-DEL-3) they read as null.
+    // Without `place` (an API from before 13.2), the trash dates (FR-DEL-3) or the owner
+    // (FR-SHR-11) they read as null.
     expect(photoSchema.parse(pending)).toEqual({
       ...pending,
       place: null,
       trashedAt: null,
       purgeAt: null,
+      ownerId: null,
+      ownerUsername: null,
     });
   });
 
@@ -123,6 +126,10 @@ describe("album schemas", () => {
     expect(updateAlbumRequestSchema.safeParse({}).success).toBe(false);
     expect(updateAlbumRequestSchema.parse({ coverPhotoId: null })).toEqual({ coverPhotoId: null });
     expect(updateAlbumRequestSchema.parse({ name: "New" })).toEqual({ name: "New" });
+    // FR-SHR-11: the members' switch alone is a valid change.
+    expect(updateAlbumRequestSchema.parse({ membersCanAdd: true })).toEqual({
+      membersCanAdd: true,
+    });
   });
 
   test("add photos validates IDs", () => {

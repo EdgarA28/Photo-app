@@ -10,7 +10,7 @@ import { usernamesRepo } from "./usernames";
 export type { AlbumRecord, AlbumUpdate, MembershipRecord } from "./albums";
 export { createDocumentClient, type Db } from "./db";
 export type { LinkRecord } from "./links";
-export type { AddResult } from "./memberships";
+export { albumOwnerOf, type AddResult } from "./memberships";
 export type { ExpiredPhoto, LocatedPhoto, NewPhoto, PendingMarker, PhotoRecord } from "./photos";
 export type { PlacePhotoRecord, PlaceRecord } from "./places";
 export type { CreateShareResult, ShareRecord } from "./shares";

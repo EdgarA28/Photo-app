@@ -33,7 +33,7 @@ import {
   usageKey,
   userPk,
 } from "./keys";
-import { addMembership, removeMembership } from "./memberships";
+import { removeMembership, restoreMembership } from "./memberships";
 
 /** Photo item without key attributes (spec §8.2). */
 export interface PhotoRecord {
@@ -497,9 +497,10 @@ export function photosRepo(db: Db) {
           if (conditionFailedAt(err, 0)) continue; // Restored or purged meanwhile: re-read.
           throw err;
         }
-        // Albums deleted meanwhile are skipped ("album-not-found").
+        // Albums deleted meanwhile, and albums of others that no longer let the user add
+        // (FR-SHR-11), are skipped.
         for (const albumId of record.trashedAlbumIds ?? []) {
-          await addMembership(db, userId, albumId, photoId, now.toISOString());
+          await restoreMembership(db, userId, albumId, photoId, now.toISOString());
         }
         const { trashedAt: _t, purgeAt: _p, trashedAlbumIds: _a, ...restored } = record;
         return { ...restored, albumIds: record.trashedAlbumIds };

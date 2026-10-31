@@ -39,6 +39,8 @@ export function toPhoto(record: PhotoRecord): Photo {
     previewUrl: ready ? `/${previewKey(record.userId, record.photoId)}` : null,
     trashedAt: record.trashedAt ?? null,
     purgeAt: record.purgeAt ?? null,
+    ownerId: record.userId,
+    ownerUsername: null,
   };
 }
 
@@ -60,16 +62,35 @@ export function toPhotoLocation(userId: string, record: LocatedPhoto): PhotoLoca
   };
 }
 
-/** `cover` is the album's cover photo, if it has one and it still exists. */
-export function toAlbum(record: AlbumRecord, cover: PhotoRecord | null | undefined): Album {
+/** `coverThumbUrl`: from `coverThumbUrl()` below, null without a cover. */
+export function toAlbum(record: AlbumRecord, coverThumbUrl: string | null): Album {
   return {
     albumId: record.albumId,
     name: record.name,
     createdAt: record.createdAt,
     coverPhotoId: record.coverPhotoId ?? null,
-    coverThumbUrl: cover ? toPhoto(cover).thumbUrl : null,
+    coverThumbUrl,
     photoCount: Math.max(0, record.photoCount),
+    membersCanAdd: record.membersCanAdd === true,
   };
+}
+
+/**
+ * The thumbnail URL of an album's cover for `viewerId`: their own photo by its stable path (media
+ * cookie), anyone else's (a member's photo in a collaborative album, FR-SHR-11, or the owner's
+ * for a recipient) signed, and only once processed. Null without a cover.
+ */
+export async function coverThumbUrl(
+  cover: PhotoRecord | null | undefined,
+  viewerId: string,
+  media: MediaSigner,
+  now: Date,
+): Promise<string | null> {
+  if (!cover) return null;
+  const thumb = toPhoto(cover).thumbUrl;
+  if (cover.userId === viewerId) return thumb;
+  if (cover.status !== "ready" || cover.trashedAt !== undefined || !thumb) return null;
+  return media.signUrl(thumb, now);
 }
 
 /**
@@ -85,7 +106,7 @@ export async function toSharedPhoto(
   record: PhotoRecord,
   media: MediaSigner,
   now: Date,
-  { preview }: { preview: boolean },
+  { preview, ownerUsername = null }: { preview: boolean; ownerUsername?: string | null },
 ): Promise<Photo> {
   const photo = toPhoto(record);
   const [thumbUrl, previewUrl] = await Promise.all([
@@ -93,25 +114,20 @@ export async function toSharedPhoto(
     preview && photo.previewUrl ? media.signUrl(photo.previewUrl, now) : null,
   ]);
   // Places are the owner's (13.2g): recipients don't learn where a photo was taken.
-  return { ...photo, place: null, thumbUrl, previewUrl };
+  return { ...photo, place: null, thumbUrl, previewUrl, ownerUsername };
 }
 
 /**
- * An album as its share recipient sees it (FR-SHR-3). `cover`: the owner's cover photo if it
- * still exists and is visible to recipients; its thumbnail gets a signed URL like the photos.
+ * An album as its share recipient sees it (FR-SHR-3). `coverThumbUrl` from `coverThumbUrl()`.
  */
-export async function toSharedAlbum(
+export function toSharedAlbum(
   album: AlbumRecord,
   share: ShareRecord,
   ownerUsername: string | null,
-  cover: PhotoRecord | undefined,
-  media: MediaSigner,
-  now: Date,
-): Promise<SharedAlbum> {
-  const thumb = cover ? toPhoto(cover).thumbUrl : null;
+  coverThumbUrl: string | null,
+): SharedAlbum {
   return {
-    ...toAlbum(album, null),
-    coverThumbUrl: thumb ? await media.signUrl(thumb, now) : null,
+    ...toAlbum(album, coverThumbUrl),
     ownerId: album.ownerId,
     ownerUsername,
     sharedAt: share.sharedAt,

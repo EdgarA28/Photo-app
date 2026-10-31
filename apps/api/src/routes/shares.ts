@@ -16,17 +16,11 @@ import type { AppEnv } from "../env";
 import { AppError, notFound, orNotFound, validationError } from "../lib/errors";
 import { saveSharedPhotos } from "../lib/save";
 import { validate } from "../lib/validation";
-import {
-  isAccepted,
-  shareStatus,
-  type AlbumRecord,
-  type PhotoRecord,
-  type Repositories,
-  type ShareRecord,
-} from "../repo";
+import { shareStatus, type ShareRecord } from "../repo";
 import type { Deps } from ".";
-import { isVisibleToRecipient, sharedPhoto } from "./access";
-import { toSharedAlbum } from "./present";
+import { albumAccess, albumPhoto } from "./access";
+import { albumCovers } from "./albums";
+import { coverThumbUrl, toSharedAlbum } from "./present";
 
 const albumParam = z.object({ albumId: idSchema });
 const albumShareParam = z.object({ albumId: idSchema, userId: userIdSchema });
@@ -114,11 +108,17 @@ export function shareRoutes(
     },
   );
 
-  /** Revokes a share (FR-SHR-2). The recipient loses access straight away. */
+  /**
+   * Revokes a share (FR-SHR-2). The recipient loses access straight away, and the photos they
+   * added leave the album (FR-SHR-11). The share goes first, so they can't add more meanwhile;
+   * the clean-up also runs when the share is already gone, so repeating finishes it.
+   */
   app.delete("/albums/:albumId/shares/:userId", validate("param", albumShareParam), async (c) => {
     const { albumId, userId } = c.req.valid("param");
     orNotFound(await repos.albums.get(c.get("userId"), albumId), "Album not found");
-    if (!(await repos.shares.delete(albumId, userId))) throw notFound("Share not found");
+    const deleted = await repos.shares.delete(albumId, userId);
+    await repos.albums.removeMemberPhotos(albumId, userId);
+    if (!deleted) throw notFound("Share not found");
     return c.body(null, 204);
   });
 
@@ -165,47 +165,61 @@ export function shareRoutes(
 
   /**
    * The recipient declines an invitation or removes an accepted album (FR-SHR-7): the share is
-   * deleted, so access ends at once and the owner's list no longer shows them. The owner can
-   * share again, which sends a new invitation.
+   * deleted, so access ends at once and the owner's list no longer shows them. The photos they
+   * added leave the album (FR-SHR-11; also when repeated, to finish an interrupted clean-up). The
+   * owner can share again, which sends a new invitation.
    */
   app.delete("/shared-albums/:albumId", validate("param", albumParam), async (c) => {
+    const userId = c.get("userId");
     const { albumId } = c.req.valid("param");
-    if (!(await repos.shares.delete(albumId, c.get("userId")))) {
-      throw notFound("Shared album not found");
-    }
+    const deleted = await repos.shares.delete(albumId, userId);
+    // Only the caller's own photos, so this reveals nothing about albums they aren't in.
+    await repos.albums.removeMemberPhotos(albumId, userId);
+    if (!deleted) throw notFound("Shared album not found");
     return c.body(null, 204);
   });
 
   /**
    * "Save to my gallery" (FR-SHR-10): copies these photos of an album shared with me (accepted)
-   * into my own library, one result per photo (`lib/save.ts`). Photos not in the album, not
-   * processed or gone are `unavailable`, so the answer says nothing more about them (NFR-SEC-2).
+   * into my own library, one result per photo (`lib/save.ts`). The owner of a collaborative album
+   * saves members' photos the same way (FR-SHR-11) through `/albums/{id}/save`. Photos not in the
+   * album, not processed or gone are `unavailable`, so the answer says nothing more about them
+   * (NFR-SEC-2); my own photos are `already-saved`.
    */
-  app.post(
-    "/shared-albums/:albumId/save",
-    validate("param", albumParam),
-    validate("json", saveSharedPhotosRequestSchema),
-    async (c) => {
-      const userId = c.get("userId");
-      const { albumId } = c.req.valid("param");
-      const share = await repos.shares.get(albumId, userId);
-      if (!share || !isAccepted(share)) throw notFound("Shared album not found");
-      const photoIds = [...new Set(c.req.valid("json").photoIds)];
-      const sources = await Promise.all(
-        photoIds.map(async (photoId) => ({
-          photoId,
-          photo: await sharedPhoto(repos, userId, albumId, photoId),
-        })),
-      );
-      const items = await saveSharedPhotos(
-        { repos, storage, defaultQuotaBytes: config.defaultQuotaBytes },
-        userId,
-        sources,
-      );
-      const body: SaveSharedPhotosResponse = { items };
-      return c.json(body);
-    },
-  );
+  for (const [path, mine] of [
+    ["/shared-albums/:albumId/save", false],
+    ["/albums/:albumId/save", true],
+  ] as const) {
+    app.post(
+      path,
+      validate("param", albumParam),
+      validate("json", saveSharedPhotosRequestSchema),
+      async (c) => {
+        const userId = c.get("userId");
+        const { albumId } = c.req.valid("param");
+        const access = await albumAccess(repos, userId, albumId);
+        if (!access || access.shared === mine) throw notFound("Album not found");
+        const photoIds = [...new Set(c.req.valid("json").photoIds)];
+        const sources = await Promise.all(
+          photoIds.map(async (photoId) => {
+            const membership = await repos.albums.getMembership(albumId, photoId);
+            const photo =
+              membership?.ownerId === userId
+                ? await repos.photos.get(userId, photoId)
+                : await albumPhoto(repos, userId, albumId, photoId);
+            return { photoId, photo };
+          }),
+        );
+        const items = await saveSharedPhotos(
+          { repos, storage, defaultQuotaBytes: config.defaultQuotaBytes },
+          userId,
+          sources,
+        );
+        const body: SaveSharedPhotosResponse = { items };
+        return c.json(body);
+      },
+    );
+  }
 
   /** Albums other users shared with the caller (FR-SHR-3), paginated. */
   app.get("/shared-albums", validate("query", pageQuerySchema), async (c) => {
@@ -216,7 +230,8 @@ export function shareRoutes(
       repos.usernames.getMany(page.items.map((share) => share.ownerId)),
     ]);
     const byKey = new Map(albums.map((album) => [`${album.ownerId}/${album.albumId}`, album]));
-    const covers = await sharedCovers(repos, albums);
+    const userId = c.get("userId");
+    const covers = await albumCovers(repos, albums);
     const now = new Date();
     // An album being deleted removes its shares only after reading them, so a share can
     // briefly outlive its album; skip it.
@@ -226,14 +241,12 @@ export function shareRoutes(
     });
     const body: SharedAlbumPage = {
       items: await Promise.all(
-        listed.map(({ share, album }) =>
+        listed.map(async ({ share, album }) =>
           toSharedAlbum(
             album,
             share,
             ownerNames.get(share.ownerId) ?? null,
-            covers.get(`${album.ownerId}/${album.coverPhotoId}`),
-            media,
-            now,
+            await coverThumbUrl(covers.get(album.albumId), userId, media, now),
           ),
         ),
       ),
@@ -241,28 +254,4 @@ export function shareRoutes(
     };
     return c.json(body);
   });
-}
-
-/**
- * Cover photos of albums shared with the caller, by `ownerId/photoId`: one batch read per owner
- * (photos live in their owner's partition). Only covers recipients may see (ready).
- */
-async function sharedCovers(
-  repos: Repositories,
-  albums: AlbumRecord[],
-): Promise<Map<string, PhotoRecord>> {
-  const idsByOwner = new Map<string, string[]>();
-  for (const album of albums) {
-    if (!album.coverPhotoId) continue;
-    idsByOwner.set(album.ownerId, [...(idsByOwner.get(album.ownerId) ?? []), album.coverPhotoId]);
-  }
-  const photos = await Promise.all(
-    [...idsByOwner].map(([ownerId, ids]) => repos.photos.getMany(ownerId, ids)),
-  );
-  return new Map(
-    photos
-      .flat()
-      .filter(isVisibleToRecipient)
-      .map((photo) => [`${photo.userId}/${photo.photoId}`, photo]),
-  );
 }

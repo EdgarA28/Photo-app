@@ -11,6 +11,11 @@ export const albumSchema = z.object({
   coverPhotoId: idSchema.nullable(),
   coverThumbUrl: z.string().nullable(),
   photoCount: z.number().int().nonnegative(),
+  /**
+   * Collaborative album (FR-SHR-11): members who accepted the share can add their own photos.
+   * Missing (an API from before it) reads as false.
+   */
+  membersCanAdd: z.boolean().default(false),
 });
 export type Album = z.infer<typeof albumSchema>;
 
@@ -22,15 +27,23 @@ export type AlbumList = z.infer<typeof albumListSchema>;
 export const createAlbumRequestSchema = z.object({ name: albumNameSchema });
 export type CreateAlbumRequest = z.infer<typeof createAlbumRequestSchema>;
 
-/** PATCH /albums/{albumId}: rename and/or set cover (null clears it). */
+/**
+ * PATCH /albums/{albumId}: rename, set the cover (null clears it) and/or let members add photos
+ * (FR-SHR-11).
+ */
 export const updateAlbumRequestSchema = z
   .object({
     name: albumNameSchema.optional(),
     coverPhotoId: idSchema.nullable().optional(),
+    membersCanAdd: z.boolean().optional(),
   })
-  .refine((body) => body.name !== undefined || body.coverPhotoId !== undefined, {
-    message: "Provide name and/or coverPhotoId",
-  });
+  .refine(
+    (body) =>
+      body.name !== undefined ||
+      body.coverPhotoId !== undefined ||
+      body.membersCanAdd !== undefined,
+    { message: "Provide name, coverPhotoId and/or membersCanAdd" },
+  );
 export type UpdateAlbumRequest = z.infer<typeof updateAlbumRequestSchema>;
 
 /** POST /albums/{albumId}/photos (FR-ALB-2) */

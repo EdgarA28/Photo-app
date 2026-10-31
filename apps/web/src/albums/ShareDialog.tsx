@@ -14,6 +14,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { useUpdateAlbum } from "@/queries/albums";
 import { sharesQuery, useRevokeShare, useShareAlbum } from "@/queries/shares";
 import { parseShareTarget } from "./shareTarget";
 
@@ -24,9 +26,9 @@ const nameOf = (share: AlbumShare) =>
   share.username ? `@${share.username}` : (share.email ?? "Someone");
 
 /**
- * Sharing an own album read-only (FR-SHR-1/2/5): one field for an email or a username, the people
- * it's shared with, and revoking. Revoking needs no confirmation: nothing is deleted and sharing
- * again restores it.
+ * Sharing an own album (FR-SHR-1/2/5): one field for an email or a username, the people it's
+ * shared with, and revoking, plus "Members can add photos" (FR-SHR-11). Revoking needs no
+ * confirmation: none of the owner's photos are deleted, and sharing again invites them again.
  */
 export function ShareDialog({
   album,
@@ -44,7 +46,7 @@ export function ShareDialog({
           <DialogTitle>Share “{album.name}”</DialogTitle>
           <DialogDescription>
             People you share with get an invitation. Once they accept, they can view and download
-            the photos, but not change anything.
+            the photos{album.membersCanAdd ? " and add their own" : ", but not change anything"}.
           </DialogDescription>
         </DialogHeader>
         {/* Remounted per opening: empty field, no old messages. */}
@@ -71,6 +73,7 @@ function ShareForm({ album }: { album: Album }) {
 
   return (
     <div className="grid gap-5">
+      <MembersCanAdd album={album} />
       <form
         className="grid gap-2"
         onSubmit={(event) => {
@@ -186,6 +189,44 @@ function ShareForm({ album }: { album: Album }) {
           </p>
         )}
       </section>
+    </div>
+  );
+}
+
+/**
+ * The owner's switch for a collaborative album (FR-SHR-11). Turning it off keeps the photos
+ * members already added; they can still take them out themselves.
+ */
+function MembersCanAdd({ album }: { album: Album }) {
+  const id = useId();
+  const update = useUpdateAlbum(album.albumId);
+  return (
+    <div className="grid gap-1">
+      <div className="flex items-center justify-between gap-4">
+        <div className="grid gap-0.5">
+          <Label htmlFor={id}>Members can add photos</Label>
+          <p id={`${id}-hint`} className="text-sm text-muted-foreground">
+            Their photos stay theirs and count against their storage. If they leave, their photos
+            leave the album.
+          </p>
+        </div>
+        <Switch
+          id={id}
+          aria-describedby={`${id}-hint`}
+          checked={
+            update.isPending && "membersCanAdd" in update.variables
+              ? update.variables.membersCanAdd
+              : album.membersCanAdd
+          }
+          disabled={update.isPending}
+          onCheckedChange={(membersCanAdd) => update.mutate({ membersCanAdd })}
+        />
+      </div>
+      {update.isError && (
+        <p role="alert" className="text-sm text-destructive">
+          {errorMessage(update.error)}
+        </p>
+      )}
     </div>
   );
 }
