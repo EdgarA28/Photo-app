@@ -22,10 +22,14 @@ function hide(hidden = true) {
 }
 
 /** A queue whose uploads never get an upload URL, so they stay waiting. */
-async function startQueue() {
+async function startQueue(largeBatchBytes?: number) {
   const uploadUrl = vi.fn(() => new Promise(() => {}));
   const api = { photos: { uploadUrl } } as unknown as Pick<Api, "photos">;
-  const { queue } = testUploadQueue(api, { isVisible: () => visible, registerSync });
+  const { queue } = testUploadQueue(api, {
+    isVisible: () => visible,
+    registerSync,
+    ...(largeBatchBytes !== undefined && { largeBatchBytes }),
+  });
   await queue.start(testUser.sub);
   return queue;
 }
@@ -68,6 +72,16 @@ describe("Background Sync request (9.5)", () => {
     hide();
     await vi.advanceTimersByTimeAsync(0);
     expect(registerSync).toHaveBeenCalled();
+    queue.stop();
+  });
+
+  it("doesn't ask for a large batch: the service worker can't read it (13.1c)", async () => {
+    const queue = await startQueue(1500);
+    await queue.add([testFile("IMG_1.jpg"), testFile("IMG_2.jpg")]);
+    expect(queue.getSnapshot().every((entry) => entry.memoryOnly)).toBe(true);
+    hide();
+    await vi.advanceTimersByTimeAsync(SYNC_REARM_MS);
+    expect(registerSync).not.toHaveBeenCalled();
     queue.stop();
   });
 });

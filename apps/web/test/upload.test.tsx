@@ -416,4 +416,21 @@ describe("big batches on screen (13.1-0)", () => {
     expect(within(list).queryByText("IMG_299.jpg")).toBeNull();
     height.mockRestore();
   });
+
+  it("asks to keep the tab open while a large batch uploads (13.1c)", async () => {
+    const { api } = setup();
+    const { queue } = testUploadQueue(api, {
+      post: () => new Promise(() => {}),
+      largeBatchBytes: 1500,
+    });
+    await renderAt("/upload", { api, uploads: queue });
+    pick([testFile("IMG_1.jpg"), testFile("IMG_2.jpg")]);
+
+    const note = await screen.findByText(/Large upload: keep this tab open/);
+    expect(note.textContent).toContain("stops the remaining 2 photos");
+    // The browser asks before the tab is closed or reloaded.
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
 });

@@ -14,6 +14,11 @@ export interface AddResult {
   rejected: { fileName: string; reason: string }[];
 }
 
+export interface AddOptions {
+  /** Picked as a folder (13.1a): always a large batch, whatever its size. */
+  folder?: boolean;
+}
+
 export interface UploadQueue {
   /**
    * Loads the user's queue and starts uploading (if this tab holds the lock). Idempotent per user:
@@ -22,7 +27,7 @@ export interface UploadQueue {
   start(userId: string): Promise<void>;
   /** Stops uploading in this tab; the queue stays stored and resumes on the next start. */
   stop(): void;
-  add(files: Iterable<File>): Promise<AddResult>;
+  add(files: Iterable<File>, options?: AddOptions): Promise<AddResult>;
   /** Try a failed upload again. */
   retry(id: string): Promise<void>;
   /** Try every failed upload again (e.g. after freeing up space). */
@@ -64,12 +69,32 @@ export interface UploadQueueDeps {
   registerSync?: (() => unknown) | undefined;
   /** Asks the browser not to evict the queued files (iOS evicts storage of unused sites). */
   requestPersistence?: () => unknown;
+  /** Phones copy every pick (Android can revoke access to picked files), up to `PHONE_PICK_BYTES`. */
+  isPhone?: () => boolean;
+  /** Picks above this total are large batches (13.1c); default `LARGE_BATCH_BYTES`. */
+  largeBatchBytes?: number;
   now?: () => number;
   newId?: () => string;
 }
 
 /** §12.4: 3 parallel uploads. */
 export const CONCURRENCY = 3;
+/**
+ * A pick above this total (or a folder) is a large batch (13.1c, user 2026-11-01): its files are
+ * read at upload time instead of copied, and it is kept only in the tab that picked it.
+ */
+export const LARGE_BATCH_BYTES = 500 * 1024 * 1024;
+/** Phones copy every pick, so one pick is limited to this (13.1c, user 2026-11-01). */
+export const PHONE_PICK_BYTES = 1024 * 1024 * 1024;
+/** Reason for files left out of a phone pick above `PHONE_PICK_BYTES`. */
+export const PHONE_LIMIT =
+  "Not added: up to 1 GB per pick on a phone. Add the rest once these are uploaded, or use a computer.";
+
+/** Phone or tablet: Client Hints where available, else the user agent. */
+export const looksLikePhone = () =>
+  (navigator as { userAgentData?: { mobile?: boolean } }).userAgentData?.mobile ??
+  /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
 /** At most one gallery + usage refresh this often while uploads finish (13.1-0). */
 export const REFRESH_EVERY_MS = 5000;
 
@@ -109,6 +134,10 @@ export const SYNC_REARM_MS = 60_000;
  */
 export const STORE_READ_TIMEOUT_MS = 2000;
 
+/** Stored and still to upload: what another tab or the service worker could take over. */
+const isStoredWork = (item: UploadItem) =>
+  !item.memoryOnly && (item.status === "queued" || item.status === "uploading");
+
 /**
  * Between tabs and the service worker. `working`: the service worker is uploading (its fetch
  * reports no progress), so a tab doesn't take over from it.
@@ -140,6 +169,8 @@ export function createUploadQueue({
   isVisible = () => document.visibilityState === "visible",
   registerSync,
   requestPersistence,
+  isPhone = looksLikePhone,
+  largeBatchBytes = LARGE_BATCH_BYTES,
   now = Date.now,
   newId = () => crypto.randomUUID(),
 }: UploadQueueDeps): UploadQueue {
@@ -246,8 +277,10 @@ export function createUploadQueue({
 
   async function save(item: UploadItem) {
     items.set(item.id, item);
-    unsaved.add(item.id);
     emit();
+    // A large batch lives in this tab only (13.1c).
+    if (item.memoryOnly) return;
+    unsaved.add(item.id);
     // Not waited for (see STORE_READ_TIMEOUT_MS). The stored copy only matters if the app closes
     // mid-upload; failing to write it must not stop the upload or a retry (found on Android:
     // "Failed to write blobs (InvalidBlob)").
@@ -283,7 +316,7 @@ export function createUploadQueue({
     if (!stored || forSession !== session) return null;
     const storedIds = new Set(stored.map((item) => item.id));
     for (const [id, controller] of active) {
-      if (!storedIds.has(id) && !unsaved.has(id)) controller.abort();
+      if (!storedIds.has(id) && !unsaved.has(id) && !items.get(id)?.memoryOnly) controller.abort();
     }
     const known = new Map(items);
     items.clear();
@@ -292,6 +325,8 @@ export function createUploadQueue({
       items.set(item.id, (mine && known.get(item.id)) || item);
     }
     for (const id of unsaved) if (!items.has(id) && known.has(id)) items.set(id, known.get(id)!);
+    // This tab's large batch isn't in the store: kept as it is (13.1c).
+    for (const [id, item] of known) if (item.memoryOnly) items.set(id, item);
     emit();
     // Finished by another tab: refresh what shows it here too (its gallery would stay stale; the
     // uploading tab already did its own before marking the item done).
@@ -346,12 +381,14 @@ export function createUploadQueue({
    */
   function pump() {
     clearTimeout(timer);
-    if (!leader || !userId || !isOnline()) return;
+    if (!userId || !isOnline()) return;
     const t = now();
     let next = Infinity;
     for (const item of items.values()) {
       if (active.size >= CONCURRENCY) return;
       if (item.status !== "queued" || active.has(item.id)) continue;
+      // Stored items only in the tab holding the lock; this tab's large batch always here (13.1c).
+      if (!leader && !item.memoryOnly) continue;
       if (item.retryAt <= t) void run(item.id);
       else next = Math.min(next, item.retryAt);
     }
@@ -469,9 +506,8 @@ export function createUploadQueue({
 
   function checkTakeover() {
     if (leader || !userId) return;
-    const waiting = [...items.values()].some(
-      (item) => item.status === "queued" || item.status === "uploading",
-    );
+    // Only stored work needs the lock; this tab uploads its large batch anyway (13.1c).
+    const waiting = [...items.values()].some(isStoredWork);
     if (!waiting) {
       waitingSince = null;
       return;
@@ -490,10 +526,14 @@ export function createUploadQueue({
     leader = false;
     releaseLock = undefined;
     clearTimeout(timer);
-    for (const controller of active.values()) controller.abort();
-    active.clear();
-    progress.clear();
-    void reload();
+    // The new holder restarts the stored uploads; this tab's large batch carries on here (13.1c).
+    for (const [id, controller] of active) {
+      if (items.get(id)?.memoryOnly) continue;
+      controller.abort();
+      active.delete(id);
+      progress.delete(id);
+    }
+    void reload().then(pump);
     requestLock(forSession);
   }
 
@@ -503,7 +543,8 @@ export function createUploadQueue({
 
   /** Asks for Background Sync if there is anything to upload (registering again is harmless). */
   function armSync() {
-    if ([...items.values()].some((item) => item.status === "queued" || item.status === "uploading"))
+    // The service worker can only upload what is stored, not a large batch (13.1c).
+    if ([...items.values()].some(isStoredWork))
       void Promise.resolve(registerSync?.()).catch(() => {});
   }
 
@@ -570,31 +611,48 @@ export function createUploadQueue({
 
     stop,
 
-    async add(files) {
+    async add(files, options = {}) {
       const result: AddResult = { added: 0, addedBytes: 0, rejected: [] };
       if (!userId) return result;
       const owner = userId;
+      const accepted: { file: File; fileName: string; contentType: UploadItem["contentType"] }[] =
+        [];
       for (const file of files) {
         const check = checkFile(file);
-        if (!check.ok) {
-          result.rejected.push({ fileName: file.name || "photo", reason: check.reason });
+        if (check.ok) accepted.push({ file, ...check });
+        else result.rejected.push({ fileName: file.name || "photo", reason: check.reason });
+      }
+      const phone = isPhone();
+      const total = accepted.reduce((sum, { file }) => sum + file.size, 0);
+      // 13.1c: a folder or a big pick on a computer is read from the disk at upload time and kept
+      // in this tab only; phones copy every pick (below), so one pick is capped there.
+      const large = !phone && (options.folder === true || total > largeBatchBytes);
+      let picked = 0;
+
+      for (const { file, fileName, contentType } of accepted) {
+        if (phone && picked + file.size > PHONE_PICK_BYTES) {
+          result.rejected.push({ fileName, reason: PHONE_LIMIT });
           continue;
         }
-        // Our own copy of the bytes, read now: on Android a picked file is a reference whose read
-        // permission can lapse, and every later write of it to IndexedDB then fails (InvalidBlob).
-        let copy: Blob;
-        try {
-          copy = new Blob([await file.arrayBuffer()], { type: file.type });
-        } catch {
-          result.rejected.push({ fileName: check.fileName, reason: UNREADABLE_FILE });
-          continue;
+        let bytes: Blob = file;
+        if (!large) {
+          // Our own copy of the bytes, read now: on Android a picked file is a reference whose
+          // read permission can lapse, and every later write of it to IndexedDB then fails
+          // (InvalidBlob).
+          try {
+            bytes = new Blob([await file.arrayBuffer()], { type: file.type });
+          } catch {
+            result.rejected.push({ fileName, reason: UNREADABLE_FILE });
+            continue;
+          }
         }
+        picked += file.size;
         await save({
           id: newId(),
           userId: owner,
-          file: copy,
-          fileName: check.fileName,
-          contentType: check.contentType,
+          file: bytes,
+          fileName,
+          contentType,
           sizeBytes: file.size,
           photoId: null,
           status: "queued",
@@ -603,13 +661,14 @@ export function createUploadQueue({
           error: null,
           errorCode: null,
           addedAt: now(),
+          ...(large && { memoryOnly: true }),
         });
         result.added++;
         result.addedBytes += file.size;
         // Upload the first ones while the rest are still being read.
         pump();
       }
-      if (result.added && !persistenceRequested) {
+      if (result.added && !large && !persistenceRequested) {
         persistenceRequested = true;
         void Promise.resolve(requestPersistence?.()).catch(() => {});
       }

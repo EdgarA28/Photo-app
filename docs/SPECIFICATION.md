@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.30 |
+| **Version** | 0.31 |
 | **Date** | 2026-10-31 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -251,7 +251,7 @@ IDs are stable — reference them in issues, PRs and tests.
 | FR-UP-2 | Supported formats: JPEG, PNG, HEIC/HEIF, WebP. |
 | FR-UP-3 | Maximum file size: 50 MB per photo. |
 | FR-UP-4 | Uploads go directly from the client to S3; photo bytes never pass through the API. |
-| FR-UP-5 | Uploads are queued locally and survive page reloads, app restarts and connection loss; failed uploads retry automatically. |
+| FR-UP-5 | Uploads are queued locally and survive page reloads, app restarts and connection loss; failed uploads retry automatically. Exception: a **large batch** (a folder, or more than 500 MB picked at once on a computer) is uploaded by the tab that picked it and survives connection loss, but not closing or reloading that tab; the app asks before the tab is closed. On phones a pick is limited to 1 GB. |
 | FR-UP-6 | The gallery shows queued/uploading photos immediately with progress. |
 | FR-UP-7 | An upload is rejected if it would exceed the user's storage quota, with a clear message. |
 
@@ -632,6 +632,8 @@ TypeScript Lambda, arm64, in `apps/api` (same bundle as the API, own handler and
 ### 12.4 Upload queue
 
 - Selected files stored in IndexedDB with status (`queued`/`uploading`/`done`/`failed`).
+- Large batches (FR-UP-5: a folder or > 500 MB picked at once, computers only): the picked files are not copied or stored; they are read when uploaded and kept only in the tab that picked it, which uploads them whether or not it holds the upload lock, and is not interrupted by another tab or the service worker (its progress counts as activity). Background Sync doesn't cover them. While one runs: "keep this tab open" note, a warning before the tab is closed or reloaded, and Screen Wake Lock where supported. A file moved or deleted since it was picked fails with a message instead of retrying.
+- Phones copy every pick (picked files can lose their read permission on Android), at most 1 GB per pick; the rest is listed as not added.
 - Worker loop: request upload URL → POST to S3 with progress → mark done → invalidate gallery. The gallery refresh is coalesced (at most one per 5 s while uploads finish), so a batch of thousands of files doesn't refetch the gallery after each one.
 - Large queues: the bytes are stored once (status changes rewrite only the item), the UI updates at most once per frame, the upload list is virtualized and the gallery shows at most 20 upload tiles plus "+N more".
 - Retries on `online` event and on app start; Background Sync where supported (Chromium only): the service worker uploads the stored queue once online, even with the app closed, using the stored refresh token (§11.4).
@@ -844,6 +846,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.31 | 2026-11-01 | Large batches (13.1c): FR-UP-5 exception (in the picking tab only, survives connection loss, not a tab close), phone limit 1 GB per pick (§12.4) |
 | 0.30 | 2026-11-01 | SQS queue in front of the thumbnail Lambda with a maximum concurrency: §10 trigger and transient errors, B-11 planned (13.6) (§17). Upload queue at scale: coalesced gallery refresh, bytes stored once, capped/virtualized upload UI (§12.4) |
 | 0.29 | 2026-11-01 | Gallery: album picker removed, `?album=` redirects to the album page (§12.1). Shared photo locations: FR-SHR-12, `showLocations` on Album (§8.2), `PATCH /albums/{id}` and album photo lists (§9), album page (§12.1) |
 | 0.28 | 2026-10-31 | Collaborative albums: FR-SHR-11 (FR-SHR-4 note), `membersCanAdd` + `coverOwnerId` on Album, membership `ownerId` = photo owner + `albumOwnerId` (§8.2); album routes for members, `POST /albums/{albumId}/save` (§9); album page (§12.1) |

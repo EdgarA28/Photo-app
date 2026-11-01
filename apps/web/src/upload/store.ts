@@ -30,6 +30,11 @@ export interface UploadItem {
   /** Its code, so the UI can group failures (e.g. storage full, 8.14). */
   errorCode: UploadErrorCode | null;
   addedAt: number;
+  /**
+   * Part of a large batch (13.1c): the picked `File` itself, read at upload time, kept only in
+   * the tab that picked it, never stored. Absent on stored items.
+   */
+  memoryOnly?: boolean;
 }
 
 /** Persistence of the queue; IndexedDB in the app, in memory in tests. */

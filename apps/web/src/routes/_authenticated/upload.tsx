@@ -1,7 +1,7 @@
 import { MAX_UPLOAD_BYTES } from "@photo-app/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { CircleAlert, WifiOff, X } from "lucide-react";
+import { CircleAlert, MonitorUp, WifiOff, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,7 @@ import { UploadList } from "@/upload/UploadList";
 import type { WaitingPhoto } from "@/upload/shareInbox";
 import { SharedPhotos } from "@/upload/SharedPhotos";
 import { UploadPicker } from "@/upload/UploadPicker";
-import { isActive, useOnline, useUploadQueue, useUploads } from "@/upload/useUploads";
+import { isActive, isInTabOnly, useOnline, useUploadQueue, useUploads } from "@/upload/useUploads";
 
 /**
  * `shared`: arriving from Android's share sheet (9.6, FR-PWA-4), set by the service worker's
@@ -49,6 +49,7 @@ function Upload() {
   const [sharedPhotos, setSharedPhotos] = useState<WaitingPhoto[]>([]);
   const [sharing, setSharing] = useState(false);
   const pending = entries.some((entry) => entry.status === "queued");
+  const inTabOnly = entries.filter(isInTabOnly).length;
   const storageFull = entries.filter(
     (entry) => entry.status === "failed" && entry.errorCode === "QUOTA_EXCEEDED",
   ).length;
@@ -187,6 +188,18 @@ function Upload() {
             <X aria-hidden />
           </Button>
         </div>
+      )}
+      {inTabOnly > 0 && (
+        <p
+          role="status"
+          className="flex items-start gap-2 rounded-xl border bg-muted/40 p-3 text-sm"
+        >
+          <MonitorUp aria-hidden className="mt-0.5 size-4 shrink-0" />
+          <span>
+            Large upload: keep this tab open until it's done. Closing or reloading it stops the
+            remaining {inTabOnly === 1 ? "photo" : `${inTabOnly.toLocaleString()} photos`}.
+          </span>
+        </p>
       )}
       {!online && pending && (
         <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">

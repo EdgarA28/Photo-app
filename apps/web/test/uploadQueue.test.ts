@@ -4,6 +4,7 @@ import type { Api } from "../src/api/api";
 import { ApiRequestError } from "../src/api/errors";
 import {
   CONCURRENCY,
+  PHONE_LIMIT,
   RETRY_BASE_MS,
   RETRY_MAX_MS,
   retryDelay,
@@ -500,6 +501,99 @@ describe("upload queue at scale (13.1-0)", () => {
       .filter((entry) => entry.status === "uploading" && entry.progress < 1)
       .map((entry) => entry.fileName);
     expect(uploading).toEqual(["IMG_5.jpg", "IMG_6.jpg", "IMG_7.jpg"]);
+  });
+});
+
+describe("large batches stay in the tab that picked them (13.1c)", () => {
+  /** Two 1,000-byte files are a large batch with this threshold. */
+  const LARGE = 1500;
+
+  it("reads a large pick from the disk at upload time and stores nothing", async () => {
+    const { api } = uploadApi();
+    const { post, calls } = controlledPost();
+    const requestPersistence = vi.fn();
+    const { queue, store } = testUploadQueue(api, {
+      post,
+      largeBatchBytes: LARGE,
+      requestPersistence,
+    });
+    await queue.start(USER);
+    const files = [testFile("IMG_1.jpg"), testFile("IMG_2.jpg")];
+    const read = vi.spyOn(files[0]!, "arrayBuffer");
+
+    expect(await queue.add(files)).toMatchObject({ added: 2, addedBytes: 2000 });
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    // The picked files themselves, not copies; nothing in IndexedDB.
+    expect(calls[0]!.file).toBe(files[0]);
+    expect(read).not.toHaveBeenCalled();
+    expect(store.items.size).toBe(0);
+    expect(queue.getSnapshot().every((entry) => entry.memoryOnly)).toBe(true);
+    expect(requestPersistence).not.toHaveBeenCalled();
+
+    calls[0]!.resolve();
+    calls[1]!.resolve();
+    await vi.waitFor(() => expect(statuses(queue)).toEqual(["done", "done"]));
+    expect(store.items.size).toBe(0);
+  });
+
+  it("treats a folder as a large batch whatever its size", async () => {
+    const { api } = uploadApi();
+    const { queue, store } = testUploadQueue(api, { post: () => new Promise(() => {}) });
+    await queue.start(USER);
+    await queue.add([testFile("IMG_1.jpg")], { folder: true });
+    expect(queue.getSnapshot()[0]!.memoryOnly).toBe(true);
+    expect(store.items.size).toBe(0);
+  });
+
+  it("keeps small picks stored and copied, as before", async () => {
+    const { api } = uploadApi();
+    const { queue, store } = testUploadQueue(api, {
+      post: () => new Promise(() => {}),
+      largeBatchBytes: LARGE,
+    });
+    await queue.start(USER);
+    await queue.add([testFile("IMG_1.jpg")]);
+    expect(queue.getSnapshot()[0]!.memoryOnly).toBeUndefined();
+    await vi.waitFor(() => expect(store.items.size).toBe(1));
+  });
+
+  it("fails a file that was moved or deleted since it was picked, without retrying", async () => {
+    const { api, uploadUrl } = uploadApi();
+    const { queue } = testUploadQueue(api, { largeBatchBytes: LARGE });
+    await queue.start(USER);
+    const gone = testFile("IMG_1.jpg");
+    vi.spyOn(gone, "slice").mockReturnValue({
+      arrayBuffer: () => Promise.reject(new DOMException("gone", "NotFoundError")),
+    } as unknown as Blob);
+
+    await queue.add([gone, testFile("IMG_2.jpg")]);
+    await vi.waitFor(() => expect(statuses(queue)).toEqual(["failed", "done"]));
+    expect(queue.getSnapshot()[0]).toMatchObject({ errorCode: "FILE_MISSING" });
+    expect(uploadUrl).toHaveBeenCalledOnce();
+  });
+
+  it("phones copy every pick, up to 1 GB, and say why the rest wasn't added", async () => {
+    const { api } = uploadApi();
+    const { queue, store } = testUploadQueue(api, {
+      post: () => new Promise(() => {}),
+      isPhone: () => true,
+      largeBatchBytes: LARGE,
+    });
+    await queue.start(USER);
+    // 25 photos of 45 MB = 1,125 MB (sizes faked; the bytes are a few).
+    const files = Array.from({ length: 25 }, (_, i) => {
+      const file = testFile(`IMG_${i}.jpg`, 10);
+      Object.defineProperty(file, "size", { value: 45 * 1024 * 1024 });
+      return file;
+    });
+
+    const result = await queue.add(files);
+    expect(result.added).toBe(22);
+    expect(result.rejected).toHaveLength(3);
+    expect(result.rejected[0]).toEqual({ fileName: "IMG_22.jpg", reason: PHONE_LIMIT });
+    // Copied and stored as before, not a large batch.
+    expect(queue.getSnapshot().some((entry) => entry.memoryOnly)).toBe(false);
+    await vi.waitFor(() => expect(store.items.size).toBe(22));
   });
 });
 
