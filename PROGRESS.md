@@ -15,14 +15,14 @@
 
 | | |
 |---|---|
-| **Phase** | `main` = GitHub `origin/main` at `6b1ba67` (PR #9, 2026-11-01), **everything on `main` is deployed to dev by CI** (`deploy.yml` after green CI). Done: Phases 0–10 for dev (prod parts and the iOS test of 9.7 moved to Phase 11), Phase 8 extras 8.16–8.32, Phase 13: 6.11 stale-pending sweep, 13.1-0/a–f bulk / folder upload, 13.2 search by place + map, 13.3 trash, 13.4 conflict retries. In progress: Phase 12 verification (12.2 CSP check, 12.3, 12.5/12.6/12.8/12.9), user checks of several features (see Next up). Next to build: 13.1j, 13.6 (SQS, needs approval), 13.1i; then 13.5 (Google Photos import). Phase 11 (prod + iOS) last |
+| **Phase** | Local `main` (`e730c06`) is 5 commits ahead of GitHub `origin/main` (`6b1ba67`, PR #9): the docs sweep, 13.1j and 13.1l, deployed to dev **by hand** (web only); pushing `main` makes CI redeploy the same. Everything else on `main` was deployed to dev by CI. Done: Phases 0–10 for dev (prod parts and the iOS test of 9.7 moved to Phase 11), Phase 8 extras 8.16–8.32, Phase 13: 6.11 stale-pending sweep, 13.1-0/a–f/h/j/l bulk / folder upload, 13.2 search by place + map, 13.3 trash, 13.4 conflict retries. In progress: Phase 12 verification (12.2 CSP check, 12.3, 12.5/12.6/12.8/12.9), user checks of several features (see Next up). Next to build: 13.6 (SQS, needs approval), then 13.1i; then 13.5 (Google Photos import). Phase 11 (prod + iOS) last |
 | **Last updated** | 2026-11-01 |
 | **Deployed envs** | dev (all by CI from `main`): bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` + Cognito pool `us-east-1_vYJcHEj4G` (Google IdP, managed login branding) + trigger `photo-app-dev-pre-sign-up` + thumbnail Lambda `photo-app-dev-thumbnails` with DLQ + API `https://tnl6uhgwkg.execute-api.us-east-1.amazonaws.com` + daily purge Lambda `photo-app-dev-trash-purge` (trash purge + stale-pending sweep, 03:00 UTC) + site bucket `photo-app-site-dev-063359189013` + CloudFront `E1TPVGEAUNF8HT` (`https://dopqu53s0gzhf.cloudfront.net`) + media key group / public key `K3C9HRNJD7QAW6` / SSM key (test resources, destroy when done). Lambda concurrency quota 1,000 (12.3a). general: budget. prod: nothing |
 | **Blockers** | none |
 
 ## Next up
 
-Everything below is on dev (local `main` = `origin/main`, deployed by CI); what's left is mostly user checks.
+Everything below is on dev: by CI up to `6b1ba67`, the newer local commits (13.1j, 13.1l) by hand; local `main` is 5 commits ahead of GitHub (push when ready, CI redeploys the same). What's left is mostly user checks.
 
 1. **User checks on dev** (one pass on phone + laptop covers most):
    - 8.29 shared photo locations (switch on → members see places; off hides them), 8.30 map credits collapsed on the phone, 8.31 gallery without the album menu
