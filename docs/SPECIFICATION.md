@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.32 |
+| **Version** | 0.33 |
 | **Date** | 2026-10-31 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -264,7 +264,7 @@ IDs are stable — reference them in issues, PRs and tests.
 | FR-GAL-3 | Gallery filters (album, sort order) are reflected in the URL and bookmarkable. |
 | FR-GAL-4 | Clicking a photo opens a full-screen viewer showing the preview image, with next/previous navigation. |
 | FR-GAL-7 | The viewer zooms: pinch, double tap and drag on touch; wheel or trackpad pinch, double click, drag and + / − / 0 on a computer. Zoomed past the preview's detail, the full-resolution original loads and replaces it (where the browser can show its format). |
-| FR-GAL-5 | Photos still processing show a placeholder; photos that failed processing show an error state. |
+| FR-GAL-5 | Photos still processing aren't shown in the gallery, albums or the viewer's previous/next; they appear once ready (the list is polled meanwhile). Photos that failed processing show an error state. |
 | FR-GAL-6 | Correct orientation for all photos (EXIF orientation applied). |
 
 ### 6.4 Download & delete
@@ -846,6 +846,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.33 | 2026-11-01 | FR-GAL-5: no placeholder for photos still processing; they appear once ready (user request) |
 | 0.32 | 2026-11-01 | `DELETE /trash` in steps (`{deleted, remaining}`, client repeats), since a big trash took longer than one request may run (§9) |
 | 0.31 | 2026-11-01 | Folders (13.1a): FR-UP-1. Large batches (13.1c): FR-UP-5 exception (in the picking tab only, survives connection loss, not a tab close), phone limit 1 GB per pick (§12.4) |
 | 0.30 | 2026-11-01 | SQS queue in front of the thumbnail Lambda with a maximum concurrency: §10 trigger and transient errors, B-11 planned (13.6) (§17). Upload queue at scale: coalesced gallery refresh, bytes stored once, capped/virtualized upload UI (§12.4) |

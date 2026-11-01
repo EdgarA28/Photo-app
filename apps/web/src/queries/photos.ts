@@ -30,6 +30,15 @@ export const PROCESSING_WINDOW_MS = 10 * 60 * 1000;
 const isProcessing = (photo: Photo, now: number) =>
   photo.status === "pending" && now - Date.parse(photo.uploadedAt) < PROCESSING_WINDOW_MS;
 
+/**
+ * The photos of loaded pages that are shown: processed ones only (ready, or failed so the user
+ * sees what went wrong). An upload still processing stays hidden until it is ready, instead of a
+ * placeholder (user request 2026-11-01, FR-GAL-5); `processingPollInterval` keeps polling for it.
+ */
+export function shownPhotos<T extends { status: string }>(pages: readonly { items: T[] }[]): T[] {
+  return pages.flatMap((page) => page.items.filter((photo) => photo.status !== "pending"));
+}
+
 /** Poll interval for the loaded pages: on while a recent upload is still processing. */
 export function processingPollInterval(
   data: InfiniteData<PhotoPage> | undefined,

@@ -43,7 +43,7 @@ import { SelectButton } from "@/gallery/SelectButton";
 import { SelectionBar } from "@/gallery/SelectionBar";
 import { useSelection } from "@/gallery/useSelection";
 import { albumsQuery, useRemoveFromAlbum, useUpdateAlbum } from "@/queries/albums";
-import { galleryQuery } from "@/queries/photos";
+import { galleryQuery, shownPhotos } from "@/queries/photos";
 import { saveSummary, sharedAlbumsQuery, useSaveSharedPhotos } from "@/queries/shares";
 
 // Album photos newest taken first, in month sections like the gallery (§12.3).
@@ -79,7 +79,7 @@ function AlbumView({ album }: { album: Album }) {
   const search = listOf(album.albumId);
   const { data, hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } =
     useSuspenseInfiniteQuery(galleryQuery(api, search));
-  const photos = useMemo(() => data.pages.flatMap((page) => page.items), [data]);
+  const photos = useMemo(() => shownPhotos(data.pages), [data]);
 
   const selection = useSelection();
   const remove = useRemoveFromAlbum(album.albumId);
@@ -290,7 +290,7 @@ function SharedAlbumView({ albumId }: { albumId: string }) {
     if (!album && hasNextPage && !isFetchingNextPage) void fetchNextPage();
   }, [album, hasNextPage, isFetchingNextPage, fetchNextPage]);
   const searching = !album && (shared.isPending || hasNextPage);
-  const items = useMemo(() => photoPages.pages.flatMap((page) => page.items), [photoPages]);
+  const items = useMemo(() => shownPhotos(photoPages.pages), [photoPages]);
 
   const selection = useSelection();
   const save = useSaveSharedPhotos(albumId);

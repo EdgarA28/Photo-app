@@ -184,21 +184,22 @@ describe("uploads in the gallery and nav (FR-UP-6)", () => {
     expect(screen.getAllByLabelText("4 uploading").length).toBeGreaterThan(0);
   });
 
-  it("refreshes the gallery when an upload finishes, so it appears as processing", async () => {
-    const pending = {
+  it("refreshes the gallery when an upload finishes, so the photo appears once ready", async () => {
+    // Processed right away here; a photo still processing isn't shown (gallery tests).
+    const processed = {
       items: [
         {
           photoId: testId(1),
-          status: "pending",
+          status: "ready",
           fileName: "NEW_1.jpg",
           contentType: "image/jpeg",
           sizeBytes: 1000,
-          width: null,
-          height: null,
+          width: 400,
+          height: 300,
           takenAt: new Date().toISOString(),
           uploadedAt: new Date().toISOString(),
-          thumbUrl: null,
-          previewUrl: null,
+          thumbUrl: "https://d.example/users/u/thumbs/1.jpg",
+          previewUrl: "https://d.example/users/u/previews/1.jpg",
         },
       ],
       nextCursor: null,
@@ -207,7 +208,7 @@ describe("uploads in the gallery and nav (FR-UP-6)", () => {
     const { api } = fakeApi({
       ...defaultResponses,
       "POST /photos/upload-url": uploadUrl,
-      "GET /photos": () => (uploaded ? pending : { items: [], nextCursor: null }),
+      "GET /photos": () => (uploaded ? processed : { items: [], nextCursor: null }),
     });
     let queue: UploadQueue | undefined;
     await renderAt("/gallery", {
@@ -224,7 +225,7 @@ describe("uploads in the gallery and nav (FR-UP-6)", () => {
     expect(await screen.findByText("No photos yet.")).toBeTruthy();
 
     await queue!.add([testFile("NEW_1.jpg")]);
-    expect(await screen.findByRole("link", { name: "NEW_1.jpg, processing" })).toBeTruthy();
+    expect(await screen.findByRole("link", { name: "NEW_1.jpg" })).toBeTruthy();
   });
 
   it("doesn't show uploads inside an album", async () => {
