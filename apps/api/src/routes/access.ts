@@ -66,14 +66,15 @@ export const photoOwnerOf = (membership: MembershipRecord) => membership.ownerId
 /**
  * A photo of someone else that the caller can see because it is in `albumId`, an album they own
  * or that is shared with them. Others' photos are only visible once processed. Null for the
- * caller's own photos too: those are looked up directly.
+ * caller's own photos too: those are looked up directly. Comes with the album, which says whether
+ * it shares locations (FR-SHR-12).
  */
 export async function albumPhoto(
   repos: Repositories,
   userId: string,
   albumId: string,
   photoId: string,
-): Promise<PhotoRecord | null> {
+): Promise<{ photo: PhotoRecord; album: AlbumRecord } | null> {
   const access = await albumAccess(repos, userId, albumId);
   if (!access) return null;
   const membership = await repos.albums.getMembership(albumId, photoId);
@@ -84,7 +85,7 @@ export async function albumPhoto(
   if (!active.has(ownerId)) return null;
   // Looked up under the owner named by the membership of an album the caller can see.
   const photo = await repos.photos.get(ownerId, photoId);
-  return photo && isVisibleToOthers(photo) ? photo : null;
+  return photo && isVisibleToOthers(photo) ? { photo, album: access.album } : null;
 }
 
 /**

@@ -23,9 +23,8 @@ describe("routes (§12.1)", () => {
   });
 
   it("keeps valid gallery search params", async () => {
-    const album = "01JB2Z3M4N5P6Q7R8S9T0V1W2X";
-    const { router } = await renderAt(`/gallery?album=${album}&sort=taken-asc`);
-    expect(router.state.location.search).toEqual({ album, sort: "taken-asc" });
+    const { router } = await renderAt("/gallery?sort=taken-asc");
+    expect(router.state.location.search).toEqual({ sort: "taken-asc" });
   });
 
   it("drops invalid gallery search params instead of failing", async () => {

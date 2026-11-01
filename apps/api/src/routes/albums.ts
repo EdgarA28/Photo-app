@@ -102,7 +102,8 @@ export function albumRoutes(app: Hono<AppEnv>, { repos, media }: Deps): void {
    * Album photos by date taken, newest first unless `?sort=taken-asc` (GSI1, §9, §12.3), paginated.
    * For the owner, or for a recipient of the share (FR-SHR-4). In a collaborative album the photos
    * are several people's (FR-SHR-11): the caller's own come as in the gallery, everyone else's
-   * only when processed, with signed URLs and without their place. Each says who added it.
+   * only when processed, with signed URLs, without their place unless the album shares locations
+   * (FR-SHR-12). Each says who added it.
    */
   app.get(
     "/albums/:albumId/photos",
@@ -141,7 +142,11 @@ export function albumRoutes(app: Hono<AppEnv>, { repos, media }: Deps): void {
           records.map(async (photo) => {
             const ownerUsername = usernames.get(photo.userId) ?? null;
             if (photo.userId === userId) return { ...toPhoto(photo), ownerUsername };
-            return toSharedPhoto(photo, media, now, { preview: false, ownerUsername });
+            return toSharedPhoto(photo, media, now, {
+              preview: false,
+              ownerUsername,
+              withPlace: album.showLocations === true,
+            });
           }),
         ),
         nextCursor: page.nextCursor,

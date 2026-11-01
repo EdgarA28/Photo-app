@@ -27,8 +27,9 @@ const nameOf = (share: AlbumShare) =>
 
 /**
  * Sharing an own album (FR-SHR-1/2/5): one field for an email or a username, the people it's
- * shared with, and revoking, plus "Members can add photos" (FR-SHR-11). Revoking needs no
- * confirmation: none of the owner's photos are deleted, and sharing again invites them again.
+ * shared with, and revoking, plus "Members can add photos" (FR-SHR-11) and "Share photo
+ * locations" (FR-SHR-12). Revoking needs no confirmation: none of the owner's photos are
+ * deleted, and sharing again invites them again.
  */
 export function ShareDialog({
   album,
@@ -73,7 +74,7 @@ function ShareForm({ album }: { album: Album }) {
 
   return (
     <div className="grid gap-5">
-      <MembersCanAdd album={album} />
+      <AlbumSwitches album={album} />
       <form
         className="grid gap-2"
         onSubmit={(event) => {
@@ -193,33 +194,69 @@ function ShareForm({ album }: { album: Album }) {
   );
 }
 
+type AlbumSwitch = "membersCanAdd" | "showLocations";
+
 /**
- * The owner's switch for a collaborative album (FR-SHR-11). Turning it off keeps the photos
- * members already added; they can still take them out themselves.
+ * The owner's album switches: "Members can add photos" (FR-SHR-11; turning it off keeps the photos
+ * members already added) and "Share photo locations" (FR-SHR-12; place names of every photo in the
+ * album, members' too, for everyone in it).
  */
-function MembersCanAdd({ album }: { album: Album }) {
+const SWITCHES: { name: AlbumSwitch; label: string; hint: string }[] = [
+  {
+    name: "membersCanAdd",
+    label: "Members can add photos",
+    hint: "Their photos stay theirs and count against their storage. If they leave, their photos leave the album.",
+  },
+  {
+    name: "showLocations",
+    label: "Share photo locations",
+    hint: "Everyone in the album sees where each photo was taken (town and country), members' photos too. Members are told.",
+  },
+];
+
+function AlbumSwitches({ album }: { album: Album }) {
+  return (
+    <div className="grid gap-4">
+      {SWITCHES.map((item) => (
+        <AlbumSwitchRow key={item.name} album={album} {...item} />
+      ))}
+    </div>
+  );
+}
+
+function AlbumSwitchRow({
+  album,
+  name,
+  label,
+  hint,
+}: {
+  album: Album;
+  name: AlbumSwitch;
+  label: string;
+  hint: string;
+}) {
   const id = useId();
   const update = useUpdateAlbum(album.albumId);
+  const pending = update.isPending && name in update.variables;
   return (
     <div className="grid gap-1">
       <div className="flex items-center justify-between gap-4">
         <div className="grid gap-0.5">
-          <Label htmlFor={id}>Members can add photos</Label>
+          <Label htmlFor={id}>{label}</Label>
           <p id={`${id}-hint`} className="text-sm text-muted-foreground">
-            Their photos stay theirs and count against their storage. If they leave, their photos
-            leave the album.
+            {hint}
           </p>
         </div>
         <Switch
           id={id}
           aria-describedby={`${id}-hint`}
-          checked={
-            update.isPending && "membersCanAdd" in update.variables
-              ? update.variables.membersCanAdd
-              : album.membersCanAdd
-          }
+          checked={pending ? (update.variables as Record<AlbumSwitch, boolean>)[name] : album[name]}
           disabled={update.isPending}
-          onCheckedChange={(membersCanAdd) => update.mutate({ membersCanAdd })}
+          onCheckedChange={(value) =>
+            update.mutate(
+              name === "membersCanAdd" ? { membersCanAdd: value } : { showLocations: value },
+            )
+          }
         />
       </div>
       {update.isError && (

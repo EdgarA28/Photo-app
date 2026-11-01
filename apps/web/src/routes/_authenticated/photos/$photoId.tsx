@@ -203,7 +203,8 @@ function Viewer() {
             <p className="text-sm text-white/80">{dateFormat.format(new Date(photo.takenAt))}</p>
           )}
           {photo.place && (
-            // Own photos only: the API leaves the place out for share recipients (13.2g).
+            // Own photos, and others' in an album that shares locations (FR-SHR-12): the API leaves the
+            // place out for everyone else (13.2g).
             <p className="truncate text-xs text-white/60">
               {[photo.place.city, photo.place.country].join(", ")}
             </p>

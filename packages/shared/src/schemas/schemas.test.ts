@@ -130,6 +130,10 @@ describe("album schemas", () => {
     expect(updateAlbumRequestSchema.parse({ membersCanAdd: true })).toEqual({
       membersCanAdd: true,
     });
+    // FR-SHR-12: so is the locations switch, also when turned off.
+    expect(updateAlbumRequestSchema.parse({ showLocations: false })).toEqual({
+      showLocations: false,
+    });
   });
 
   test("add photos validates IDs", () => {

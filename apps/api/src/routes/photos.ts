@@ -127,11 +127,12 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, media, config }
       const own = await repos.photos.get(userId, photoId);
       if (own) return c.json(toPhoto(own) satisfies Photo);
       const shared = albumId ? await albumPhoto(repos, userId, albumId, photoId) : null;
-      const record = orNotFound(shared, "Photo not found");
+      const { photo: record, album } = orNotFound(shared, "Photo not found");
       const usernames = await repos.usernames.getMany([record.userId]);
       const body: Photo = await toSharedPhoto(record, media, new Date(), {
         preview: true,
         ownerUsername: usernames.get(record.userId) ?? null,
+        withPlace: album.showLocations === true,
       });
       return c.json(body);
     },
@@ -153,7 +154,7 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, media, config }
       const { albumId } = c.req.valid("query");
       const own = await repos.photos.get(userId, photoId);
       const shared = !own && albumId ? await albumPhoto(repos, userId, albumId, photoId) : null;
-      const record = orNotFound(own ?? shared, "Photo not found");
+      const record = orNotFound(own ?? shared?.photo, "Photo not found");
       // Until the upload is processed there may be no original yet. Failed photos keep theirs.
       if (record.status === "pending") {
         throw new AppError(409, "CONFLICT", "This photo has not been uploaded yet");
