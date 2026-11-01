@@ -1,6 +1,7 @@
 """Handler + processor against mocked S3 and DynamoDB (moto): §10, tasks 6.1, 6.4, 6.5."""
 
 import io
+import json
 from collections.abc import Iterator
 from typing import Any
 
@@ -290,7 +291,7 @@ def test_photo_deleted_during_processing_cleans_up(
 
 
 def test_transient_errors_are_raised(aws: tuple[Any, Any], jpeg_plain: bytes) -> None:
-    # NFR-OPS-1: raising makes Lambda retry and then send the event to the DLQ.
+    # Direct S3 event (before 13.6, cut-over): raising makes Lambda retry, then the DLQ (NFR-OPS-1).
     s3, dynamodb = aws
     put_pending(dynamodb)
     event = upload(s3, jpeg_plain)
@@ -628,3 +629,99 @@ def test_gps_far_from_any_town_keeps_coordinates_only(aws: tuple[Any, Any]) -> N
     assert item is not None
     assert (float(item["latitude"]["N"]), float(item["longitude"]["N"])) == (30.0, -40.0)
     assert not {"place", "placeIds"} & item.keys()
+
+
+# --- SQS input (13.6, spec §10) ---------------------------------------------------------------
+
+
+def sqs_event(*bodies: dict[str, Any]) -> dict[str, Any]:
+    """What the event source mapping sends: one message per S3 event, the event as JSON body."""
+    return {
+        "Records": [
+            {
+                "messageId": f"msg-{i}",
+                "receiptHandle": f"handle-{i}",
+                "body": json.dumps(body),
+                "attributes": {"ApproximateReceiveCount": "1"},
+                "eventSource": "aws:sqs",
+                "eventSourceARN": "arn:aws:sqs:us-east-1:123456789012:photo-app-test-thumbnails",
+            }
+            for i, body in enumerate(bodies)
+        ]
+    }
+
+
+class FakeContext:
+    def __init__(self, remaining_ms: list[int]) -> None:
+        self._remaining = remaining_ms
+
+    def get_remaining_time_in_millis(self) -> int:
+        return self._remaining.pop(0)
+
+
+def test_sqs_message_is_processed(aws: tuple[Any, Any], jpeg_plain: bytes) -> None:
+    s3, dynamodb = aws
+    put_pending(dynamodb, declared=len(jpeg_plain))
+
+    result = handler_module.handler(sqs_event(upload(s3, jpeg_plain)))
+
+    # Only batchItemFailures: any other key would fail the whole batch.
+    assert result == {"batchItemFailures": []}
+    item = get(dynamodb, PHOTO_KEY)
+    assert item is not None
+    assert item["status"]["S"] == "ready"
+    assert exists(s3, THUMB)
+    assert exists(s3, PREVIEW)
+
+
+def test_sqs_derived_objects_and_test_event_are_ignored(aws: tuple[Any, Any]) -> None:
+    # Thumbs/previews come through the queue too (S3 can't filter them); S3's test event when the
+    # notification is saved has no Records.
+    test_event = {"Service": "Amazon S3", "Event": "s3:TestEvent", "Bucket": BUCKET}
+    result = handler_module.handler(
+        sqs_event(test_event, s3_event(THUMB, 10), s3_event(PREVIEW, 10))
+    )
+    assert result == {"batchItemFailures": []}
+
+
+def test_sqs_transient_error_fails_only_that_message(
+    aws: tuple[Any, Any], jpeg_plain: bytes
+) -> None:
+    # NFR-OPS-1: the failed message comes back after the visibility timeout, then the DLQ.
+    s3, dynamodb = aws
+    put_pending(dynamodb, declared=len(jpeg_plain))
+    good = upload(s3, jpeg_plain)
+    bad = s3_event(f"users/{USER}/originals/01JABCDEFGHJKMNPQRSTVWXYZ1.jpg", 1)
+    bad["Records"][0]["s3"]["bucket"]["name"] = "no-such-bucket"
+
+    result = handler_module.handler(sqs_event(bad, good))
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "msg-0"}]}
+    item = get(dynamodb, PHOTO_KEY)
+    assert item is not None
+    assert item["status"]["S"] == "ready"
+
+
+def test_sqs_malformed_body_is_a_failure(aws: tuple[Any, Any]) -> None:
+    event = sqs_event({})
+    event["Records"][0]["body"] = "not json"
+    assert handler_module.handler(event) == {"batchItemFailures": [{"itemIdentifier": "msg-0"}]}
+
+
+def test_sqs_messages_are_returned_when_time_runs_out(
+    aws: tuple[Any, Any], jpeg_plain: bytes
+) -> None:
+    s3, dynamodb = aws
+    put_pending(dynamodb, declared=len(jpeg_plain))
+    event = sqs_event(upload(s3, jpeg_plain), s3_event(THUMB, 10), s3_event(PREVIEW, 10))
+    low = handler_module.MIN_REMAINING_MS - 1
+
+    result = handler_module.handler(event, FakeContext([60_000, low, low]))
+
+    # The first message ran; the rest go back to the queue unprocessed.
+    assert result == {
+        "batchItemFailures": [{"itemIdentifier": "msg-1"}, {"itemIdentifier": "msg-2"}]
+    }
+    item = get(dynamodb, PHOTO_KEY)
+    assert item is not None
+    assert item["status"]["S"] == "ready"

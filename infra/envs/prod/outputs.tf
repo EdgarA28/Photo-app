@@ -42,6 +42,10 @@ output "thumbnails_dlq_url" {
   value = module.thumbnails.dlq_url
 }
 
+output "thumbnails_queue_url" {
+  value = module.thumbnails.queue_url
+}
+
 output "api_endpoint" {
   value = module.api.api_endpoint
 }

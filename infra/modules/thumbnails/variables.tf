@@ -27,3 +27,15 @@ variable "table_arn" {
   description = "App table ARN (database module)."
   type        = string
 }
+
+variable "maximum_concurrency" {
+  description = "Most thumbnail Lambdas running at once (SQS event source maximum concurrency, spec §10, B-11)."
+  type        = number
+  default     = 5
+
+  validation {
+    # Lambda's limits for SQS event sources.
+    condition     = var.maximum_concurrency >= 2 && var.maximum_concurrency <= 1000
+    error_message = "maximum_concurrency must be between 2 and 1000."
+  }
+}

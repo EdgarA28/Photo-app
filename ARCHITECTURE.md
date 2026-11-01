@@ -10,7 +10,7 @@
 | | |
 |---|---|
 | **Last updated** | 2026-11-01 |
-| **Reflects** | Local `main` at `e730c06`: GitHub `main` `6b1ba67` (PR #9, deployed to dev by CI) plus 13.1j and 13.1l (web only, deployed to dev by hand, not pushed). Phases 0–10 (prod parts and the iOS test moved to Phase 11, not started), Phase 12 verification in progress, Phase 13: trash (13.3), search by place + map (13.2), stale-pending sweep (6.11), bulk / folder upload (13.1-0/a–f, 13.1j less polling, 13.1l mobile data warning), conflict retries (13.4). Planned: thumbnail SQS queue (13.6), Google Photos import (13.5) |
+| **Reflects** | Local `main` at `e730c06`: GitHub `main` `6b1ba67` (PR #9, deployed to dev by CI) plus 13.1j and 13.1l (web only, deployed to dev by hand, not pushed). Phases 0–10 (prod parts and the iOS test moved to Phase 11, not started), Phase 12 verification in progress, Phase 13: trash (13.3), search by place + map (13.2), stale-pending sweep (6.11), bulk / folder upload (13.1-0/a–f, 13.1j less polling, 13.1l mobile data warning), conflict retries (13.4). Built, not yet deployed: thumbnail SQS queue (13.6, plan awaiting approval). Planned: Google Photos import (13.5) |
 
 ---
 
@@ -47,14 +47,14 @@
 | Environment roots | `infra/envs/{dev,prod}` | 🚧 | All modules (database, storage, auth, thumbnails, api, frontend) **deployed in dev** (by CI, `deploy.yml`); prod validated only (Phase 11) |
 | Infra modules: database, storage | `infra/modules/{database,storage}` | ✅ (dev) | Offline `tofu test` suites (7 runs) |
 | Infra module: auth | `infra/modules/auth` | ✅ (dev) | User pool, prefix domain (managed login), PKCE web client (4.1), optional Google IdP (4.4), optional pre sign-up trigger Lambda (4.6) + 11 offline test runs; **deployed in dev** (with Google + trigger) |
-| Infra module: thumbnails | `infra/modules/thumbnails` | ✅ (dev) | Lambda, IAM, S3 notification, retries + SQS DLQ, logs (6.9) + 4 offline test runs; **deployed in dev** |
+| Infra module: thumbnails | `infra/modules/thumbnails` | ✅ (dev) | Lambda, IAM, S3 notification, retries + SQS DLQ, logs (6.9) + 7 offline test runs; **deployed in dev** (direct S3 trigger); SQS input (13.6) built, not applied |
 | Infra module: api | `infra/modules/api` | ✅ (dev) | HTTP API, Cognito JWT authorizer, API Lambda, IAM, throttling, access + Lambda logs (5.4) + 7 offline test runs; **deployed in dev**. Daily purge Lambda + EventBridge rule (`purge.tf`): trash purge (FR-DEL-3) and stale-pending sweep (6.11, + `s3:GetObject` originals / `s3:ListBucket`) ✅ in dev; `GET /api/links/{token}…` public route (8.22) |
 | Infra module: frontend | `infra/modules/frontend` | ✅ (dev) | 7.1: site bucket, CloudFront (OAC, `/api/*`, `/users/*`, SPA rewrite function); 7.2: media signing key, key group trusted by `/users/*`, private key in SSM; 7 offline test runs + function unit tests; **deployed in dev**. 7.3: the API issues the media cookies, so own images load in the app; response headers policy (CSP, HSTS, 12.2a). Custom domain + TLS 1.2 certificate: Phase 11 (1.7, 11.1) |
 | API Lambda | `apps/api` | ✅ (dev) | All routes of §9 (5.5–5.15) plus media cookies and shared-album signed URLs (7.3/7.4), trash (13.3), places + map (13.2), public photo links (8.20–8.23), invitations, collaborative albums, save shared photos, shared locations (FR-SHR-6–12); conflict retries on every transaction (13.4); daily purge entry (`purge.ts`: trash purge + stale-pending sweep 6.11). Tests incl. DynamoDB Local; **deployed in dev** behind API Gateway (5.4). Planned: `/imports` routes + import worker (13.5) |
-| Thumbnail Lambda | `services/thumbnails` | ✅ (dev) | Handler, image pipeline, S3-key mirror, orphan cleanup, overwrite guard (12.2b), EXIF GPS + offline reverse geocoding (13.2a/b), conflict retries (8.24, 13.4) + pytest; arm64 package `build.sh` → `dist/` (6.8); **deployed in dev** (6.9–6.10). Planned: SQS input (13.6) |
+| Thumbnail Lambda | `services/thumbnails` | ✅ (dev) | Handler, image pipeline, S3-key mirror, orphan cleanup, overwrite guard (12.2b), EXIF GPS + offline reverse geocoding (13.2a/b), conflict retries (8.24, 13.4), SQS input with batch item failures (13.6b, not deployed) + pytest; arm64 package `build.sh` → `dist/` (6.8); **deployed in dev** (6.9–6.10) |
 | Auth trigger Lambda | `services/auth-triggers` | ✅ (dev) | Pre sign-up handler (Google → native account linking, refuses duplicate email sign-ups) + 24 tests (4.5); **deployed in dev** (4.6), linking verified manually |
 | Web app / PWA | `apps/web` | ✅ (dev) | 8.1 scaffold: Vite + React, file routes of spec §12.1 (placeholder pages), Query client, Zod-validated gallery search, `/api` dev proxy. 8.2 Tailwind CSS 4 + shadcn/ui (D-3). 8.3 login (oidc-client-ts, PKCE, refresh, guard, logout). 8.4 API client (bearer, Zod, 401 retry); settings shows `GET /me`. 8.5 app shell (side rail / bottom tab bar, full-screen viewer, system dark mode). 8.6 gallery (infinite query, virtualized justified rows, album/sort filters in the URL). 8.7 processing/failed tiles + polling while photos process. 8.8 full-screen viewer (preview, prev/next through the gallery list, arrow keys, Escape, swipe). 8.9 download original + delete with confirmation in the viewer. 8.10 upload queue (IndexedDB, picker / drag & drop / camera, 3 parallel, progress, automatic retry, one uploading tab, gallery tiles + nav badge). 8.11 albums (list, create, rename, delete, album view, select mode, add/remove photos, cover; album actions in the viewer). 8.12 sharing (share dialog by email or @username, revoke, "Shared with me", read-only shared album view, "Shared by" in the viewer). 8.13 settings (account, quota bar, username set/change, logout clearing the upload queue and Query cache). 8.14 storage-full handling (space warning, grouped banner, Retry all), session-expired and offline messages. 8.15 "choose a username" prompt after login. **Phase 8 complete.** Thumbnails and previews show once Phase 7 serves them. 9.1 web app manifest + icons (installable metadata). 9.2 service worker caching: precached shell, offline navigation fallback, CacheFirst thumbnails. 9.4 service worker registered (`registerType: 'prompt'`) with an "Update available" prompt and hourly update checks. 9.3 Query cache saved to IndexedDB per user and restored on start; offline start with the stored session's `sub`. 9.5 Background Sync: the service worker uploads the queue after the app is closed or frozen (Chromium); refresh token now in IndexedDB. 9.6 Android share target: photos shared to the app land in the upload queue. Later (all on dev): month sections (8.16), viewer zoom (8.17), sticky header (8.18/8.19), invitations (8.20), branded login (8.21), public photo links (8.22/8.23), upload reliability (8.24), faster start (8.25), save shared photos (8.26), collaborative albums (8.28), shared locations (8.29), photos shown once ready (8.32), trash (13.3), place search + `/map` (13.2), bulk / folder upload (13.1-0/a–f/j/l: scalable queue, folders, large in-tab batches, skipped-files summary, space check, whole-queue progress / pause / cancel, continue interrupted batches, less polling during uploads, mobile data warning + phone hint). Status: ✅ except the iOS test (9.7, Phase 11) and open user checks in `PROGRESS.md` |
-| Thumbnail queue (SQS) | `infra/modules/thumbnails`, `services/thumbnails` | 📋 | Planned (13.6, spec v0.30 §10, B-11): S3 → SQS `photo-app-{env}-thumbnails` → thumbnail Lambda (event source mapping, maximum concurrency 5, redrive to the existing DLQ); today S3 invokes the Lambda directly |
+| Thumbnail queue (SQS) | `infra/modules/thumbnails`, `services/thumbnails` | 🚧 | Built, not applied (13.6a–c, spec v0.30 §10, B-11): S3 → SQS `photo-app-{env}-thumbnails` → thumbnail Lambda (event source mapping, batch 5, maximum concurrency 5, `ReportBatchItemFailures`, redrive to the existing DLQ after 3 receives); dev plan 3 add / 4 change / 2 destroy awaits approval. Until applied, S3 invokes the Lambda directly |
 | Import from Google Photos | `apps/api` (routes + worker), `infra/modules/api`, `apps/web` | 📋 | Planned (13.5, spec v0.24 §6.9): Picker API, `/imports` routes, SQS import queue + DLQ, import worker Lambda; nothing built yet (§10.8) |
 | CI/CD workflows | `.github/workflows` | 🚧 | `ci.yml` (10.1: checks, build, dev `tofu plan` + PR comment; pull requests and pushes to `main`); `deploy.yml` (10.2: dev deploy after CI passes on `main`; running since `87fbe5c`). Prod job (10.3): Phase 11 |
 
@@ -85,6 +85,7 @@ flowchart LR
     WEB[("✅ S3 site bucket (dev)")]
     S3[("✅ S3 photo bucket (dev)")]
     THUMB["✅ Thumbnail Lambda (dev)<br/>services/thumbnails"]
+    TQ[["🚧 SQS thumbnail queue<br/>(13.6, not applied)"]]
     DLQ[["✅ SQS DLQ (dev)"]]
     STATE[("✅ S3 state bucket")]
   end
@@ -100,10 +101,11 @@ flowchart LR
   API --> DDB
   API -- "pre-signed URLs" --> S3
   PWA -- "pre-signed POST (upload)" --> S3
-  S3 -- "ObjectCreated originals/" --> THUMB
+  S3 -- "ObjectCreated users/" --> TQ
+  TQ -- "event source mapping<br/>max concurrency 5" --> THUMB
   THUMB --> S3
   THUMB --> DDB
-  THUMB -. "failures" .-> DLQ
+  TQ -. "after 3 receives" .-> DLQ
   SHARED -. "imported by" .-> PWA
   SHARED -. "imported by" .-> API
   SHARED -. "test vectors" .-> THUMB
@@ -346,7 +348,7 @@ Photo-app/
 │       ├── database/            ✅ DynamoDB single table (+ tests/)
 │       ├── storage/             ✅ photo bucket (+ tests/)
 │       ├── auth/                ✅ Cognito user pool, domain, web client, Google IdP, pre sign-up trigger (+ tests/)
-│       ├── thumbnails/          ✅ thumbnail Lambda, IAM, S3 notification, DLQ (+ tests/)
+│       ├── thumbnails/          ✅ thumbnail Lambda, IAM, S3 notification, DLQ (+ tests/); 🚧 SQS queue + event source mapping (13.6)
 │       ├── api/                 ✅ HTTP API, JWT authorizer, API Lambda, IAM, throttling; purge.tf: daily Lambda (trash purge FR-DEL-3 + stale-pending sweep 6.11) + daily rule (+ tests/)
 │       └── frontend/            ✅ site bucket, CloudFront, SPA rewrite function (functions/), media signing keys (media-keys.tf) (+ tests/)
 │
@@ -602,7 +604,7 @@ Access patterns and the "can user X see photo P" rule: see spec §8.2.
   - *Delete for good* = `photos.delete` with a guard (`trashedAt` set; the purge also `purgeAt ≤ now`), checked on every re-read; the delete is conditional on the `trashedAt` read, so a restore in between wins. For a trashed photo the place entries lose `trashedCount` instead of `photoCount`.
   - *Hidden while trashed*: gallery (GSI1 key), albums and shared albums (no membership), places and place photos (no GSI1 key, count moved), map (`listLocated` filters `attribute_not_exists(trashedAt)`). `GET /photos/{id}` still returns it to the owner, with the trash dates.
   - `listTrashed` reads the user's photo partition with a filter (like the map, bounded by the quota); `listExpired` queries GSI1 `TRASH` with `GSI1SK BETWEEN "PURGE#" AND "PURGE#{now}~"` (all users, oldest first, no scan).
-- **Stale-pending sweep (✅ dev, 6.11, `lib/pending.ts`):** uploads started but never arrived (tab closed, batch cancelled) would hold their `bytesReserved` for good. `createPending` writes a **pending marker** (`PK = PENDING`, `SK = UPLOADED#{uploadedAt}#{userId}#{photoId}`, `ttl` 30 days) as the last item of its transaction, so the condition indexes (0 photo, 1 Usage, 2 claim) stay put. The daily purge Lambda then runs `sweepStalePending`: `listPendingMarkers(now − 24 h)` (one query, all users, no scan; 24 h ≫ the 15-min upload URL and the 6-h async thumbnail retries) → per marker, 5 at a time: photo gone / not pending → marker deleted (`cleared`); pending and **original not in S3** (`storage.exists`, HeadObject) → `photos.delete` with a guard (`pending`, not trashed: memberships, `bytesReserved`), then the marker (`removed`); pending but the original **is** there → left alone, marker kept, WARN log every day (`stuck`: processing failed, see the thumbnail DLQ). Stops starting chunks of 50 markers 30 s before the Lambda timeout (`deferred`, next day). A HeadObject error is a failure (never "missing"), so a 403 can't delete photos. Ready photos' markers are only removed by the sweep (one extra put per upload, one delete a day later); the thumbnail Lambda is unchanged. No backfill: dev had 0 pending items on 2026-10-31, prod isn't deployed. Edge case accepted: a device that re-signs a swept photo gets 404 and starts a fresh upload (8.10); one that uploads in the seconds of a sweep can leave an original without an item.
+- **Stale-pending sweep (✅ dev, 6.11, `lib/pending.ts`):** uploads started but never arrived (tab closed, batch cancelled) would hold their `bytesReserved` for good. `createPending` writes a **pending marker** (`PK = PENDING`, `SK = UPLOADED#{uploadedAt}#{userId}#{photoId}`, `ttl` 30 days) as the last item of its transaction, so the condition indexes (0 photo, 1 Usage, 2 claim) stay put. The daily purge Lambda then runs `sweepStalePending`: `listPendingMarkers(now − 24 h)` (one query, all users, no scan; 24 h ≫ the 15-min upload URL and the thumbnail retries: 6-h async retries today, 3 queue receives of ≥ 6 min each with 13.6) → per marker, 5 at a time: photo gone / not pending → marker deleted (`cleared`); pending and **original not in S3** (`storage.exists`, HeadObject) → `photos.delete` with a guard (`pending`, not trashed: memberships, `bytesReserved`), then the marker (`removed`); pending but the original **is** there → left alone, marker kept, WARN log every day (`stuck`: processing failed, see the thumbnail DLQ). Stops starting chunks of 50 markers 30 s before the Lambda timeout (`deferred`, next day). A HeadObject error is a failure (never "missing"), so a 403 can't delete photos. Ready photos' markers are only removed by the sweep (one extra put per upload, one delete a day later); the thumbnail Lambda is unchanged. No backfill: dev had 0 pending items on 2026-10-31, prod isn't deployed. Edge case accepted: a device that re-signs a swept photo gets 404 and starts a fresh upload (8.10); one that uploads in the seconds of a sweep can leave an original without an item.
 
 ---
 
@@ -738,7 +740,7 @@ Cognito's `/oauth2/token` and `/oauth2/revoke` answer CORS preflights for the re
 
 Linking makes the Google identity sign in as the native user from then on, so `sub` (and every photo) stays the same. **Verified in dev (4.6):** password sign-up → Google sign-in with the same email linked the identity (`identities` attribute on the native user, no separate `Google_…` user, log "Linked external identity to native user"); the first Google sign-in after linking completed without a retry. Logs: one JSON event per call with our fields under `message` (e.g. `message.provider`); `level`/`timestamp`/`requestId` come from the runtime. Cold start ~0.9 s incl. the first `ListUsers`, warm ~3 ms (Cognito allows 5 s).
 
-### 10.2 Upload & processing ✅ (dev: contracts, API, thumbnail Lambda, web queue 8.10 + bulk / folder upload 13.1; 📋 SQS in front of the thumbnail Lambda, 13.6)
+### 10.2 Upload & processing ✅ (dev: contracts, API, thumbnail Lambda, web queue 8.10 + bulk / folder upload 13.1; 🚧 SQS in front of the thumbnail Lambda, 13.6: built, not applied)
 
 ```mermaid
 sequenceDiagram
@@ -755,7 +757,7 @@ sequenceDiagram
   A->>D: ✅ TransactWrite: put Photo {status: pending}<br/>and Usage ADD bytesReserved if it fits (else 413 QUOTA_EXCEEDED)
   A-->>U: ✅ 201 {photoId, upload{url, fields}}
   U->>S: ✅ XHR POST fields + file to users/{sub}/originals/{photoId}.{ext}<br/>(policy limits size + content type), progress → UI
-  S-)T: ObjectCreated
+  S-)T: ObjectCreated (🚧 13.6: via SQS queue, ≤ 5 Lambdas at once)
   T->>T: ✅ parse_original_key() → ignore anything else
   T->>D: ✅ GetItem Photo (consistent) → skip unless pending
   T->>S: ✅ GET original
@@ -765,13 +767,13 @@ sequenceDiagram
   U->>A: ✅ invalidate ["photos"], ["me"] → refetch GET /photos → hidden while pending, polled until ready, then shown
 ```
 
-Failure paths: corrupt/unsupported → `status: failed`, no retry; transient → 2 async retries → SQS DLQ.
+Failure paths: corrupt/unsupported → `status: failed`, no retry; transient → 2 async retries → SQS DLQ (🚧 13.6: the message is a batch item failure → received again after the 360 s visibility timeout → DLQ after 3 receives).
 
 **Thumbnail Lambda details** (`services/thumbnails`, ✅ deployed in dev since 2026-10-24):
 
 | Aspect | Implementation |
 |---|---|
-| Entry / config | `thumbnails.handler.handler`; env `TABLE_NAME`; bucket and key from the event (key URL-decoded) |
+| Entry / config | `thumbnails.handler.handler`; env `TABLE_NAME`; bucket and key from the event (key URL-decoded). 🚧 13.6b: SQS events (all records `eventSource = aws:sqs`) → each message body is an S3 event; `s3:TestEvent` (no `Records`) ignored; response is only `{batchItemFailures}`; with < 20 s left (`MIN_REMAINING_MS`) the rest of the batch is returned unprocessed. Direct S3 events still accepted (cut-over) and return `{results}` |
 | Loop protection | Only exact original keys are processed; thumbs/previews/anything else → `skipped` |
 | Idempotency | Photo item read with `ConsistentRead`; final write is conditional on `status = pending`, so duplicate S3 events and Lambda retries never double-count |
 | Places (13.2) | With EXIF GPS (`imaging._gps`: DMS + refs, 0/0, out-of-range and malformed → none): `places.lookup` (data loaded lazily on the first photo with GPS, ~0.4 s, 1° grid cells, winner = smallest distance / reach, reach = 1.5 km × √(population/1000) clamped to 1.5–30 km, so a spot in a big city is that city, not a nearer small town; numbered districts like "Paris 16 Passy" and `PPLX` sections dropped at build). The `ready` transaction also sets `latitude`/`longitude` (even without a town), `place`, `placeIds`, and per place (town, region if named, country) updates the place list entry (`ADD photoCount 1`, name, context) and upserts the place photo item (an `Update`: the role has GetItem/UpdateItem only). Atomic with `ready`, so retries never double-count |
@@ -782,7 +784,7 @@ Failure paths: corrupt/unsupported → `status: failed`, no retry; transient →
 | `takenAt` | EXIF `DateTimeOriginal` (+ `SubSecTimeOriginal`, `OffsetTimeOriginal` → UTC). No offset → wall-clock time stored as UTC. Invalid, before 1900 or in the future → fallback to the item's `uploadedAt` (then event time). Format = JS `toISOString()` (`YYYY-MM-DDTHH:mm:ss.sssZ`) so GSI1SK sorts as a string |
 | Output objects | `image/jpeg`, `Cache-Control: public, max-age=31536000, immutable`, `STANDARD` |
 | Permanent failure | Corrupt/truncated/unsupported, > 50 MB (checked from the event before download) or > 100 MP → item `failed` + `failureReason`; returns normally |
-| Transient failure | Any S3/DynamoDB error is raised → Lambda async retry (2×) → SQS DLQ via on-failure destination (6.9) |
+| Transient failure | Any S3/DynamoDB error is raised → Lambda async retry (2×) → SQS DLQ via on-failure destination (6.9). 🚧 13.6b: for SQS input the handler catches it per message (logged with `receiveCount`) and lists the `messageId` in `batchItemFailures`; other messages of the batch carry on |
 | Races | Original already deleted → `skipped`. Photo item deleted while processing → derived objects are deleted again (needs `s3:DeleteObject` on `thumbs/`, `previews/`) |
 | Orphaned originals (6.12) | No Photo item (consistent read) → the original is deleted, `skipped` / `orphaned original deleted`, warning logged. Safe because the API writes the item before it hands out the upload POST, so a missing item means the photo was deleted (e.g. a pending photo deleted while its 15-min POST was still valid). Idempotent for duplicate events. Needs `s3:DeleteObject` on `originals/` |
 | Logs | stdlib `logging` with `extra` fields; JSON via the Lambda JSON log format (6.9). Verified on Lambda: `extra` fields are top-level JSON fields (`key`, `reason`, …) next to `timestamp`/`level`/`logger`/`requestId`. botocore's INFO line "Found credentials in environment variables." also appears once per cold start (root logger at INFO) |
@@ -922,7 +924,7 @@ Tags on everything: `Project=photo-app`, `Environment=<ws>`, `ManagedBy=opentofu
 | `providers.tf` | region var (default `us-east-1`), `allowed_account_ids`, default tags (`Project`, `Environment`, `ManagedBy`); credentials from `AWS_PROFILE` locally / OIDC in CI |
 | `variables.tf` | `region`; `app_origins` (configured web app origins; `main.tf` appends the CloudFront URL as `local.app_origins` → S3 CORS, Cognito callback + sign-out URLs, 7.5); `google_client_id` (in `env.tfvars`); `google_client_secret` (sensitive, `TF_VAR_google_client_secret`; locally `source ~/.config/photo-app/dev.env`); `allowed_emails` (sensitive, `TF_VAR_allowed_emails` from the same file; null = open sign-up) |
 | `main.tf` | `module "database"`, `module "storage"`, `module "auth"`, `module "thumbnails"`, `module "api"`, `module "frontend"` (its `distribution_arn` feeds `storage.cloudfront_distribution_arn`) with per-env settings (below); `auth` gets `pre_sign_up_source_dir = services/auth-triggers/dist`, so run `pnpm build` before planning |
-| `outputs.tf` | `table_name`, `photo_bucket_name`, `user_pool_id`, `web_client_id`, `cognito_domain_url`, `google_redirect_uri`, `login_url`, `pre_sign_up_function_name`, `thumbnails_function_name`, `thumbnails_dlq_url`, `api_endpoint`, `api_function_name`, `app_url`, `cloudfront_distribution_id`, `site_bucket_name` |
+| `outputs.tf` | `table_name`, `photo_bucket_name`, `user_pool_id`, `web_client_id`, `cognito_domain_url`, `google_redirect_uri`, `login_url`, `pre_sign_up_function_name`, `thumbnails_function_name`, `thumbnails_dlq_url`, `thumbnails_queue_url` (13.6), `api_endpoint`, `api_function_name`, `app_url`, `cloudfront_distribution_id`, `site_bucket_name` |
 | `env.tfvars` | Non-secret settings, committed. Run with `-var-file=env.tfvars` |
 
 | Setting | dev | prod |
@@ -938,7 +940,7 @@ Tags on everything: `Project=photo-app`, `Environment=<ws>`, `ManagedBy=opentofu
 | Cognito domain | `photo-app-dev-063359189013` | `photo-app-prod-968632140314` |
 | Google sign-in | on: client `1093239771558-h98qa…apps.googleusercontent.com` (testing mode) | off until 11.3 |
 | Pre sign-up trigger | `photo-app-dev-pre-sign-up` | `photo-app-prod-pre-sign-up` (not applied) |
-| Thumbnail Lambda + DLQ | `photo-app-dev-thumbnails`, `photo-app-dev-thumbnails-dlq` | `photo-app-prod-thumbnails` (not applied) |
+| Thumbnail Lambda + DLQ (+ 🚧 queue, 13.6) | `photo-app-dev-thumbnails`, `photo-app-dev-thumbnails-dlq` (queue `photo-app-dev-thumbnails`: not applied yet) | `photo-app-prod-thumbnails` (not applied) |
 | API | `photo-app-dev-api`, endpoint `https://tnl6uhgwkg.execute-api.us-east-1.amazonaws.com`, quota 2 GB | `photo-app-prod-api`, quota 10 GB (not applied) |
 | Frontend | site bucket `photo-app-site-dev-063359189013`, distribution `E1TPVGEAUNF8HT` → `https://dopqu53s0gzhf.cloudfront.net`, `force_destroy` on | `photo-app-site-prod-968632140314`, `force_destroy` off (not applied) |
 
@@ -1001,15 +1003,18 @@ Verified in dev: `/oauth2/authorize` with PKCE shows the sign-in page; an unlist
 |---|---|
 | `data.archive_file.package` | zips `source_dir` (`services/thumbnails/dist`, `pnpm build:py` first) into `<env root>/.build/photo-app-{env}-thumbnails.zip` (~14 MB, uploaded directly, no S3); SHA-256 = `source_code_hash` |
 | `aws_lambda_function.thumbnails` | `photo-app-{env}-thumbnails`; `python3.13`, arm64, 1536 MB, 60 s (spec §10), `thumbnails.handler.handler`, env `TABLE_NAME`, JSON log format; created after the role policy |
-| `aws_iam_role.thumbnails` + `aws_iam_role_policy.thumbnails` | NFR-SEC-7: `s3:GetObject` + `s3:DeleteObject` on `users/*/originals/*` (read; orphan cleanup 6.12; **no `PutObject`** = loop protection, spec §10); `s3:PutObject` + `s3:DeleteObject` on `users/*/thumbs/*` and `users/*/previews/*` (race cleanup); `dynamodb:GetItem` + `dynamodb:UpdateItem` on the table (the final `TransactWriteItems` contains two `Update`s); `sqs:SendMessage` on the DLQ; own log group |
+| `aws_iam_role.thumbnails` + `aws_iam_role_policy.thumbnails` | NFR-SEC-7: `s3:GetObject` + `s3:DeleteObject` on `users/*/originals/*` (read; orphan cleanup 6.12; **no `PutObject`** = loop protection, spec §10); `s3:PutObject` + `s3:DeleteObject` on `users/*/thumbs/*` and `users/*/previews/*` (race cleanup); `dynamodb:GetItem` + `dynamodb:UpdateItem` on the table (the final `TransactWriteItems` contains two `Update`s); `sqs:SendMessage` on the DLQ (🚧 13.6: replaced by `sqs:ReceiveMessage` + `DeleteMessage` + `GetQueueAttributes` on the thumbnail queue); own log group |
 | `aws_cloudwatch_log_group.thumbnails` | `/aws/lambda/photo-app-{env}-thumbnails`, 30 days |
 | `aws_sqs_queue.dlq` | `photo-app-{env}-thumbnails-dlq`; retention 14 days (SQS maximum), SSE-SQS. Nothing consumes it; inspected by hand. Reprocess by re-invoking with a message's `requestPayload` (handler is idempotent) or copying the original onto itself |
-| `aws_lambda_function_event_invoke_config.thumbnails` | async: `maximum_retry_attempts = 2`, then **on-failure destination** = the DLQ (record holds the original S3 event plus the last error and `condition` `RetriesExhausted`/`EventAgeExceeded`; the older `dead_letter_config` would keep only the event). Max event age: default 6 h |
-| `aws_lambda_permission.s3` | `s3.amazonaws.com`, `source_arn` = photo bucket, `source_account` = this account |
-| `aws_s3_bucket_notification.photos` | the bucket's only notification configuration (owned here): `s3:ObjectCreated:*` on prefix `users/` (spec §10). S3 filters can't match `users/*/originals/`, so writing a thumb and a preview causes two short skipped invocations per photo |
+| 🚧 `aws_sqs_queue.thumbnails` (13.6a) | `photo-app-{env}-thumbnails`; visibility timeout 360 s (6 × `local.timeout_seconds` 60), retention 4 days, SSE-SQS, `redrive_policy` → DLQ after `maxReceiveCount` 3 |
+| 🚧 `aws_sqs_queue_policy.thumbnails` (13.6a) | `sqs:SendMessage` for `s3.amazonaws.com`, `aws:SourceArn` = photo bucket, `aws:SourceAccount` = this account |
+| 🚧 `aws_lambda_event_source_mapping.thumbnails` (13.6a) | queue → function; `batch_size` 5, `function_response_types = ["ReportBatchItemFailures"]`, `scaling_config.maximum_concurrency` = `var.maximum_concurrency` (default 5, 2–1000). No filter criteria: Lambda event filters have prefix/suffix only and every key starts with `users/`, so thumb/preview events reach the handler and are skipped |
+| `aws_lambda_function_event_invoke_config.thumbnails` (removed by 13.6) | async: `maximum_retry_attempts = 2`, then **on-failure destination** = the DLQ (record holds the original S3 event plus the last error and `condition` `RetriesExhausted`/`EventAgeExceeded`; the older `dead_letter_config` would keep only the event). Max event age: default 6 h |
+| `aws_lambda_permission.s3` (removed by 13.6) | `s3.amazonaws.com`, `source_arn` = photo bucket, `source_account` = this account |
+| `aws_s3_bucket_notification.photos` | the bucket's only notification configuration (owned here): `s3:ObjectCreated:*` on prefix `users/` (spec §10). S3 filters can't match `users/*/originals/`, so writing a thumb and a preview causes two short skipped invocations per photo (🚧 13.6: target is the queue instead of the Lambda; the two derived events become skipped records inside batches) |
 
-Inputs: `environment`, `source_dir`, `bucket_name`, `bucket_arn` (storage), `table_name`, `table_arn` (database). Outputs: `function_name`, `dlq_url`.
-Tests: runtime/arch/handler/memory/timeout/`TABLE_NAME`, JSON logs + retention, 2 retries → DLQ destination, DLQ retention + encryption, notification events + prefix, invoke permission scope, IAM per statement (incl. no statement writes originals).
+Inputs: `environment`, `source_dir`, `bucket_name`, `bucket_arn` (storage), `table_name`, `table_arn` (database), `maximum_concurrency` (13.6, default 5). Outputs: `function_name`, `dlq_url`, `queue_url` (13.6; env output `thumbnails_queue_url`).
+Tests (7 runs, 13.6 version): runtime/arch/handler/memory/timeout/`TABLE_NAME`, JSON logs + retention, queue visibility/retention/encryption + 3 receives → DLQ, DLQ retention + encryption, notification → queue (events + prefix, no Lambda target), queue policy principal + conditions, mapping batch size / batch item failures / maximum concurrency (default, override, minimum 2 rejected), IAM per statement (incl. no statement writes originals, queue statement).
 Not yet: alarm on DLQ messages (12.9).
 Verified in dev: re-plan clean; direct invoke with a `thumbs/` key on arm64 → `skipped` ("not an original key"), init 415 ms, 110 MB used. End-to-end upload (6.10): see §10.2 "Measured on Lambda".
 
@@ -1287,6 +1292,7 @@ Target design: spec §12 (TanStack Router file routes with an authenticated layo
 | 2026-10-31 | 6.11 stale-pending sweep (code, not deployed): pending marker item written by `createPending`, `listPendingMarkers` / `deletePendingMarker`, `PhotoStorage.exists` (HeadObject), `lib/pending.ts` `sweepStalePending`, run by the daily purge Lambda after the trash purge; purge role + `s3:GetObject` on originals and `s3:ListBucket` (404 instead of 403 for missing keys). Spec v0.27 (§8.2). |
 | 2026-10-31 | `docs/SCALING.md`: scaling analysis (one bucket is fine, hot keys `PENDING`/`TRASH`, Cognito `ListUsers`, background jobs), prioritised backlog, cost model for 1M users, servers vs serverless (stay serverless). Reference only, nothing implemented (§5). |
 | 2026-11-01 | 📋 Thumbnail queue (SQS, 13.6, spec v0.30) added as planned; nothing built yet. |
+| 2026-11-01 | 🚧 13.6a–b built, not applied: `thumbnails` module gets the queue, queue policy, event source mapping (batch 5, max concurrency 5, batch item failures), queue IAM statement, `maximum_concurrency` input, `queue_url` output; the Lambda permission and async invoke config go. Handler reads SQS records (batch item failures, test event, time guard) and still accepts direct S3 events. 7 tofu test runs, 5 new pytest. Dev plan 3 add / 4 change / 2 destroy, waiting for approval (§1, §2.1, §5, §10.2, §12.3). |
 | 2026-11-01 | 13.1-0 upload queue at scale: bytes in their own IndexedDB record (written once), coalesced gallery refresh (≤ 1 per 5 s, slot freed first), UI notified once per frame with a lazy, entry-reusing snapshot, one-pass `pump()`, virtualized `/upload` list, gallery strip capped at 20 + "+N more". |
 | 2026-11-01 | `/upload`: finished uploads leave the list at once, "Clear finished" and the "Uploaded" row state removed (`UploadQueue.clearFinished` dropped); the heading still counts them. |
 | 2026-11-01 | 13.1c large batches in the picking tab (`memoryOnly` items, File references, no IndexedDB, own lane outside the lock, kept through reloads and lock loss, no Background Sync), phone pick limit 1 GB, `useLargeBatchGuard` (beforeunload + Wake Lock), "keep this tab open" note; spec v0.31. |

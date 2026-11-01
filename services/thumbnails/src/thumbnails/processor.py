@@ -27,7 +27,8 @@ Contract with the API (§8.2):
   (`PLACE#{userId}#{placeId}` / `PHOTO#{photoId}`). The API removes them with the photo.
 
 Errors: corrupt/unsupported images are permanent (mark `failed`, return normally). Everything
-else (S3/DynamoDB/network) is transient and raised, so Lambda retries and then uses the DLQ.
+else (S3/DynamoDB/network) is transient and raised; the handler reports that SQS message as a
+batch item failure, so it is received again and after 3 receives moves to the DLQ (13.6).
 """
 
 import logging

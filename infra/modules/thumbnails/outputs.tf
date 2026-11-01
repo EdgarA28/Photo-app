@@ -4,6 +4,11 @@ output "function_name" {
 }
 
 output "dlq_url" {
-  description = "Failed events after the retries (NFR-OPS-1); inspect or redrive from here."
+  description = "Messages that failed 3 receives (NFR-OPS-1); inspect or redrive to the queue from here."
   value       = aws_sqs_queue.dlq.url
+}
+
+output "queue_url" {
+  description = "Thumbnail queue (S3 events waiting for the Lambda, 13.6); its depth shows the backlog."
+  value       = aws_sqs_queue.thumbnails.url
 }

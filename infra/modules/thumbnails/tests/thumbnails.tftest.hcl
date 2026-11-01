@@ -78,22 +78,27 @@ run "function_matches_spec" {
   }
 }
 
-run "retries_then_dlq" {
+run "queue_then_dlq" {
   command = plan
 
   assert {
-    condition     = aws_lambda_function_event_invoke_config.thumbnails.maximum_retry_attempts == 2
-    error_message = "Transient errors are retried twice (spec §10)."
+    condition = (
+      aws_sqs_queue.thumbnails.name == "photo-app-test-thumbnails" &&
+      aws_sqs_queue.thumbnails.visibility_timeout_seconds == 360 &&
+      aws_sqs_queue.thumbnails.message_retention_seconds == 345600 &&
+      aws_sqs_queue.thumbnails.sqs_managed_sse_enabled == true
+    )
+    error_message = "Queue photo-app-{env}-thumbnails: visibility 6 × the 60 s timeout, 4 days, encrypted (spec §10, 13.6)."
   }
 
   assert {
-    condition     = one(one(aws_lambda_function_event_invoke_config.thumbnails.destination_config).on_failure).destination == aws_sqs_queue.dlq.arn
-    error_message = "Events that still fail go to the SQS DLQ (NFR-OPS-1)."
+    condition     = jsondecode(aws_sqs_queue.thumbnails.redrive_policy).maxReceiveCount == 3
+    error_message = "After 3 receives a message moves to the DLQ (spec §10)."
   }
 
   assert {
     condition     = aws_sqs_queue.dlq.message_retention_seconds == 1209600 && aws_sqs_queue.dlq.sqs_managed_sse_enabled == true
-    error_message = "The DLQ keeps messages 14 days, encrypted."
+    error_message = "The DLQ keeps messages 14 days, encrypted (NFR-OPS-1)."
   }
 }
 
@@ -102,20 +107,60 @@ run "triggered_by_uploads_under_users" {
 
   assert {
     condition = (
-      one(aws_s3_bucket_notification.photos.lambda_function).filter_prefix == "users/" &&
-      one(aws_s3_bucket_notification.photos.lambda_function).events == toset(["s3:ObjectCreated:*"])
+      one(aws_s3_bucket_notification.photos.queue).filter_prefix == "users/" &&
+      one(aws_s3_bucket_notification.photos.queue).events == toset(["s3:ObjectCreated:*"]) &&
+      length(aws_s3_bucket_notification.photos.lambda_function) == 0
     )
-    error_message = "S3 ObjectCreated:* on prefix users/ (spec §10)."
+    error_message = "S3 ObjectCreated:* on prefix users/ goes to the queue, not the Lambda (spec §10, 13.6)."
   }
 
   assert {
     condition = (
-      aws_lambda_permission.s3.principal == "s3.amazonaws.com" &&
-      aws_lambda_permission.s3.source_arn == "arn:aws:s3:::photo-app-photos-test-123456789012" &&
-      aws_lambda_permission.s3.source_account == "123456789012"
+      data.aws_iam_policy_document.queue.statement[0].actions == toset(["sqs:SendMessage"]) &&
+      one([for p in data.aws_iam_policy_document.queue.statement[0].principals : p.identifiers]) == toset(["s3.amazonaws.com"]) &&
+      toset([for c in data.aws_iam_policy_document.queue.statement[0].condition : "${c.variable}=${one(c.values)}"]) == toset([
+        "aws:SourceArn=arn:aws:s3:::photo-app-photos-test-123456789012",
+        "aws:SourceAccount=123456789012",
+      ])
     )
-    error_message = "Only the photo bucket in this account may invoke the Lambda."
+    error_message = "Only the photo bucket in this account may send to the queue."
   }
+}
+
+run "event_source_mapping" {
+  command = plan
+
+  assert {
+    condition = (
+      aws_lambda_event_source_mapping.thumbnails.batch_size == 5 &&
+      aws_lambda_event_source_mapping.thumbnails.function_response_types == toset(["ReportBatchItemFailures"]) &&
+      one(aws_lambda_event_source_mapping.thumbnails.scaling_config).maximum_concurrency == 5
+    )
+    error_message = "Batches of 5, per-message failures, at most 5 Lambdas at once by default (spec §10, B-11)."
+  }
+}
+
+run "maximum_concurrency_is_configurable" {
+  command = plan
+
+  variables {
+    maximum_concurrency = 10
+  }
+
+  assert {
+    condition     = one(aws_lambda_event_source_mapping.thumbnails.scaling_config).maximum_concurrency == 10
+    error_message = "maximum_concurrency sets the event source's maximum concurrency."
+  }
+}
+
+run "maximum_concurrency_minimum_is_2" {
+  command = plan
+
+  variables {
+    maximum_concurrency = 1
+  }
+
+  expect_failures = [var.maximum_concurrency]
 }
 
 run "least_privilege" {
@@ -151,5 +196,13 @@ run "least_privilege" {
       toset(data.aws_iam_policy_document.thumbnails.statement[2].resources) == toset(["arn:aws:dynamodb:us-east-1:123456789012:table/photo-app-test"])
     )
     error_message = "Table: read the photo, update photo + Usage (transaction), nothing else."
+  }
+
+  assert {
+    condition = (
+      toset(data.aws_iam_policy_document.thumbnails.statement[3].actions) == toset(["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]) &&
+      toset(data.aws_iam_policy_document.thumbnails.statement[3].resources) == toset([aws_sqs_queue.thumbnails.arn])
+    )
+    error_message = "Queue: receive + delete + attributes (event source mapping) on the thumbnail queue only."
   }
 }
