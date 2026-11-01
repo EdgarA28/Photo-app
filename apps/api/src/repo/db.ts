@@ -4,8 +4,10 @@ import {
   BatchWriteCommand,
   DynamoDBDocumentClient,
   QueryCommand,
+  TransactWriteCommand,
   type NativeAttributeValue,
   type QueryCommandInput,
+  type TransactWriteCommandInput,
 } from "@aws-sdk/lib-dynamodb";
 import type { Page } from "@photo-app/shared";
 import { decodeCursor, encodeCursor, type CursorKey } from "./cursor";
@@ -135,10 +137,14 @@ export function conditionFailedAt(err: unknown, index: number): boolean {
 }
 
 /**
- * True if a TransactWriteItems failure was only a clash with another transaction on the same
- * items (no condition failed): safe to retry.
+ * True if a write failed only because it clashed with a transaction on the same item(s), so
+ * nothing was applied and it is safe to retry: a TransactWriteItems cancelled for
+ * `TransactionConflict` (no condition failed), or a single-item write rejected with
+ * `TransactionConflictException` because a transaction on that item was in flight (seen in dev
+ * 2026-11-01: emptying a big trash, the empty-place cleanup after each delete).
  */
 export function isTransactionConflict(err: unknown): boolean {
+  if (err instanceof Error && err.name === "TransactionConflictException") return true;
   if (!(err instanceof Error) || err.name !== "TransactionCanceledException") return false;
   const reasons = (err as { CancellationReasons?: { Code?: string }[] }).CancellationReasons ?? [];
   return (
@@ -153,6 +159,52 @@ export function isConditionalCheckFailed(err: unknown): boolean {
 
 function* chunks<T>(values: T[], size: number): Generator<T[]> {
   for (let i = 0; i < values.length; i += size) yield values.slice(i, i + size);
+}
+
+/** Tries of a transaction cancelled only by clashes with others; ~3 s of pauses at most. */
+export const TRANSACTION_ATTEMPTS = 8;
+/** Pause before the next try: random up to 25 ms · 2ⁿ, capped at 1 s ("full jitter"). */
+export const conflictPause = (attempt: number) => Math.random() * Math.min(1000, 25 * 2 ** attempt);
+
+/**
+ * TransactWriteItems with retries on `TransactionConflict` (13.4). Many photos changed in parallel
+ * (bulk upload, emptying the trash, deleting a selection) update the same shared counters (Usage,
+ * place counts, album counts) at the same moment; DynamoDB then cancels the clashing transactions
+ * without applying anything. Trying again after a random, growing pause spreads them out, so the
+ * counters stay exact without the caller seeing an error. A failed condition is not a conflict:
+ * it is thrown at once for the caller to handle, as before.
+ */
+export async function transactWrite(
+  db: Db,
+  input: TransactWriteCommandInput,
+  options: RetryOptions = {},
+): Promise<void> {
+  await retryOnConflict(() => db.client.send(new TransactWriteCommand(input)), options);
+}
+
+export interface RetryOptions {
+  attempts?: number;
+  pause?: (attempt: number) => number;
+}
+
+/**
+ * Runs a write, again after a random, growing pause while it only clashes with transactions on
+ * the same item (`isTransactionConflict`; 13.4). For transactions (`transactWrite`) and for
+ * single-item writes on items many parallel operations touch (place and album counters).
+ */
+export async function retryOnConflict<T>(
+  write: () => Promise<T>,
+  { attempts = TRANSACTION_ATTEMPTS, pause = conflictPause }: RetryOptions = {},
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await write();
+    } catch (err) {
+      if (!isTransactionConflict(err) || attempt >= attempts - 1) throw err;
+      const ms = pause(attempt);
+      await new Promise((resolve) => setTimeout(resolve, ms));
+    }
+  }
 }
 
 function backoff(attempt: number): Promise<void> {

@@ -56,7 +56,13 @@ import {
 import { gallerySearchSchema } from "@/gallery/search";
 import { startDownload } from "@/lib/download";
 import { albumsQuery, useRemoveFromAlbum, useUpdateAlbum } from "@/queries/albums";
-import { galleryQuery, needsOwnFetch, photoQuery, removePhotoFromCache } from "@/queries/photos";
+import {
+  galleryQuery,
+  needsOwnFetch,
+  photoQuery,
+  removePhotoFromCache,
+  shownPhotos,
+} from "@/queries/photos";
 import { saveSummary, sharedAlbumsQuery, useSaveSharedPhotos } from "@/queries/shares";
 import { ZoomableImage } from "@/viewer/ZoomableImage";
 
@@ -112,15 +118,20 @@ function Viewer() {
   const { data, hasNextPage, isFetchingNextPage, fetchNextPage } = useSuspenseInfiniteQuery(
     galleryQuery(api, { album, place, sort }),
   );
-  const photos = useMemo(() => data.pages.flatMap((page) => page.items), [data]);
+  // Previous/next walk what the grid shows (no photos still processing); a processing photo
+  // opened by its link is still found in the loaded pages.
+  const photos = useMemo(() => shownPhotos(data.pages), [data]);
   const index = photos.findIndex((p) => p.photoId === photoId);
-  const listed = index >= 0 ? photos[index] : undefined;
+  const listed =
+    index >= 0
+      ? photos[index]
+      : data.pages.flatMap((page) => page.items).find((p) => p.photoId === photoId);
   // Outside the loaded pages, or a shared album's photo (listed without its preview, 7.4).
   const single = useQuery({
     ...photoQuery(api, photoId, album),
-    enabled: index < 0 || needsOwnFetch(listed),
+    enabled: !listed || needsOwnFetch(listed),
   });
-  const photo = index < 0 || needsOwnFetch(listed) ? (single.data ?? listed) : listed;
+  const photo = !listed || needsOwnFetch(listed) ? (single.data ?? listed) : listed;
   const loadingPreview = needsOwnFetch(listed) && single.isPending;
   const prev = index > 0 ? photos[index - 1] : undefined;
   const next = index >= 0 ? photos[index + 1] : undefined;

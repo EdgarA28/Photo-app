@@ -64,6 +64,17 @@ export type PhotoPage = z.infer<typeof photoPageSchema>;
 export const trashListSchema = z.object({ items: z.array(photoSchema) });
 export type TrashList = z.infer<typeof trashListSchema>;
 
+/**
+ * DELETE /trash: emptying a big trash takes longer than one request may run (the API Lambda stops
+ * at 10 s), so each request deletes for a few seconds and says how many are left; the client asks
+ * again until `remaining` is 0.
+ */
+export const emptyTrashResultSchema = z.object({
+  deleted: z.number().int().nonnegative(),
+  remaining: z.number().int().nonnegative(),
+});
+export type EmptyTrashResult = z.infer<typeof emptyTrashResultSchema>;
+
 /** POST /photos/upload-url (FR-UP-2, FR-UP-3, NFR-SEC-6) */
 export const uploadUrlRequestSchema = z.object({
   fileName: z.string().trim().min(1).max(MAX_FILE_NAME_LENGTH),

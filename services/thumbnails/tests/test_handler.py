@@ -12,6 +12,7 @@ from moto import mock_aws
 from PIL import ExifTags, Image
 
 from thumbnails import handler as handler_module
+from thumbnails import processor as processor_module
 from thumbnails.processor import DERIVED_CACHE_CONTROL, Processor
 
 BUCKET = "photo-app-photos-test"
@@ -330,6 +331,43 @@ def test_transaction_conflict_is_retried_at_once(
     item = get(dynamodb, PHOTO_KEY)
     assert item is not None and item["status"]["S"] == "ready"
     assert calls["n"] == 2
+
+
+def test_conflicts_are_retried_with_growing_random_pauses_then_given_up(
+    aws: tuple[Any, Any], jpeg_plain: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 13.4: the same policy as the API; a clash that never clears ends in Lambda's retry.
+    s3, dynamodb = aws
+    put_pending(dynamodb, declared=len(jpeg_plain))
+    event = upload(s3, jpeg_plain)
+    processor = handler_module._processor()
+    calls = {"n": 0}
+
+    def always_conflict(**_kwargs: Any) -> Any:
+        calls["n"] += 1
+        raise ClientError(
+            {
+                "Error": {"Code": "TransactionCanceledException", "Message": "conflict"},
+                "CancellationReasons": [{"Code": "None"}, {"Code": "TransactionConflict"}],
+            },
+            "TransactWriteItems",
+        )
+
+    pauses: list[float] = []
+    monkeypatch.setattr(processor._dynamodb, "transact_write_items", always_conflict)
+    monkeypatch.setattr("thumbnails.processor.time.sleep", pauses.append)
+    with pytest.raises(ClientError):
+        handler_module.handler(event)
+    assert calls["n"] == processor_module.TRANSACTION_ATTEMPTS
+    assert len(pauses) == processor_module.TRANSACTION_ATTEMPTS - 1
+    assert all(0 <= p <= 1.0 for p in pauses)
+
+
+def test_conflict_pause_grows_and_is_capped(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("thumbnails.processor.random.uniform", lambda _a, b: b)
+    assert processor_module.conflict_pause(0) == pytest.approx(0.025)
+    assert processor_module.conflict_pause(3) == pytest.approx(0.2)
+    assert processor_module.conflict_pause(10) == 1.0
 
 
 # 12.2b: the upload POST stays valid for 15 min, so the original can be overwritten after it was

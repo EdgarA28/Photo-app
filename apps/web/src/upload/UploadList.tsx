@@ -1,47 +1,161 @@
-import { CircleAlert, CircleCheck, ImageIcon, RotateCw, X } from "lucide-react";
+import { useWindowVirtualizer } from "@tanstack/react-virtual";
+import { CircleAlert, ImageIcon, Pause, Play, RotateCw, X } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { memo, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { QueueEntry } from "./queue";
 import { BlobImage } from "./BlobImage";
-import { canPreview, useUploadQueue } from "./useUploads";
+import { batchProgress, formatTimeLeft, useTimeLeft } from "./batchProgress";
+import { canPreview, useOnline, useUploadQueue } from "./useUploads";
 
-/** The queue on /upload (FR-UP-5/6): every file with its status, progress and actions. */
+/** Height of a row before it is measured: 48 px preview + padding + border. */
+const ROW_ESTIMATE = 73;
+
+/**
+ * The queue on /upload (FR-UP-5/6): the files still to upload or failed, with status, progress and
+ * actions; a finished upload leaves the list at once (user request 2026-11-01), the heading keeps
+ * counting it until the next app start. Virtualized
+ * with the page's scroll (like the gallery grid), so a batch of thousands of files keeps only the
+ * rows near the viewport, and their previews, in the DOM (13.1-0).
+ */
 export function UploadList({ entries }: { entries: readonly QueueEntry[] }) {
   const queue = useUploadQueue();
-  const done = entries.filter((entry) => entry.status === "done").length;
   const failed = entries.filter((entry) => entry.status === "failed").length;
+  const rows = useMemo(() => entries.filter((entry) => entry.status !== "done"), [entries]);
+  const listRef = useRef<HTMLUListElement>(null);
+  const top = useDocumentTop(listRef);
+  const virtualizer = useWindowVirtualizer({
+    count: rows.length,
+    estimateSize: () => ROW_ESTIMATE,
+    getItemKey: (index) => rows[index]!.id,
+    overscan: 6,
+    scrollMargin: top,
+  });
 
   return (
     <section aria-labelledby="upload-queue" className="space-y-3">
-      <header className="flex items-center justify-between gap-3">
-        <h2 id="upload-queue" className="font-medium">
-          {done} of {entries.length} uploaded
-        </h2>
-        <div className="flex gap-1">
-          {failed > 0 && (
-            <Button variant="ghost" size="sm" onClick={() => void queue.retryAll()}>
-              <RotateCw aria-hidden />
-              Retry all failed
-            </Button>
-          )}
-          {done > 0 && (
-            <Button variant="ghost" size="sm" onClick={() => void queue.clearFinished()}>
-              Clear finished
-            </Button>
-          )}
-        </div>
-      </header>
-      <ul className="divide-y rounded-xl border">
-        {entries.map((entry) => (
-          <UploadRow key={entry.id} entry={entry} />
+      <BatchHeader entries={entries} />
+      {failed > 0 && (
+        <Button variant="ghost" size="sm" onClick={() => void queue.retryAll()}>
+          <RotateCw aria-hidden />
+          Retry all failed
+        </Button>
+      )}
+      <ul
+        ref={listRef}
+        className={cn("relative rounded-xl", rows.length > 0 && "border")}
+        style={{ height: virtualizer.getTotalSize() }}
+      >
+        {virtualizer.getVirtualItems().map((row) => (
+          <UploadRow
+            key={row.key}
+            entry={rows[row.index]!}
+            index={row.index}
+            measure={virtualizer.measureElement}
+            offset={row.start - virtualizer.options.scrollMargin}
+          />
         ))}
       </ul>
     </section>
   );
 }
 
+/**
+ * The whole queue at a glance (13.1d): "312 of 1,040 uploaded", the size and the time left at the
+ * recent speed, an overall progress bar, and pause/resume and cancel for everything.
+ */
+function BatchHeader({ entries }: { entries: readonly QueueEntry[] }) {
+  const queue = useUploadQueue();
+  const online = useOnline();
+  const batch = batchProgress(entries);
+  const running = online && batch.active > 0;
+  const timeLeft = useTimeLeft(batch.bytesDone, batch.bytesTotal - batch.bytesDone, running);
+  const unfinished = batch.total - batch.done;
+  const details = [
+    batch.bytesTotal > 0 && `${formatBytes(batch.bytesDone)} of ${formatBytes(batch.bytesTotal)}`,
+    batch.paused > 0 && batch.active === 0 && "Paused",
+    timeLeft !== null && `${formatTimeLeft(timeLeft)} left`,
+  ].filter(Boolean);
+
+  return (
+    <header className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h2 id="upload-queue" className="font-medium">
+            {batch.done.toLocaleString()} of {batch.total.toLocaleString()} uploaded
+          </h2>
+          {unfinished > 0 && <p className="text-sm text-muted-foreground">{details.join(" · ")}</p>}
+        </div>
+        {unfinished > 0 && (
+          <div className="flex shrink-0 gap-1">
+            {batch.paused > 0 ? (
+              <Button variant="outline" size="sm" onClick={() => void queue.resume()}>
+                <Play aria-hidden />
+                Resume
+              </Button>
+            ) : (
+              batch.active > 0 && (
+                <Button variant="outline" size="sm" onClick={() => void queue.pause()}>
+                  <Pause aria-hidden />
+                  Pause
+                </Button>
+              )
+            )}
+            <CancelAll count={unfinished} />
+          </div>
+        )}
+      </div>
+      {unfinished > 0 && batch.bytesTotal > 0 && (
+        <ProgressBar value={batch.bytesDone / batch.bytesTotal} label="All uploads" />
+      )}
+    </header>
+  );
+}
+
+/** Cancel every unfinished upload, after a confirmation (13.1d). */
+function CancelAll({ count }: { count: number }) {
+  const queue = useUploadQueue();
+  const label = count === 1 ? "1 upload" : `${count.toLocaleString()} uploads`;
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button variant="ghost" size="sm">
+          Cancel all
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Cancel {label}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Photos already uploaded stay. The others are removed from the queue; add them again to
+            upload them.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep uploading</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={() => void queue.cancelAll()}>
+            Cancel uploads
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 function statusText(entry: QueueEntry): string {
+  if (entry.paused && entry.status === "queued") return "Paused";
   switch (entry.status) {
     case "queued":
       return entry.attempts > 0 ? "Connection problem, retrying soon" : "Waiting";
@@ -57,12 +171,48 @@ function statusText(entry: QueueEntry): string {
   }
 }
 
-function UploadRow({ entry }: { entry: QueueEntry }) {
+/**
+ * The list's top in document coordinates (the virtualizer's scroll margin). Notices above it
+ * (rejected files, storage full) move it; they change the page's height, which is watched.
+ */
+function useDocumentTop(ref: RefObject<HTMLElement | null>) {
+  const [top, setTop] = useState(0);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const update = () => setTop(element.getBoundingClientRect().top + window.scrollY);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(document.body);
+    return () => observer.disconnect();
+  }, [ref]);
+  return top;
+}
+
+const UploadRow = memo(function UploadRow({
+  entry,
+  index,
+  measure,
+  offset,
+}: {
+  entry: QueueEntry;
+  index: number;
+  measure: (element: Element | null) => void;
+  offset: number;
+}) {
   const queue = useUploadQueue();
   const failed = entry.status === "failed";
 
   return (
-    <li className="flex items-center gap-3 p-3">
+    <li
+      ref={measure}
+      data-index={index}
+      className={cn(
+        "absolute inset-x-0 top-0 flex items-center gap-3 p-3",
+        index > 0 && "border-t",
+      )}
+      style={{ transform: `translateY(${offset}px)` }}
+    >
       <div className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground">
         {canPreview(entry) ? (
           <BlobImage file={entry.file} className="size-full object-cover" />
@@ -82,9 +232,6 @@ function UploadRow({ entry }: { entry: QueueEntry }) {
         )}
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        {entry.status === "done" && (
-          <CircleCheck aria-label="Uploaded" className="size-5 text-primary" />
-        )}
         {failed && (
           <>
             <CircleAlert aria-hidden className="size-5 text-destructive" />
@@ -98,20 +245,18 @@ function UploadRow({ entry }: { entry: QueueEntry }) {
             </Button>
           </>
         )}
-        {entry.status !== "done" && (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`${failed ? "Remove" : "Cancel"} ${entry.fileName}`}
-            onClick={() => void queue.remove(entry.id)}
-          >
-            <X aria-hidden />
-          </Button>
-        )}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`${failed ? "Remove" : "Cancel"} ${entry.fileName}`}
+          onClick={() => void queue.remove(entry.id)}
+        >
+          <X aria-hidden />
+        </Button>
       </div>
     </li>
   );
-}
+});
 
 export function ProgressBar({
   value,

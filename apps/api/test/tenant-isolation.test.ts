@@ -723,7 +723,8 @@ describe("list routes only return the caller's data", () => {
   test("the trash is the owner's: a stranger sees and empties only her own (FR-DEL-3)", async () => {
     expect((await t.api(w.mallory, "GET", "/trash")).body).toEqual({ items: [] });
     expect((await t.api(w.bob, "GET", "/trash")).body).toEqual({ items: [] });
-    expect((await t.api(w.mallory, "DELETE", "/trash")).status).toBe(204);
+    // Her own trash is empty: nothing deleted, nobody else's touched.
+    expect((await t.api(w.mallory, "DELETE", "/trash")).body).toEqual({ deleted: 0, remaining: 0 });
     expect(await repos.photos.listTrashed(w.alice)).toEqual(before.trash);
     expect(before.trash.map((p) => p.photoId)).toEqual([w.p4]);
   });

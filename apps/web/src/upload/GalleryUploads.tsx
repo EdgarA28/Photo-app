@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { ImageOff, LoaderCircle } from "lucide-react";
+import { cn } from "@/lib/utils";
 import type { QueueEntry } from "./queue";
 import { ProgressBar } from "./UploadList";
 import { BlobImage } from "./BlobImage";
@@ -11,14 +12,31 @@ import { canPreview } from "./useUploads";
  * Each tile links to /upload, where the queue can be managed.
  */
 export function GalleryUploads({ entries }: { entries: readonly QueueEntry[] }) {
+  const shown = entries.slice(0, MAX_TILES);
+  const more = entries.length - shown.length;
   return (
     <section aria-label="Uploads" className="flex flex-wrap gap-1">
-      {entries.map((entry) => (
+      {shown.map((entry) => (
         <UploadTile key={entry.id} entry={entry} />
       ))}
+      {more > 0 && (
+        <Link
+          to="/upload"
+          aria-label={`${more.toLocaleString()} more uploads`}
+          className={cn(TILE_CLASS, "text-sm font-medium")}
+        >
+          +{more.toLocaleString()} more
+        </Link>
+      )}
     </section>
   );
 }
+
+/** Tiles shown at most; a big batch is summed up in a "+N more" tile (13.1-0). */
+export const MAX_TILES = 20;
+
+const TILE_CLASS =
+  "relative flex size-28 items-center justify-center overflow-hidden bg-muted text-muted-foreground outline-offset-2 focus-visible:outline-2 focus-visible:outline-ring sm:size-48";
 
 const TILE_LABELS = {
   queued: "waiting to upload",
@@ -34,7 +52,7 @@ function UploadTile({ entry }: { entry: QueueEntry }) {
     <Link
       to="/upload"
       aria-label={`${entry.fileName}, ${storageFull ? "storage full" : TILE_LABELS[entry.status]}`}
-      className="relative flex size-28 items-center justify-center overflow-hidden bg-muted text-muted-foreground outline-offset-2 focus-visible:outline-2 focus-visible:outline-ring sm:size-48"
+      className={TILE_CLASS}
     >
       {canPreview(entry) && (
         <BlobImage file={entry.file} className="size-full object-cover opacity-60" />

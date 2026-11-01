@@ -1,20 +1,31 @@
 import { MAX_UPLOAD_BYTES } from "@photo-app/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { CircleAlert, WifiOff, X } from "lucide-react";
+import { CircleAlert, MonitorUp, WifiOff, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/format";
 import { MAX_SHARED_BYTES, MAX_SHARED_FILES } from "@/pwa/shareTarget";
 import { meQuery } from "@/queries/me";
-import { SpaceWarning, StorageFullBanner } from "@/upload/QuotaNotices";
-import type { AddResult } from "@/upload/queue";
+import { SpaceConfirm, StorageFullBanner } from "@/upload/QuotaNotices";
+import type { AddOptions, AddResult } from "@/upload/queue";
 import { UploadList } from "@/upload/UploadList";
 import type { WaitingPhoto } from "@/upload/shareInbox";
 import { SharedPhotos } from "@/upload/SharedPhotos";
+import type { InterruptedBatch } from "@/upload/batches";
+import { InterruptedBatches } from "@/upload/InterruptedBatches";
+import { SkippedFiles } from "@/upload/SkippedFiles";
 import { UploadPicker } from "@/upload/UploadPicker";
-import { isActive, useOnline, useUploadQueue, useUploads } from "@/upload/useUploads";
+import { checkFile } from "@/upload/validate";
+import {
+  isActive,
+  isInTabOnly,
+  useOnline,
+  useOtherTabsUploading,
+  useUploadQueue,
+  useUploads,
+} from "@/upload/useUploads";
 
 /**
  * `shared`: arriving from Android's share sheet (9.6, FR-PWA-4), set by the service worker's
@@ -42,25 +53,72 @@ function Upload() {
   const online = useOnline();
   // Not in a loader: the page works without it, it only feeds the storage notices.
   const { data: me } = useQuery(meQuery(api));
-  const [rejected, setRejected] = useState<AddResult["rejected"]>([]);
-  const [space, setSpace] = useState<{ needed: number; left: number } | null>(null);
+  /** The last pick's outcome, while it skipped files (13.1b). */
+  const [picked, setPicked] = useState<Pick<AddResult, "added" | "rejected"> | null>(null);
+  /** Files of an interrupted batch picked again that were uploaded already (13.1f). */
+  const [alreadyUploaded, setAlreadyUploaded] = useState(0);
+  const [interrupted, setInterrupted] = useState<InterruptedBatch[]>([]);
+  /** A pick that needs more space than is left, waiting for the user's go-ahead (13.1e). */
+  const [tooBig, setTooBig] = useState<{
+    files: File[];
+    options: AddOptions | undefined;
+    needed: number;
+    left: number;
+  } | null>(null);
   const [shareFailed, setShareFailed] = useState(shared === "failed");
   const [shareSkipped, setShareSkipped] = useState(skipped ?? 0);
   const [sharedPhotos, setSharedPhotos] = useState<WaitingPhoto[]>([]);
   const [sharing, setSharing] = useState(false);
   const pending = entries.some((entry) => entry.status === "queued");
+  const inTabOnly = entries.filter(isInTabOnly).length;
+  const otherTabs = useOtherTabsUploading();
   const storageFull = entries.filter(
     (entry) => entry.status === "failed" && entry.errorCode === "QUOTA_EXCEEDED",
   ).length;
 
-  async function add(files: File[]) {
-    // Space left after what is stored and what is already waiting to upload.
+  /**
+   * Queues a pick, after asking if it needs more space than is left (13.1e): what is stored plus
+   * what is already waiting to upload. Without usage (offline, not loaded yet) it just queues.
+   */
+  async function add(files: File[], options?: AddOptions) {
     const waiting = entries.filter(isActive).reduce((sum, entry) => sum + entry.sizeBytes, 0);
-    const result = await queue.add(files);
-    setRejected(result.rejected);
     const left = me ? Math.max(me.usage.quotaBytes - me.usage.bytesUsed - waiting, 0) : Infinity;
-    setSpace(result.addedBytes > left ? { needed: result.addedBytes, left } : null);
+    // Only what would be queued counts: no videos or other skipped files.
+    const needed = files.reduce((sum, file) => sum + (checkFile(file).ok ? file.size : 0), 0);
+    if (needed > left) {
+      setTooBig({ files, options, needed, left });
+      return;
+    }
+    await queueFiles(files, options);
   }
+
+  async function queueFiles(files: File[], options?: AddOptions) {
+    const result = await queue.add(files, options);
+    setPicked(result.rejected.length ? result : null);
+    setAlreadyUploaded(result.alreadyUploaded ?? 0);
+    void loadInterrupted();
+  }
+
+  /** Large batches stopped by a closed tab, to continue (13.1f). */
+  async function loadInterrupted() {
+    try {
+      await queue.start(user.sub);
+      setInterrupted(await queue.interruptedBatches());
+    } catch (error) {
+      console.warn("Reading the interrupted uploads failed", error);
+    }
+  }
+
+  async function dismissBatch(batchId: string) {
+    setInterrupted((batches) => batches.filter((batch) => batch.batchId !== batchId));
+    await queue.dismissBatch(batchId).catch(() => {});
+  }
+
+  // On opening the page: the queue starts with the layout, which runs after this page's effects.
+  useEffect(() => {
+    void loadInterrupted();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per visit
+  }, []);
 
   // Shared photos (9.6) wait in the inbox, through a login if needed, until the user uploads or
   // discards them: never added unasked, since any website can POST to the share target (CSRF).
@@ -95,7 +153,6 @@ function Upload() {
   }
 
   function retryAll() {
-    setSpace(null);
     void queue.retryAll();
     void queryClient.invalidateQueries({ queryKey: ["me"] });
   }
@@ -111,12 +168,30 @@ function Upload() {
           onDiscard={() => void decideShared(false)}
         />
       )}
-      <UploadPicker onFiles={(files) => void add(files)} />
+      {interrupted.length > 0 && (
+        <InterruptedBatches batches={interrupted} onDismiss={(id) => void dismissBatch(id)} />
+      )}
+      <UploadPicker onFiles={(files, options) => void add(files, options)} />
+      {alreadyUploaded > 0 && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {alreadyUploaded === 1
+            ? "1 photo was uploaded before and was skipped."
+            : `${alreadyUploaded.toLocaleString()} photos were uploaded before and were skipped.`}
+        </p>
+      )}
       {storageFull > 0 && (
         <StorageFullBanner count={storageFull} usage={me?.usage} onRetry={retryAll} />
       )}
-      {space && storageFull === 0 && (
-        <SpaceWarning needed={space.needed} left={space.left} onDismiss={() => setSpace(null)} />
+      {tooBig && (
+        <SpaceConfirm
+          needed={tooBig.needed}
+          left={tooBig.left}
+          onCancel={() => setTooBig(null)}
+          onUpload={() => {
+            setTooBig(null);
+            void queueFiles(tooBig.files, tooBig.options);
+          }}
+        />
       )}
       {shareFailed && (
         <div
@@ -158,35 +233,31 @@ function Upload() {
           </Button>
         </div>
       )}
-      {rejected.length > 0 && (
-        <div
-          role="alert"
-          className="flex gap-3 rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm"
+      {picked && (
+        <SkippedFiles
+          added={picked.added}
+          skipped={picked.rejected}
+          onDismiss={() => setPicked(null)}
+        />
+      )}
+      {otherTabs > 0 && (
+        <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+          <MonitorUp aria-hidden className="size-4 shrink-0" />
+          Uploading {otherTabs === 1 ? "1 photo" : `${otherTabs.toLocaleString()} photos`} in
+          another tab.
+        </p>
+      )}
+      {inTabOnly > 0 && (
+        <p
+          role="status"
+          className="flex items-start gap-2 rounded-xl border bg-muted/40 p-3 text-sm"
         >
-          <CircleAlert aria-hidden className="mt-0.5 size-4 shrink-0 text-destructive" />
-          <div className="min-w-0 flex-1 space-y-1">
-            <p className="font-medium">
-              {rejected.length === 1
-                ? "1 file wasn't added"
-                : `${rejected.length} files weren't added`}
-            </p>
-            <ul className="space-y-0.5 text-muted-foreground">
-              {rejected.map(({ fileName, reason }, i) => (
-                <li key={i} className="truncate">
-                  {fileName}: {reason}
-                </li>
-              ))}
-            </ul>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Dismiss"
-            onClick={() => setRejected([])}
-          >
-            <X aria-hidden />
-          </Button>
-        </div>
+          <MonitorUp aria-hidden className="mt-0.5 size-4 shrink-0" />
+          <span>
+            Large upload: keep this tab open until it's done. Closing or reloading it stops the
+            remaining {inTabOnly === 1 ? "photo" : `${inTabOnly.toLocaleString()} photos`}.
+          </span>
+        </p>
       )}
       {!online && pending && (
         <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">

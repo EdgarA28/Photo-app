@@ -2,9 +2,11 @@
 # The plan is posted as a PR comment and to the job summary.
 name: CI
 
+# Pushes only for `main` (after a merge; deploy.yml starts from that run). Other branches are
+# checked through their pull request: pushing to "**" as well ran everything twice per PR push.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
 
 concurrency:

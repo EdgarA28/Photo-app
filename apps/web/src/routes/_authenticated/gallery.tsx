@@ -38,7 +38,7 @@ import { useSelection } from "@/gallery/useSelection";
 import { ShareLinkDialog } from "@/links/ShareLinkDialog";
 import { albumsQuery, useAddToAlbum } from "@/queries/albums";
 import { sharedAlbumsQuery } from "@/queries/shares";
-import { galleryQuery, useDeletePhotos } from "@/queries/photos";
+import { galleryQuery, shownPhotos, useDeletePhotos } from "@/queries/photos";
 import { placesQuery } from "@/queries/places";
 import { GalleryUploads } from "@/upload/GalleryUploads";
 import { useUploads } from "@/upload/useUploads";
@@ -67,7 +67,7 @@ function Gallery() {
   const navigate = Route.useNavigate();
   const { data, hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } =
     useSuspenseInfiniteQuery(galleryQuery(api, { album, place, sort }));
-  const photos = useMemo(() => data.pages.flatMap((page) => page.items), [data]);
+  const photos = useMemo(() => shownPhotos(data.pages), [data]);
   // Not-yet-uploaded files (FR-UP-6); uploads go to all photos, not to the album or place viewed.
   const entries = useUploads();
   const uploads = useMemo(

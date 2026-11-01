@@ -10,6 +10,7 @@ import type { PersistedQueryCache } from "../src/queries/persistedCache";
 import { createUploadQueue, type UploadQueueDeps } from "../src/upload/queue";
 import type { PostToS3 } from "../src/upload/s3Post";
 import type { ShareInbox, SharedFile, WaitingPhoto } from "../src/upload/shareInbox";
+import type { BatchRecord, BatchStore } from "../src/upload/batches";
 import type { UploadItem, UploadStore } from "../src/upload/store";
 
 export const testConfig: AppConfig = {
@@ -216,7 +217,8 @@ export function fakeApi(responses: Record<string, FakeResponse> = {}) {
       const key = `${method} ${path}`;
       if (!(key in responses)) throw new Error(`fakeApi: no response for ${key}`);
       const entry = responses[key];
-      const value = typeof entry === "function" ? entry(options.query) : entry;
+      // A function may answer later (a Promise), e.g. to hold a request open in a test.
+      const value: unknown = await (typeof entry === "function" ? entry(options.query) : entry);
       if (value instanceof Error) throw value;
       return options.schema ? options.schema.parse(value) : undefined;
     },
@@ -285,6 +287,24 @@ export class MemoryUploadStore implements UploadStore {
   }
   async clear() {
     this.items.clear();
+  }
+}
+
+export class MemoryBatchStore implements BatchStore {
+  readonly records = new Map<string, BatchRecord>();
+  async list(userId: string) {
+    return [...this.records.values()]
+      .filter((record) => record.userId === userId)
+      .map((record) => structuredClone(record));
+  }
+  async put(record: BatchRecord) {
+    this.records.set(record.batchId, structuredClone(record));
+  }
+  async delete(batchId: string) {
+    this.records.delete(batchId);
+  }
+  async clear() {
+    this.records.clear();
   }
 }
 

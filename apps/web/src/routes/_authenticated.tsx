@@ -6,7 +6,7 @@ import { BottomNav, SideNav } from "@/components/app-nav";
 import { meQuery } from "@/queries/me";
 import { useRemoteChanges } from "@/queries/remoteChanges";
 import { UsernamePrompt } from "@/settings/UsernamePrompt";
-import { useOnline } from "@/upload/useUploads";
+import { useLargeBatchGuard, useOnline } from "@/upload/useUploads";
 
 // Pathless layout for every signed-in page (§12.1, FR-AUTH-6): without a session go to /login,
 // remembering the page. The stored session's user is enough to open the app (8.25b): the guard
@@ -49,6 +49,8 @@ function AuthenticatedLayout() {
     void uploads.start(user.sub);
     return () => uploads.stop();
   }, [uploads, user.sub]);
+  // A large batch lives in this tab only (13.1c): ask before closing it, keep the screen on.
+  useLargeBatchGuard();
   const fullScreen = useMatches({
     select: (matches) => matches.some((m) => m.staticData.fullScreen),
   });

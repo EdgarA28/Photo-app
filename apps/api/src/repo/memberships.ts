@@ -1,10 +1,12 @@
+import { DeleteCommand, GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import {
-  DeleteCommand,
-  GetCommand,
-  TransactWriteCommand,
-  UpdateCommand,
-} from "@aws-sdk/lib-dynamodb";
-import { conditionFailedAt, isConditionalCheckFailed, queryAll, type Db } from "./db";
+  conditionFailedAt,
+  isConditionalCheckFailed,
+  queryAll,
+  retryOnConflict,
+  transactWrite,
+  type Db,
+} from "./db";
 import { albumKey, albumPk, membershipKey, photoKey, shareKey, takenSk } from "./keys";
 
 /**
@@ -88,71 +90,69 @@ async function addWithTakenAt(
 ): Promise<AddResult | "taken-at-changed"> {
   const byMember = photoOwnerId !== albumOwnerId;
   try {
-    await db.client.send(
-      new TransactWriteCommand({
-        TransactItems: [
-          {
-            Update: {
-              TableName: db.table,
-              Key: albumKey(albumOwnerId, albumId),
-              UpdateExpression: "ADD photoCount :one",
-              ConditionExpression: byMember
-                ? "attribute_exists(PK) AND membersCanAdd = :true"
-                : "attribute_exists(PK)",
-              ExpressionAttributeValues: { ":one": 1, ...(byMember && { ":true": true }) },
-            },
+    await transactWrite(db, {
+      TransactItems: [
+        {
+          Update: {
+            TableName: db.table,
+            Key: albumKey(albumOwnerId, albumId),
+            UpdateExpression: "ADD photoCount :one",
+            ConditionExpression: byMember
+              ? "attribute_exists(PK) AND membersCanAdd = :true"
+              : "attribute_exists(PK)",
+            ExpressionAttributeValues: { ":one": 1, ...(byMember && { ":true": true }) },
           },
-          {
-            Update: {
-              TableName: db.table,
-              Key: photoKey(photoOwnerId, photoId),
-              UpdateExpression: "ADD albumIds :album",
-              // The membership's sort key below must match the photo's current takenAt, and the
-              // photo must not have gone to the trash since it was read.
-              ConditionExpression:
-                "attribute_exists(PK) AND takenAt = :takenAt AND attribute_not_exists(trashedAt)",
-              ExpressionAttributeValues: { ":album": new Set([albumId]), ":takenAt": takenAt },
-            },
+        },
+        {
+          Update: {
+            TableName: db.table,
+            Key: photoKey(photoOwnerId, photoId),
+            UpdateExpression: "ADD albumIds :album",
+            // The membership's sort key below must match the photo's current takenAt, and the
+            // photo must not have gone to the trash since it was read.
+            ConditionExpression:
+              "attribute_exists(PK) AND takenAt = :takenAt AND attribute_not_exists(trashedAt)",
+            ExpressionAttributeValues: { ":album": new Set([albumId]), ":takenAt": takenAt },
           },
-          {
-            Put: {
-              TableName: db.table,
-              Item: {
-                ...membershipKey(albumId, photoId),
-                GSI1PK: albumPk(albumId),
-                GSI1SK: takenSk(takenAt, photoId),
-                entity: "membership",
-                albumId,
-                photoId,
-                ownerId: photoOwnerId,
-                ...(byMember && { albumOwnerId }),
-                addedAt,
-              },
-              ConditionExpression: "attribute_not_exists(PK)",
+        },
+        {
+          Put: {
+            TableName: db.table,
+            Item: {
+              ...membershipKey(albumId, photoId),
+              GSI1PK: albumPk(albumId),
+              GSI1SK: takenSk(takenAt, photoId),
+              entity: "membership",
+              albumId,
+              photoId,
+              ownerId: photoOwnerId,
+              ...(byMember && { albumOwnerId }),
+              addedAt,
             },
+            ConditionExpression: "attribute_not_exists(PK)",
           },
-          ...(byMember
-            ? [
-                {
-                  ConditionCheck: {
-                    TableName: db.table,
-                    Key: shareKey(albumId, photoOwnerId),
-                    // Accepted (shares from before invitations have no status, FR-SHR-6).
-                    ConditionExpression:
-                      "attribute_exists(PK) AND ownerId = :albumOwner AND " +
-                      "(attribute_not_exists(#status) OR #status <> :pending)",
-                    ExpressionAttributeNames: { "#status": "status" },
-                    ExpressionAttributeValues: {
-                      ":albumOwner": albumOwnerId,
-                      ":pending": "pending",
-                    },
+        },
+        ...(byMember
+          ? [
+              {
+                ConditionCheck: {
+                  TableName: db.table,
+                  Key: shareKey(albumId, photoOwnerId),
+                  // Accepted (shares from before invitations have no status, FR-SHR-6).
+                  ConditionExpression:
+                    "attribute_exists(PK) AND ownerId = :albumOwner AND " +
+                    "(attribute_not_exists(#status) OR #status <> :pending)",
+                  ExpressionAttributeNames: { "#status": "status" },
+                  ExpressionAttributeValues: {
+                    ":albumOwner": albumOwnerId,
+                    ":pending": "pending",
                   },
                 },
-              ]
-            : []),
-        ],
-      }),
-    );
+              },
+            ]
+          : []),
+      ],
+    });
     return "added";
   } catch (err) {
     if (conditionFailedAt(err, 0)) {
@@ -283,9 +283,7 @@ export async function removeMembership(
   };
 
   try {
-    await db.client.send(
-      new TransactWriteCommand({ TransactItems: [deleteMembership, decrementAlbum, unlinkPhoto] }),
-    );
+    await transactWrite(db, { TransactItems: [deleteMembership, decrementAlbum, unlinkPhoto] });
   } catch (err) {
     if (conditionFailedAt(err, 0)) return false;
     if (conditionFailedAt(err, 1) || conditionFailedAt(err, 2)) {
@@ -329,13 +327,15 @@ async function removeMembershipLeniently(
   photoId: string,
 ): Promise<boolean> {
   try {
-    await db.client.send(
-      new DeleteCommand({
-        TableName: db.table,
-        Key: membershipKey(albumId, photoId),
-        ConditionExpression: "ownerId = :owner",
-        ExpressionAttributeValues: { ":owner": photoOwnerId },
-      }),
+    await retryOnConflict(() =>
+      db.client.send(
+        new DeleteCommand({
+          TableName: db.table,
+          Key: membershipKey(albumId, photoId),
+          ConditionExpression: "ownerId = :owner",
+          ExpressionAttributeValues: { ":owner": photoOwnerId },
+        }),
+      ),
     );
   } catch (err) {
     if (isConditionalCheckFailed(err)) return false;
@@ -361,14 +361,17 @@ async function removeMembershipLeniently(
 
 async function clearCover(db: Db, albumOwnerId: string, albumId: string, photoId: string) {
   try {
-    await db.client.send(
-      new UpdateCommand({
-        TableName: db.table,
-        Key: albumKey(albumOwnerId, albumId),
-        UpdateExpression: "REMOVE coverPhotoId, coverOwnerId",
-        ConditionExpression: "coverPhotoId = :photoId",
-        ExpressionAttributeValues: { ":photoId": photoId },
-      }),
+    // The album item is shared by every photo in it: retried on clashes (13.4).
+    await retryOnConflict(() =>
+      db.client.send(
+        new UpdateCommand({
+          TableName: db.table,
+          Key: albumKey(albumOwnerId, albumId),
+          UpdateExpression: "REMOVE coverPhotoId, coverOwnerId",
+          ConditionExpression: "coverPhotoId = :photoId",
+          ExpressionAttributeValues: { ":photoId": photoId },
+        }),
+      ),
     );
   } catch (err) {
     if (!isConditionalCheckFailed(err)) throw err; // Cover is another photo, or none.
@@ -384,12 +387,15 @@ async function updateIfExists(
   },
 ) {
   try {
-    await db.client.send(
-      new UpdateCommand({
-        TableName: db.table,
-        ...update,
-        ConditionExpression: "attribute_exists(PK)",
-      }),
+    // Album counts are shared by every photo in the album: retried on clashes (13.4).
+    await retryOnConflict(() =>
+      db.client.send(
+        new UpdateCommand({
+          TableName: db.table,
+          ...update,
+          ConditionExpression: "attribute_exists(PK)",
+        }),
+      ),
     );
   } catch (err) {
     if (!isConditionalCheckFailed(err)) throw err;

@@ -311,6 +311,8 @@ describe("settings: logout (FR-AUTH-5)", () => {
     await renderAt("/settings", { api, auth, uploads: queue });
     await screen.findByRole("meter");
     await queue.add([testFile("IMG_1.jpg"), testFile("IMG_2.jpg")]);
+    // The page hears about queue changes on the next animation frame (13.1-0).
+    await new Promise((resolve) => requestAnimationFrame(resolve));
 
     fireEvent.click(screen.getByRole("button", { name: "Log out" }));
     const dialog = await screen.findByRole("alertdialog");

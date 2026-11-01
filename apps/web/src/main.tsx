@@ -12,6 +12,7 @@ import { refreshAfterUpload } from "./queries/photos";
 import { createAppRouter, createQueryClient } from "./router";
 import { createUploadQueue, SYNC_TAG, UPLOAD_CHANNEL_NAME } from "./upload/queue";
 import { createIdbShareInbox } from "./upload/shareInbox";
+import { createIdbBatchStore } from "./upload/batches";
 import { createIdbStore } from "./upload/store";
 
 const config = loadConfig();
@@ -43,6 +44,8 @@ auth.onTokens(() => void media.ensure());
 const uploads = createUploadQueue({
   api,
   store: createIdbStore(),
+  // Large batches remembered, so they can be continued after the tab closed (13.1f).
+  batches: createIdbBatchStore(),
   onUploaded: () => refreshAfterUpload(queryClient),
   locks: navigator.locks,
   createChannel:

@@ -63,6 +63,15 @@ export async function attemptUpload(
   let current = item;
   try {
     if (!current.file) throw new FileMissingError();
+    // A large batch's file is read from the disk only now (13.1c): moved, renamed or deleted since
+    // it was picked → a clear failure instead of endless network retries.
+    if (current.memoryOnly) {
+      try {
+        await current.file.slice(0, 1).arrayBuffer();
+      } catch {
+        throw new FileMissingError();
+      }
+    }
     const { photoId, upload } = await api.photos.uploadUrl({
       fileName: current.fileName,
       contentType: current.contentType,

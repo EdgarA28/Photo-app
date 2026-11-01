@@ -1,4 +1,5 @@
-import { DeleteCommand, GetCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
+import { log } from "../lib/log";
 import {
   TRASH_RETENTION_DAYS,
   type AllowedContentType,
@@ -10,11 +11,13 @@ import {
   batchGet,
   conditionFailedAt,
   isConditionalCheckFailed,
-  isTransactionConflict,
   queryAll,
   queryPage,
   stripKeys,
   type Db,
+  transactWrite,
+  retryOnConflict,
+  isTransactionConflict,
 } from "./db";
 import {
   GSI1,
@@ -121,8 +124,8 @@ export function photosRepo(db: Db) {
      * TTL, or for good with `keepClaim`: a saved shared photo, FR-SHR-10): "claimed" if another
      * request with it got there first.
      *
-     * Parallel creates clash on the Usage item (`TransactionConflict`, nothing applied): retried
-     * after a short random pause, like `delete`.
+     * Parallel creates clash on the Usage item (`TransactionConflict`, nothing applied):
+     * retried by `transactWrite` (13.4).
      *
      * Also writes the photo's pending marker (6.11, last in the transaction so the condition
      * indexes above stay put), by which the daily sweep finds uploads that never arrived.
@@ -137,78 +140,72 @@ export function photosRepo(db: Db) {
     ): Promise<PhotoRecord | "quota-exceeded" | "claimed"> {
       if (photo.sizeBytes > quotaBytes) return "quota-exceeded";
       const record: PhotoRecord = { ...photo, status: "pending", takenAt: photo.uploadedAt };
-      for (let attempt = 0; ; attempt++) {
-        try {
-          await db.client.send(
-            new TransactWriteCommand({
-              TransactItems: [
-                {
-                  Put: {
-                    TableName: db.table,
-                    Item: {
-                      ...photoKey(photo.userId, photo.photoId),
-                      GSI1PK: userPk(photo.userId),
-                      GSI1SK: takenSk(record.takenAt, photo.photoId),
-                      entity: "photo",
-                      ...record,
-                    },
-                    ConditionExpression: "attribute_not_exists(PK)",
-                  },
+      try {
+        await transactWrite(db, {
+          TransactItems: [
+            {
+              Put: {
+                TableName: db.table,
+                Item: {
+                  ...photoKey(photo.userId, photo.photoId),
+                  GSI1PK: userPk(photo.userId),
+                  GSI1SK: takenSk(record.takenAt, photo.photoId),
+                  entity: "photo",
+                  ...record,
                 },
-                {
-                  Update: {
-                    TableName: db.table,
-                    Key: usageKey(photo.userId),
-                    UpdateExpression: "ADD bytesReserved :size",
-                    // Conditions can't add, so the limit is precomputed: reserved + size <= quota.
-                    ConditionExpression:
-                      "attribute_not_exists(bytesReserved) OR bytesReserved <= :max",
-                    ExpressionAttributeValues: {
-                      ":size": photo.sizeBytes,
-                      ":max": quotaBytes - photo.sizeBytes,
-                    },
-                  },
+                ConditionExpression: "attribute_not_exists(PK)",
+              },
+            },
+            {
+              Update: {
+                TableName: db.table,
+                Key: usageKey(photo.userId),
+                UpdateExpression: "ADD bytesReserved :size",
+                // Conditions can't add, so the limit is precomputed: reserved + size <= quota.
+                ConditionExpression: "attribute_not_exists(bytesReserved) OR bytesReserved <= :max",
+                ExpressionAttributeValues: {
+                  ":size": photo.sizeBytes,
+                  ":max": quotaBytes - photo.sizeBytes,
                 },
-                ...(uploadId
-                  ? [
-                      {
-                        Put: {
-                          TableName: db.table,
-                          Item: {
-                            ...uploadClaimKey(photo.userId, uploadId),
-                            photoId: photo.photoId,
-                            ...(!keepClaim && { ttl: Math.ceil(Date.now() / 1000) + 7 * 86_400 }),
-                          },
-                          ConditionExpression: "attribute_not_exists(PK)",
-                        },
+              },
+            },
+            ...(uploadId
+              ? [
+                  {
+                    Put: {
+                      TableName: db.table,
+                      Item: {
+                        ...uploadClaimKey(photo.userId, uploadId),
+                        photoId: photo.photoId,
+                        ...(!keepClaim && { ttl: Math.ceil(Date.now() / 1000) + 7 * 86_400 }),
                       },
-                    ]
-                  : []),
-                {
-                  Put: {
-                    TableName: db.table,
-                    Item: {
-                      ...pendingMarkerKey(photo.uploadedAt, photo.userId, photo.photoId),
-                      entity: "pendingMarker",
-                      userId: photo.userId,
-                      photoId: photo.photoId,
-                      uploadedAt: photo.uploadedAt,
-                      ttl:
-                        Math.ceil(Date.parse(photo.uploadedAt) / 1000) +
-                        PENDING_MARKER_TTL_DAYS * 86_400,
+                      ConditionExpression: "attribute_not_exists(PK)",
                     },
                   },
+                ]
+              : []),
+            {
+              Put: {
+                TableName: db.table,
+                Item: {
+                  ...pendingMarkerKey(photo.uploadedAt, photo.userId, photo.photoId),
+                  entity: "pendingMarker",
+                  userId: photo.userId,
+                  photoId: photo.photoId,
+                  uploadedAt: photo.uploadedAt,
+                  ttl:
+                    Math.ceil(Date.parse(photo.uploadedAt) / 1000) +
+                    PENDING_MARKER_TTL_DAYS * 86_400,
                 },
-              ],
-            }),
-          );
-          return record;
-        } catch (err) {
-          if (conditionFailedAt(err, 1)) return "quota-exceeded";
-          if (conditionFailedAt(err, 2)) return "claimed";
-          if (!isTransactionConflict(err) || attempt >= 5) throw err;
-          await new Promise((resolve) => setTimeout(resolve, Math.random() * 50 * 2 ** attempt));
-        }
+              },
+            },
+          ],
+        });
+        return record;
+      } catch (err) {
+        if (conditionFailedAt(err, 1)) return "quota-exceeded";
+        if (conditionFailedAt(err, 2)) return "claimed";
+        throw err;
       }
     },
 
@@ -324,65 +321,60 @@ export function photosRepo(db: Db) {
         const counted = record.status !== "pending";
         const trashed = record.trashedAt !== undefined;
         try {
-          await db.client.send(
-            new TransactWriteCommand({
-              TransactItems: [
-                {
-                  Delete: {
-                    TableName: db.table,
-                    Key: photoKey(userId, photoId),
-                    // Guards against the thumbnail Lambda changing the status (and counting
-                    // Usage) between our read and this delete, and against a trash or restore.
-                    ConditionExpression: trashed
-                      ? "#status = :status AND trashedAt = :trashedAt"
-                      : "#status = :status AND attribute_not_exists(trashedAt)",
-                    ExpressionAttributeNames: { "#status": "status" },
-                    ExpressionAttributeValues: {
-                      ":status": record.status,
-                      ...(trashed && { ":trashedAt": record.trashedAt }),
-                    },
+          await transactWrite(db, {
+            TransactItems: [
+              {
+                Delete: {
+                  TableName: db.table,
+                  Key: photoKey(userId, photoId),
+                  // Guards against the thumbnail Lambda changing the status (and counting
+                  // Usage) between our read and this delete, and against a trash or restore.
+                  ConditionExpression: trashed
+                    ? "#status = :status AND trashedAt = :trashedAt"
+                    : "#status = :status AND attribute_not_exists(trashedAt)",
+                  ExpressionAttributeNames: { "#status": "status" },
+                  ExpressionAttributeValues: {
+                    ":status": record.status,
+                    ...(trashed && { ":trashedAt": record.trashedAt }),
                   },
                 },
-                // Its place entries (13.2c). The status condition above covers them too: places
-                // are written with `ready`, so a photo that changes status is re-read first.
-                ...[...(record.placeIds ?? [])].flatMap((placeId) => [
-                  { Delete: { TableName: db.table, Key: placePhotoKey(userId, placeId, photoId) } },
-                  {
-                    Update: {
-                      TableName: db.table,
-                      Key: placeKey(userId, placeId),
-                      UpdateExpression: trashed
-                        ? "ADD trashedCount :minusOne"
-                        : "ADD photoCount :minusOne",
-                      ExpressionAttributeValues: { ":minusOne": -1 },
-                    },
-                  },
-                ]),
+              },
+              // Its place entries (13.2c). The status condition above covers them too: places
+              // are written with `ready`, so a photo that changes status is re-read first.
+              ...[...(record.placeIds ?? [])].flatMap((placeId) => [
+                { Delete: { TableName: db.table, Key: placePhotoKey(userId, placeId, photoId) } },
                 {
                   Update: {
                     TableName: db.table,
-                    Key: usageKey(userId),
-                    UpdateExpression: counted
-                      ? "ADD bytesUsed :size, photoCount :one, bytesReserved :size"
-                      : "ADD bytesReserved :size",
-                    ExpressionAttributeValues: counted
-                      ? { ":size": -record.sizeBytes, ":one": -1 }
-                      : { ":size": -record.sizeBytes },
+                    Key: placeKey(userId, placeId),
+                    UpdateExpression: trashed
+                      ? "ADD trashedCount :minusOne"
+                      : "ADD photoCount :minusOne",
+                    ExpressionAttributeValues: { ":minusOne": -1 },
                   },
                 },
-              ],
-            }),
-          );
+              ]),
+              {
+                Update: {
+                  TableName: db.table,
+                  Key: usageKey(userId),
+                  UpdateExpression: counted
+                    ? "ADD bytesUsed :size, photoCount :one, bytesReserved :size"
+                    : "ADD bytesReserved :size",
+                  ExpressionAttributeValues: counted
+                    ? { ":size": -record.sizeBytes, ":one": -1 }
+                    : { ":size": -record.sizeBytes },
+                },
+              },
+            ],
+          });
           await dropEmptyPlaces(db, userId, record.placeIds);
           return record;
         } catch (err) {
-          // Status changed or photo deleted concurrently: re-read and try again. Also when
-          // another delete of this user's photos updated Usage at the same moment (emptying the
-          // trash deletes several in parallel; it answered 500, dev 2026-10-28), after a short
-          // random pause.
-          if (isTransactionConflict(err)) {
-            await new Promise((resolve) => setTimeout(resolve, Math.random() * 50 * 2 ** attempt));
-          } else if (!conditionFailedAt(err, 0)) throw err;
+          // Status changed or photo deleted concurrently: re-read and try again. (A clash with
+          // another delete on Usage or a place, e.g. emptying the trash, is retried inside
+          // transactWrite, 13.4.)
+          if (!conditionFailedAt(err, 0)) throw err;
         }
       }
       throw new Error(`Photo ${photoId} kept changing while being deleted`);
@@ -414,33 +406,31 @@ export function photosRepo(db: Db) {
           const purgeAt = new Date(now.getTime() + TRASH_RETENTION_DAYS * DAY_MS).toISOString();
           const albumIds = record.albumIds?.size ? record.albumIds : undefined;
           try {
-            await db.client.send(
-              new TransactWriteCommand({
-                TransactItems: [
-                  {
-                    Update: {
-                      TableName: db.table,
-                      Key: photoKey(userId, photoId),
-                      UpdateExpression:
-                        "SET trashedAt = :trashedAt, purgeAt = :purgeAt, GSI1PK = :pk, GSI1SK = :sk" +
-                        (albumIds ? ", trashedAlbumIds = :albums" : ""),
-                      // Ready or failed as read (the thumbnail Lambda may mark it failed).
-                      ConditionExpression: "#status = :status AND attribute_not_exists(trashedAt)",
-                      ExpressionAttributeNames: { "#status": "status" },
-                      ExpressionAttributeValues: {
-                        ":trashedAt": trashedAt,
-                        ":purgeAt": purgeAt,
-                        ":pk": TRASH_PK,
-                        ":sk": purgeSk(purgeAt, userId, photoId),
-                        ":status": record.status,
-                        ...(albumIds && { ":albums": albumIds }),
-                      },
+            await transactWrite(db, {
+              TransactItems: [
+                {
+                  Update: {
+                    TableName: db.table,
+                    Key: photoKey(userId, photoId),
+                    UpdateExpression:
+                      "SET trashedAt = :trashedAt, purgeAt = :purgeAt, GSI1PK = :pk, GSI1SK = :sk" +
+                      (albumIds ? ", trashedAlbumIds = :albums" : ""),
+                    // Ready or failed as read (the thumbnail Lambda may mark it failed).
+                    ConditionExpression: "#status = :status AND attribute_not_exists(trashedAt)",
+                    ExpressionAttributeNames: { "#status": "status" },
+                    ExpressionAttributeValues: {
+                      ":trashedAt": trashedAt,
+                      ":purgeAt": purgeAt,
+                      ":pk": TRASH_PK,
+                      ":sk": purgeSk(purgeAt, userId, photoId),
+                      ":status": record.status,
+                      ...(albumIds && { ":albums": albumIds }),
                     },
                   },
-                  ...placeMoves(db, userId, photoId, record.placeIds, "trash", record.takenAt),
-                ],
-              }),
-            );
+                },
+                ...placeMoves(db, userId, photoId, record.placeIds, "trash", record.takenAt),
+              ],
+            });
           } catch (err) {
             if (conditionFailedAt(err, 0)) continue; // Changed meanwhile: re-read.
             throw err;
@@ -472,27 +462,25 @@ export function photosRepo(db: Db) {
         const record = await getPhoto(db, userId, photoId, true);
         if (!record?.trashedAt) return null;
         try {
-          await db.client.send(
-            new TransactWriteCommand({
-              TransactItems: [
-                {
-                  Update: {
-                    TableName: db.table,
-                    Key: photoKey(userId, photoId),
-                    UpdateExpression:
-                      "SET GSI1PK = :pk, GSI1SK = :sk REMOVE trashedAt, purgeAt, trashedAlbumIds",
-                    ConditionExpression: "trashedAt = :trashedAt",
-                    ExpressionAttributeValues: {
-                      ":pk": userPk(userId),
-                      ":sk": takenSk(record.takenAt, photoId),
-                      ":trashedAt": record.trashedAt,
-                    },
+          await transactWrite(db, {
+            TransactItems: [
+              {
+                Update: {
+                  TableName: db.table,
+                  Key: photoKey(userId, photoId),
+                  UpdateExpression:
+                    "SET GSI1PK = :pk, GSI1SK = :sk REMOVE trashedAt, purgeAt, trashedAlbumIds",
+                  ConditionExpression: "trashedAt = :trashedAt",
+                  ExpressionAttributeValues: {
+                    ":pk": userPk(userId),
+                    ":sk": takenSk(record.takenAt, photoId),
+                    ":trashedAt": record.trashedAt,
                   },
                 },
-                ...placeMoves(db, userId, photoId, record.placeIds, "restore", record.takenAt),
-              ],
-            }),
-          );
+              },
+              ...placeMoves(db, userId, photoId, record.placeIds, "restore", record.takenAt),
+            ],
+          });
         } catch (err) {
           if (conditionFailedAt(err, 0)) continue; // Restored or purged meanwhile: re-read.
           throw err;
@@ -662,21 +650,32 @@ async function getPhoto(
  * Removes place list entries left without photos, counted or trashed; one that gained a photo
  * meanwhile stays.
  */
+/**
+ * Removes place entries left with no photos. Best effort: the photo's own delete is done by now,
+ * and an empty entry is never listed (`photoCount > 0`) and goes with a later delete there. Other
+ * deletes of photos at the same place update its counter in their transactions at the same moment,
+ * so this write can clash with them: retried, and if it keeps clashing, logged and left
+ * (dev 2026-11-01: emptying a big trash answered 500 here).
+ */
 async function dropEmptyPlaces(db: Db, userId: string, placeIds: Set<string> | undefined) {
   for (const placeId of placeIds ?? []) {
     try {
-      await db.client.send(
-        new DeleteCommand({
-          TableName: db.table,
-          Key: placeKey(userId, placeId),
-          // Trashed photos still need it for a restore (FR-DEL-3).
-          ConditionExpression:
-            "photoCount <= :zero AND (attribute_not_exists(trashedCount) OR trashedCount <= :zero)",
-          ExpressionAttributeValues: { ":zero": 0 },
-        }),
+      await retryOnConflict(() =>
+        db.client.send(
+          new DeleteCommand({
+            TableName: db.table,
+            Key: placeKey(userId, placeId),
+            // Trashed photos still need it for a restore (FR-DEL-3).
+            ConditionExpression:
+              "photoCount <= :zero AND (attribute_not_exists(trashedCount) OR trashedCount <= :zero)",
+            ExpressionAttributeValues: { ":zero": 0 },
+          }),
+        ),
       );
     } catch (err) {
-      if (!isConditionalCheckFailed(err)) throw err;
+      if (isConditionalCheckFailed(err)) continue; // Still has photos.
+      if (!isTransactionConflict(err)) throw err;
+      log("WARN", "Empty place entry left after clashing writes", { userId, placeId });
     }
   }
 }

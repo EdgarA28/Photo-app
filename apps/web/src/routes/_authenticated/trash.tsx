@@ -253,6 +253,8 @@ function DeleteSelected({ photoIds, onDone, onPartial }: SelectedProps) {
 function EmptyTrash({ count, onDone }: { count: number; onDone: (message: string) => void }) {
   const [confirming, setConfirming] = useState(false);
   const empty = useEmptyTrash();
+  /** A big trash is emptied in steps: how far it got. */
+  const [progress, setProgress] = useState<{ deleted: number; total: number } | null>(null);
 
   return (
     <AlertDialog
@@ -286,7 +288,8 @@ function EmptyTrash({ count, onDone }: { count: number; onDone: (message: string
             disabled={empty.isPending}
             onClick={(event) => {
               event.preventDefault(); // stay open until the API answers
-              empty.mutate(undefined, {
+              setProgress(null);
+              empty.mutate((deleted, total) => setProgress({ deleted, total }), {
                 onSuccess: () => {
                   setConfirming(false);
                   onDone("The trash is empty.");
@@ -294,7 +297,11 @@ function EmptyTrash({ count, onDone }: { count: number; onDone: (message: string
               });
             }}
           >
-            {empty.isPending ? "Deleting…" : "Empty trash"}
+            {empty.isPending
+              ? progress && progress.deleted < progress.total
+                ? `Deleting… ${progress.deleted.toLocaleString()} of ${progress.total.toLocaleString()}`
+                : "Deleting…"
+              : "Empty trash"}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

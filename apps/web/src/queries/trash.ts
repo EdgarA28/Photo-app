@@ -64,11 +64,45 @@ export const useRestorePhotos = () => useTrashAction((api, photoId) => api.trash
 export const useDeleteForever = () =>
   useTrashAction((api, photoId) => api.trash.deleteForever(photoId));
 
+/** Temporary errors (5xx, network) in a row before "Empty trash" gives up, and the pause between. */
+export const EMPTY_TRASH_RETRIES = 3;
+export const EMPTY_TRASH_RETRY_MS = 1000;
+/** Requests in a row that deleted nothing before "Empty trash" gives up (the trash didn't shrink). */
+const EMPTY_TRASH_STALLS = 3;
+
+/**
+ * Empties the trash (FR-DEL-3). The API deletes a few seconds' worth per request and says how many
+ * are left (a big trash doesn't fit in one request, dev 2026-11-01), so this asks again until none
+ * are, reporting progress as `onProgress(deleted, total)`.
+ */
 export function useEmptyTrash() {
   const api = useRouteContext({ from: "__root__", select: (context) => context.api });
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () => api.trash.empty(),
+    mutationFn: async (onProgress?: (deleted: number, total: number) => void) => {
+      let deleted = 0;
+      let stalls = 0;
+      let failures = 0;
+      for (;;) {
+        let step;
+        try {
+          step = await api.trash.empty();
+          failures = 0;
+        } catch (error) {
+          // A temporary server error mid-way: the steps before stay done, so just ask again.
+          if (!(error instanceof ApiRequestError) || !error.retryable) throw error;
+          if (++failures >= EMPTY_TRASH_RETRIES) throw error;
+          await new Promise((resolve) => setTimeout(resolve, EMPTY_TRASH_RETRY_MS));
+          continue;
+        }
+        deleted += step.deleted;
+        onProgress?.(deleted, deleted + step.remaining);
+        if (step.remaining === 0) return deleted;
+        stalls = step.deleted === 0 ? stalls + 1 : 0;
+        if (stalls >= EMPTY_TRASH_STALLS)
+          throw new Error("The trash couldn't be emptied. Try again.");
+      }
+    },
     onSettled: () => invalidateAfterTrash(queryClient),
   });
 }

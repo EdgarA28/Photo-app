@@ -153,25 +153,14 @@ describe("processing and failed photos (FR-GAL-5)", () => {
 
   afterEach(() => vi.useRealTimers());
 
-  it("shows a square spinner placeholder without an image while processing", async () => {
-    const { api } = setup({ "GET /photos": { items: [pending(0)], nextCursor: null } });
-    await renderAt("/gallery", { api });
-    const tile = await screen.findByRole("link", { name: "IMG_0.jpg, processing" });
-    expect(tile.style.width).toBe("192px");
-    expect(tile.querySelector("img")).toBeNull();
-    expect(tile.querySelector("svg.lucide-loader-circle")).not.toBeNull();
-  });
-
-  it("shows an error state for a photo that failed processing", async () => {
+  it("doesn't show photos still processing: they appear once ready (user, 2026-11-01)", async () => {
     const { api } = setup({
-      "GET /photos": { items: [testPhoto(0, { status: "failed" })], nextCursor: null },
+      "GET /photos": { items: [pending(0), testPhoto(1)], nextCursor: null },
     });
     await renderAt("/gallery", { api });
-    const tile = await screen.findByRole("link", { name: "IMG_0.jpg, couldn't be processed" });
-    expect(tile.textContent).toBe("Failed");
-    expect(tile.querySelector("img")).toBeNull();
-    // Still opens the viewer, where it can be downloaded or deleted (8.8/8.9).
-    expect(tile.getAttribute("href")).toBe(`/photos/${testId(0)}?sort=taken-desc`);
+    await screen.findByRole("link", { name: "IMG_1.jpg" });
+    expect(screen.queryByRole("link", { name: /IMG_0\.jpg/ })).toBeNull();
+    expect(document.querySelector("svg.lucide-loader-circle")).toBeNull();
   });
 
   it("refetches while a photo is processing and shows it once ready", async () => {
@@ -181,7 +170,9 @@ describe("processing and failed photos (FR-GAL-5)", () => {
       "GET /photos": () => ({ items: [ready ? testPhoto(0) : pending(0)], nextCursor: null }),
     });
     await renderAt("/gallery", { api });
-    await screen.findByRole("link", { name: "IMG_0.jpg, processing" });
+    // Nothing shown while it processes, but the gallery keeps asking.
+    await waitFor(() => expect(queriesTo(request, "/photos").length).toBeGreaterThan(0));
+    expect(screen.queryByRole("link", { name: /IMG_0\.jpg/ })).toBeNull();
     ready = true;
     await vi.advanceTimersByTimeAsync(PROCESSING_POLL_MS);
     const tile = await screen.findByRole("link", { name: "IMG_0.jpg" });

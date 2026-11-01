@@ -32,8 +32,16 @@ export function contentTypeOf(file: Pick<File, "name" | "type">): AllowedContent
   return EXTENSION_TYPES[ext] ?? null;
 }
 
+/**
+ * Why a picked file wasn't added (13.1b: the upload page groups them): not a supported photo
+ * type, over 50 MB, empty, unreadable (e.g. a cloud file not on the device), or over a phone's
+ * limit per pick (13.1c).
+ */
+export type SkipCode = "type" | "size" | "empty" | "unreadable" | "phoneLimit";
+
 export type FileCheck =
-  { ok: true; contentType: AllowedContentType; fileName: string } | { ok: false; reason: string };
+  | { ok: true; contentType: AllowedContentType; fileName: string }
+  | { ok: false; reason: string; code: SkipCode };
 
 /**
  * Client-side check before a file enters the queue, mirroring the API's `uploadUrlRequestSchema`
@@ -41,10 +49,12 @@ export type FileCheck =
  */
 export function checkFile(file: File): FileCheck {
   const contentType = contentTypeOf(file);
-  if (!contentType) return { ok: false, reason: "Not a supported type (JPEG, PNG, WebP or HEIC)" };
-  if (file.size === 0) return { ok: false, reason: "The file is empty" };
+  if (!contentType) {
+    return { ok: false, reason: "Not a supported type (JPEG, PNG, WebP or HEIC)", code: "type" };
+  }
+  if (file.size === 0) return { ok: false, reason: "The file is empty", code: "empty" };
   if (file.size > MAX_UPLOAD_BYTES) {
-    return { ok: false, reason: `Larger than ${formatBytes(MAX_UPLOAD_BYTES)}` };
+    return { ok: false, reason: `Larger than ${formatBytes(MAX_UPLOAD_BYTES)}`, code: "size" };
   }
   // Camera captures can come without a usable name; the API needs 1–255 characters.
   const fileName = file.name.trim().slice(0, MAX_FILE_NAME_LENGTH) || "photo";

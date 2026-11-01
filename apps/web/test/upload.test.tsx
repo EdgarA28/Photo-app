@@ -1,12 +1,14 @@
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "../src/api/errors";
 import { refreshAfterUpload } from "../src/queries/photos";
+import { fileKey } from "../src/upload/batches";
 import type { UploadQueue } from "../src/upload/queue";
 import {
   controlledPost,
   fakeApi,
   fakeAuth,
+  MemoryBatchStore,
   MemoryShareInbox,
   testFile,
   testId,
@@ -58,33 +60,74 @@ describe("upload page (FR-UP-1/5/6)", () => {
 
     calls[0]!.resolve();
     expect(await screen.findByRole("heading", { name: "1 of 2 uploaded" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Clear finished" }));
-    expect(await screen.findByRole("heading", { name: "0 of 1 uploaded" })).toBeTruthy();
+    // A finished upload leaves the list at once (user request 2026-11-01); the count stays.
+    expect(screen.queryByText("IMG_1.jpg")).toBeNull();
+    expect(screen.getByText("IMG_2.jpg")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Clear finished" })).toBeNull();
   });
 
   it("accepts dropped files and the camera", async () => {
     const { api, queue } = setup();
     await renderAt("/upload", { api, uploads: queue });
 
-    const zone = screen.getByText(/Drag photos here/).closest("[class*='border-dashed']")!;
+    const zone = screen
+      .getByText(/Drag photos or a folder here/)
+      .closest("[class*='border-dashed']")!;
     fireEvent.drop(zone, { dataTransfer: { files: [testFile("dropped.jpg")], types: ["Files"] } });
     pick([testFile("camera.jpg")], "upload-camera");
 
     await waitFor(() =>
-      expect(queue.getSnapshot().map((e) => e.fileName)).toEqual(["dropped.jpg", "camera.jpg"]),
+      // A drop is handed over after the (folder) check, so it may come second.
+      expect(
+        queue
+          .getSnapshot()
+          .map((e) => e.fileName)
+          .sort(),
+      ).toEqual(["camera.jpg", "dropped.jpg"]),
     );
   });
 
-  it("says which files weren't added and why", async () => {
+  it("sums up skipped files by reason, with their names on request (13.1b)", async () => {
     const { api, queue } = setup();
     await renderAt("/upload", { api, uploads: queue });
 
-    pick([testFile("notes.pdf", 10, "application/pdf"), testFile("IMG_1.jpg")]);
+    pick([
+      testFile("notes.pdf", 10, "application/pdf"),
+      testFile("clip.mp4", 10, "video/mp4"),
+      testFile("empty.jpg", 0),
+      testFile("IMG_1.jpg"),
+      testFile("IMG_2.jpg"),
+    ]);
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("1 file wasn't added");
+    expect(alert.textContent).toContain("2 added · 3 files skipped");
+    const groups = within(alert)
+      .getAllByRole("listitem")
+      .map((item) => item.textContent);
+    expect(groups).toEqual(["2 aren't photos (videos and other files)", "1 is empty"]);
+    expect(alert.textContent).not.toContain("notes.pdf");
+
+    fireEvent.click(within(alert).getByRole("button", { name: "Show the files" }));
     expect(alert.textContent).toContain("notes.pdf: Not a supported type");
+    expect(alert.textContent).toContain("empty.jpg: The file is empty");
+    fireEvent.click(within(alert).getByRole("button", { name: "Hide the files" }));
+    expect(alert.textContent).not.toContain("notes.pdf");
+
     fireEvent.click(within(alert).getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("lists at most 200 skipped file names", async () => {
+    const { api, queue } = setup();
+    await renderAt("/upload", { api, uploads: queue });
+    pick(Array.from({ length: 250 }, (_, i) => testFile(`clip_${i}.mp4`, 10, "video/mp4")));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("250 files skipped");
+    expect(alert.textContent).not.toContain("added");
+    fireEvent.click(within(alert).getByRole("button", { name: "Show the files" }));
+    expect(alert.textContent).toContain("clip_199.mp4");
+    expect(alert.textContent).not.toContain("clip_200.mp4");
+    expect(alert.textContent).toContain("and 50 more");
   });
 
   it("shows a permanent failure with its reason, and retries it on request", async () => {
@@ -134,27 +177,31 @@ describe("uploads in the gallery and nav (FR-UP-6)", () => {
       "NEW_4.jpg, waiting to upload",
     ]);
     expect(tiles[0]!.getAttribute("href")).toBe("/upload");
-    expect(within(tiles[0]!).getByRole("progressbar").getAttribute("aria-valuenow")).toBe("50");
+    // The UI hears about changes once per animation frame (13.1-0).
+    await waitFor(() =>
+      expect(within(tiles[0]!).getByRole("progressbar").getAttribute("aria-valuenow")).toBe("50"),
+    );
     expect(screen.queryByText("No photos yet.")).toBeNull();
     // Nav badge: waiting + running.
     expect(screen.getAllByLabelText("4 uploading").length).toBeGreaterThan(0);
   });
 
-  it("refreshes the gallery when an upload finishes, so it appears as processing", async () => {
-    const pending = {
+  it("refreshes the gallery when an upload finishes, so the photo appears once ready", async () => {
+    // Processed right away here; a photo still processing isn't shown (gallery tests).
+    const processed = {
       items: [
         {
           photoId: testId(1),
-          status: "pending",
+          status: "ready",
           fileName: "NEW_1.jpg",
           contentType: "image/jpeg",
           sizeBytes: 1000,
-          width: null,
-          height: null,
+          width: 400,
+          height: 300,
           takenAt: new Date().toISOString(),
           uploadedAt: new Date().toISOString(),
-          thumbUrl: null,
-          previewUrl: null,
+          thumbUrl: "https://d.example/users/u/thumbs/1.jpg",
+          previewUrl: "https://d.example/users/u/previews/1.jpg",
         },
       ],
       nextCursor: null,
@@ -163,7 +210,7 @@ describe("uploads in the gallery and nav (FR-UP-6)", () => {
     const { api } = fakeApi({
       ...defaultResponses,
       "POST /photos/upload-url": uploadUrl,
-      "GET /photos": () => (uploaded ? pending : { items: [], nextCursor: null }),
+      "GET /photos": () => (uploaded ? processed : { items: [], nextCursor: null }),
     });
     let queue: UploadQueue | undefined;
     await renderAt("/gallery", {
@@ -180,7 +227,7 @@ describe("uploads in the gallery and nav (FR-UP-6)", () => {
     expect(await screen.findByText("No photos yet.")).toBeTruthy();
 
     await queue!.add([testFile("NEW_1.jpg")]);
-    expect(await screen.findByRole("link", { name: "NEW_1.jpg, processing" })).toBeTruthy();
+    expect(await screen.findByRole("link", { name: "NEW_1.jpg" })).toBeTruthy();
   });
 
   it("doesn't show uploads inside an album", async () => {
@@ -237,26 +284,42 @@ describe("storage full (FR-UP-7, 8.14)", () => {
     expect(screen.queryAllByText(/Not enough storage/)).toHaveLength(0);
   });
 
-  it("warns when the picked files need more space than is left, but still queues them", async () => {
+  it("asks before queuing photos that need more space than is left (13.1e)", async () => {
     const { api, queue } = setup({ "GET /me": usage(2 * GiB - 1500) });
     const { router } = await renderAt("/upload", { api, uploads: queue });
     await usageLoaded(router);
 
-    pick([testFile("IMG_1.jpg", 1000), testFile("IMG_2.jpg", 1000)]);
-    const warning = await screen.findByText(/These photos need/);
-    expect(warning.textContent).toBe(
-      "These photos need 2.0 KB, but only 1.5 KB is left. Some won't upload until you free up space.",
-    );
+    // A video doesn't count: it would be skipped anyway.
+    const files = [
+      testFile("IMG_1.jpg", 1000),
+      testFile("IMG_2.jpg", 1000),
+      testFile("clip.mp4", 5000, "video/mp4"),
+    ];
+    pick(files);
+    let dialog = await screen.findByRole("alertdialog", {
+      name: "Not enough storage for all of these",
+    });
+    expect(dialog.textContent).toContain("These photos need 2.0 KB, but only 1.5 KB is left.");
+    expect(queue.getSnapshot()).toHaveLength(0);
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(queue.getSnapshot()).toHaveLength(0);
+
+    pick(files);
+    dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Upload anyway" }));
     await waitFor(() => expect(queue.getSnapshot()).toHaveLength(2));
+    expect(await screen.findByText("2 added · 1 file skipped")).toBeTruthy();
   });
 
-  it("doesn't warn when the files fit", async () => {
+  it("doesn't ask when the photos fit", async () => {
     const { api, queue } = setup({ "GET /me": usage(GiB) });
     const { router } = await renderAt("/upload", { api, uploads: queue });
     await usageLoaded(router);
     pick([testFile("IMG_1.jpg", 1000)]);
     await waitFor(() => expect(queue.getSnapshot()).toHaveLength(1));
-    expect(screen.queryByText(/These photos need/)).toBeNull();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   it("retries every failed upload from the list", async () => {
@@ -312,7 +375,7 @@ describe("photos shared from Android's share sheet (9.6, FR-PWA-4)", () => {
     fireEvent.click(within(card).getByRole("button", { name: "Upload" }));
     expect(await screen.findByText("IMG_1.jpg")).toBeTruthy();
     // Not a photo: explained like a picked file.
-    expect(await screen.findByText(/1 file wasn't added/)).toBeTruthy();
+    expect(await screen.findByText("1 added · 1 file skipped")).toBeTruthy();
     expect(screen.queryByRole("region", { name: /shared to this app/ })).toBeNull();
     expect(shareInbox.files).toEqual([]);
     expect([...store.items.values()].map((item) => item.fileName)).toEqual(["IMG_1.jpg"]);
@@ -374,5 +437,208 @@ describe("photos shared from Android's share sheet (9.6, FR-PWA-4)", () => {
     const { api, queue } = setup();
     await renderAt("/upload?shared=failed", { api, uploads: queue });
     expect(await screen.findByText(/shared photos couldn't be received/)).toBeTruthy();
+  });
+});
+
+describe("big batches on screen (13.1-0)", () => {
+  it('shows at most 20 upload tiles in the gallery, then "+N more"', async () => {
+    const { api, queue } = setup();
+    await renderAt("/gallery", { api, uploads: queue });
+    await queue.add(Array.from({ length: 25 }, (_, i) => testFile(`NEW_${i}.jpg`, 10)));
+
+    const uploads = await screen.findByRole("region", { name: "Uploads" });
+    await waitFor(() => expect(within(uploads).getAllByRole("link")).toHaveLength(21));
+    const more = within(uploads).getByRole("link", { name: "5 more uploads" });
+    expect(more.textContent).toBe("+5 more");
+    expect(more.getAttribute("href")).toBe("/upload");
+  });
+
+  it("keeps only the rows near the viewport of a long upload list in the page", async () => {
+    // jsdom has no layout: rows measure 73 px (the virtualizer reads offsetHeight); the window
+    // is 768 px high.
+    const height = vi
+      .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        return this.tagName === "LI" ? 73 : 0;
+      });
+    const { api, queue } = setup();
+    await renderAt("/upload", { api, uploads: queue });
+    await queue.add(Array.from({ length: 300 }, (_, i) => testFile(`IMG_${i}.jpg`, 10)));
+
+    const heading = await screen.findByRole("heading", { name: "0 of 300 uploaded" });
+    const list = heading.closest("section")!;
+    const rows = within(list).getAllByRole("listitem");
+    expect(rows.length).toBeGreaterThan(5);
+    expect(rows.length).toBeLessThan(40);
+    expect(within(list).getByText("IMG_0.jpg")).toBeTruthy();
+    expect(within(list).queryByText("IMG_299.jpg")).toBeNull();
+    height.mockRestore();
+  });
+
+  it("asks to keep the tab open while a large batch uploads (13.1c)", async () => {
+    const { api } = setup();
+    const { queue } = testUploadQueue(api, {
+      post: () => new Promise(() => {}),
+      largeBatchBytes: 1500,
+    });
+    await renderAt("/upload", { api, uploads: queue });
+    pick([testFile("IMG_1.jpg"), testFile("IMG_2.jpg")]);
+
+    const note = await screen.findByText(/Large upload: keep this tab open/);
+    expect(note.textContent).toContain("stops the remaining 2 photos");
+    // The browser asks before the tab is closed or reloaded.
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("uploads a picked folder as a large batch (13.1a)", async () => {
+    const { api, queue, store } = setup();
+    await renderAt("/upload", { api, uploads: queue });
+    expect(screen.getByRole("button", { name: "Choose folder" })).toBeTruthy();
+    expect(screen.getByTestId("upload-folder").hasAttribute("webkitdirectory")).toBe(true);
+    const inFolder = (path: string) => {
+      const file = testFile(path.split("/").at(-1)!);
+      Object.defineProperty(file, "webkitRelativePath", { value: path });
+      return file;
+    };
+    pick([inFolder("Trip/IMG_1.jpg"), inFolder("Trip/.DS_Store")], "upload-folder");
+
+    expect(await screen.findByText(/Large upload: keep this tab open/)).toBeTruthy();
+    expect(queue.getSnapshot().map((entry) => [entry.fileName, entry.memoryOnly])).toEqual([
+      ["IMG_1.jpg", true],
+    ]);
+    expect(store.items.size).toBe(0);
+  });
+
+  it("walks a dropped folder (13.1a)", async () => {
+    const { api, queue } = setup();
+    await renderAt("/upload", { api, uploads: queue });
+    const photo = testFile("IMG_1.jpg");
+    const folder = {
+      name: "Trip",
+      isFile: false,
+      isDirectory: true,
+      createReader: () => {
+        let done = false;
+        return {
+          readEntries: (resolve: (entries: unknown[]) => void) => {
+            const batch = done
+              ? []
+              : [
+                  {
+                    name: photo.name,
+                    isFile: true,
+                    isDirectory: false,
+                    file: (r: (f: File) => void) => r(photo),
+                  },
+                ];
+            done = true;
+            resolve(batch);
+          },
+        };
+      },
+    };
+    const zone = screen
+      .getByText(/Drag photos or a folder here/)
+      .closest("[class*='border-dashed']")!;
+    fireEvent.drop(zone, {
+      dataTransfer: {
+        files: [],
+        types: ["Files"],
+        items: [{ kind: "file", webkitGetAsEntry: () => folder }],
+      },
+    });
+
+    await waitFor(() =>
+      expect(queue.getSnapshot().map((entry) => entry.fileName)).toEqual(["IMG_1.jpg"]),
+    );
+    expect(queue.getSnapshot()[0]!.memoryOnly).toBe(true);
+  });
+
+  it("shows the whole queue's progress, pauses, resumes and cancels it (13.1d)", async () => {
+    const { api, queue, calls } = setup();
+    await renderAt("/upload", { api, uploads: queue });
+    pick([testFile("IMG_1.jpg", 1000), testFile("IMG_2.jpg", 1000), testFile("IMG_3.jpg", 2000)]);
+    await waitFor(() => expect(calls).toHaveLength(3));
+    calls[0]!.resolve();
+
+    const header = (await screen.findByRole("heading", { name: "1 of 3 uploaded" })).closest(
+      "header",
+    )!;
+    await waitFor(() => expect(header.textContent).toContain("1000 B of 3.9 KB"));
+    expect(within(header).getByRole("progressbar", { name: "All uploads" })).toBeTruthy();
+
+    fireEvent.click(within(header).getByRole("button", { name: "Pause" }));
+    await waitFor(() => expect(screen.getAllByText(/Paused/).length).toBeGreaterThan(2));
+    fireEvent.click(within(header).getByRole("button", { name: "Resume" }));
+    await waitFor(() => expect(within(header).getByRole("button", { name: "Pause" })).toBeTruthy());
+
+    fireEvent.click(within(header).getByRole("button", { name: "Cancel all" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Cancel 2 uploads?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel uploads" }));
+    await waitFor(() => expect(queue.getSnapshot().map((entry) => entry.status)).toEqual(["done"]));
+  });
+
+  it("says when another tab is uploading a large batch (13.1d)", async () => {
+    const { api, queue } = setup();
+    vi.spyOn(queue, "getOtherTabsRemaining").mockReturnValue(1234);
+    await renderAt("/upload", { api, uploads: queue });
+    expect(await screen.findByText(/Uploading 1,234 photos in\s+another tab/)).toBeTruthy();
+  });
+
+  it("offers to continue a large batch whose tab was closed (13.1f)", async () => {
+    const { api } = setup();
+    const batches = new MemoryBatchStore();
+    const inFolder = (name: string) => {
+      const file = testFile(name);
+      Object.defineProperty(file, "webkitRelativePath", { value: `Trip/${name}` });
+      return file;
+    };
+    const picked = [inFolder("A.jpg"), inFolder("B.jpg"), inFolder("C.jpg")];
+    await batches.put({
+      batchId: "b1",
+      userId: testUser.sub,
+      label: "Trip",
+      createdAt: 0,
+      heartbeatAt: Date.now() - 60_000,
+      keys: picked.map(fileKey),
+      done: [fileKey(picked[0]!)],
+    });
+    const { queue } = testUploadQueue(api, { post: () => new Promise(() => {}), batches });
+    await renderAt("/upload", { api, uploads: queue });
+
+    const notice = await screen.findByText("2 photos from “Trip” weren't uploaded");
+    expect(notice.closest("[role=status]")!.textContent).toContain("Choose the folder again");
+
+    pick(picked, "upload-folder");
+    expect(await screen.findByText("1 photo was uploaded before and was skipped.")).toBeTruthy();
+    await waitFor(() =>
+      expect(queue.getSnapshot().map((entry) => entry.fileName)).toEqual(["B.jpg", "C.jpg"]),
+    );
+    // Going on: no longer offered.
+    await waitFor(() => expect(screen.queryByText(/weren't uploaded/)).toBeNull());
+  });
+
+  it("dismisses an interrupted batch for good (13.1f)", async () => {
+    const { api } = setup();
+    const batches = new MemoryBatchStore();
+    await batches.put({
+      batchId: "b1",
+      userId: testUser.sub,
+      label: null,
+      createdAt: 0,
+      heartbeatAt: Date.now() - 60_000,
+      keys: ["a", "b"],
+      done: [],
+    });
+    const { queue } = testUploadQueue(api, { batches });
+    await renderAt("/upload", { api, uploads: queue });
+    const notice = (await screen.findByText("2 photos of 2 weren't uploaded")).closest(
+      "[role=status]",
+    ) as HTMLElement;
+    fireEvent.click(within(notice).getByRole("button", { name: "Dismiss" }));
+    await waitFor(() => expect(screen.queryByText(/weren't uploaded/)).toBeNull());
+    expect(batches.records.size).toBe(0);
   });
 });

@@ -28,7 +28,9 @@ export interface BackgroundUploadDeps {
   now?: () => number;
 }
 
-const isWaiting = (item: UploadItem) => item.status === "queued" || item.status === "uploading";
+/** Waiting and not paused by the user (13.1d). */
+const isWaiting = (item: UploadItem) =>
+  !item.paused && (item.status === "queued" || item.status === "uploading");
 
 /**
  * Background Sync for the upload queue (9.5, §12.4, Chromium only): runs in the service worker
@@ -74,7 +76,10 @@ export async function uploadInBackground({
   });
 
   async function cancelRemoved() {
-    const ids = new Set((await store.list(session!.sub)).map((item) => item.id));
+    // Removed, or paused by the user (13.1d), in a tab meanwhile.
+    const ids = new Set(
+      (await store.list(session!.sub)).filter((item) => !item.paused).map((item) => item.id),
+    );
     for (const [id, controller] of active) if (!ids.has(id)) controller.abort();
   }
 
@@ -99,6 +104,8 @@ export async function uploadInBackground({
   async function write(id: string, patch: Partial<UploadItem>) {
     const current = (await store.list(session!.sub)).find((item) => item.id === id);
     if (!current) return null;
+    // Paused in a tab since this run read the queue: left alone (13.1d).
+    if (current.paused && patch.status === "uploading") return null;
     const next = { ...current, ...patch };
     await store.put(next);
     broadcast({ type: "changed" });

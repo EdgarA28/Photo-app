@@ -17,6 +17,7 @@ import {
   sharedAlbumPageSchema,
   shareInvitationPageSchema,
   trashListSchema,
+  emptyTrashResultSchema,
   uploadUrlResponseSchema,
   type AddAlbumPhotosRequest,
   type CreateAlbumRequest,
@@ -84,7 +85,8 @@ export function createApi(request: Request) {
       restore: (photoId: string) =>
         request("POST", `/trash/${enc(photoId)}/restore`, { schema: photoSchema }),
       deleteForever: (photoId: string) => request("DELETE", `/trash/${enc(photoId)}`),
-      empty: () => request("DELETE", "/trash"),
+      /** One step of emptying the trash: how many went, how many are left (see useEmptyTrash). */
+      empty: () => request("DELETE", "/trash", { schema: emptyTrashResultSchema }),
     },
 
     places: {

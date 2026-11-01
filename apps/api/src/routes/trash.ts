@@ -1,4 +1,4 @@
-import { idSchema, type Photo, type TrashList } from "@photo-app/shared";
+import { idSchema, type EmptyTrashResult, type Photo, type TrashList } from "@photo-app/shared";
 import type { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../env";
@@ -40,9 +40,12 @@ export function trashRoutes(app: Hono<AppEnv>, { repos, storage }: Deps): void {
     return c.body(null, 204);
   });
 
-  /** Empty the trash. */
+  /**
+   * Empty the trash, a few seconds at a time: `{deleted, remaining}`; the client repeats the
+   * request until nothing remains (a big trash doesn't fit in one request's 10 s).
+   */
   app.delete("/trash", async (c) => {
-    await emptyTrash(repos, storage, c.get("userId"));
-    return c.body(null, 204);
+    const body: EmptyTrashResult = await emptyTrash(repos, storage, c.get("userId"));
+    return c.json(body);
   });
 }

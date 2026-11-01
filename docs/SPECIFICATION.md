@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.29 |
+| **Version** | 0.36 |
 | **Date** | 2026-10-31 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -247,11 +247,11 @@ IDs are stable — reference them in issues, PRs and tests.
 
 | ID | Requirement |
 |---|---|
-| FR-UP-1 | Users can select one or many photos (file picker, drag & drop, or camera on mobile). |
+| FR-UP-1 | Users can select one or many photos (file picker, drag & drop, or camera on mobile), and on computers a whole folder with its subfolders (folder picker or dropping a folder). |
 | FR-UP-2 | Supported formats: JPEG, PNG, HEIC/HEIF, WebP. |
 | FR-UP-3 | Maximum file size: 50 MB per photo. |
 | FR-UP-4 | Uploads go directly from the client to S3; photo bytes never pass through the API. |
-| FR-UP-5 | Uploads are queued locally and survive page reloads, app restarts and connection loss; failed uploads retry automatically. |
+| FR-UP-5 | Uploads are queued locally and survive page reloads, app restarts and connection loss; failed uploads retry automatically. Exception: a **large batch** (a folder, or more than 500 MB picked at once on a computer) is uploaded by the tab that picked it and survives connection loss, but not closing or reloading that tab; the app asks before the tab is closed. On phones a pick is limited to 1 GB. |
 | FR-UP-6 | The gallery shows queued/uploading photos immediately with progress. |
 | FR-UP-7 | An upload is rejected if it would exceed the user's storage quota, with a clear message. |
 
@@ -264,7 +264,7 @@ IDs are stable — reference them in issues, PRs and tests.
 | FR-GAL-3 | Gallery filters (album, sort order) are reflected in the URL and bookmarkable. |
 | FR-GAL-4 | Clicking a photo opens a full-screen viewer showing the preview image, with next/previous navigation. |
 | FR-GAL-7 | The viewer zooms: pinch, double tap and drag on touch; wheel or trackpad pinch, double click, drag and + / − / 0 on a computer. Zoomed past the preview's detail, the full-resolution original loads and replaces it (where the browser can show its format). |
-| FR-GAL-5 | Photos still processing show a placeholder; photos that failed processing show an error state. |
+| FR-GAL-5 | Photos still processing aren't shown in the gallery, albums or the viewer's previous/next; they appear once ready (the list is polled meanwhile). Photos that failed processing show an error state. |
 | FR-GAL-6 | Correct orientation for all photos (EXIF orientation applied). |
 
 ### 6.4 Download & delete
@@ -468,7 +468,7 @@ Access patterns:
 | `GET` | `/trash` | Own photos in the trash (with `trashedAt`, `purgeAt`), most recently deleted first, one response (FR-DEL-3) |
 | `POST` | `/trash/{photoId}/restore` | Restore a photo from the trash; returns the photo (FR-DEL-3) |
 | `DELETE` | `/trash/{photoId}` | Delete a trashed photo for good (FR-DEL-1/3) |
-| `DELETE` | `/trash` | Empty the trash (FR-DEL-3) |
+| `DELETE` | `/trash` | Empty the trash (FR-DEL-3), a few seconds at a time: `{deleted, remaining}`; the client repeats it until `remaining` is 0 |
 | `GET` | `/places` | Own places with photo counts, most photos first (FR-SRCH-2) |
 | `GET` | `/places/map` | Own ready photos with GPS as map pins: `photoId`, `lat`/`lon` rounded to 3 decimals, `takenAt`, `thumbUrl`, `placeId` (its town, or null); newest first, one response (FR-SRCH-5) |
 | `GET` | `/places/{placeId}/photos` | Photos at an own place by date taken `?sort&cursor&limit`; 404 for a place the caller doesn't have |
@@ -513,7 +513,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 
 | Aspect | Specification |
 |---|---|
-| Trigger | S3 `ObjectCreated:*` on prefix `users/` |
+| Trigger | S3 `ObjectCreated:*` on prefix `users/` → SQS queue `photo-app-{env}-thumbnails` → Lambda event source mapping with a maximum concurrency (default 5), so upload bursts (bulk upload, imports) can't use up the account's Lambda concurrency and throttle the API (B-11, planned 13.6; today S3 invokes the Lambda directly) |
 | Loop protection | Process only keys matching `users/{userId}/originals/{file}`; ignore everything else. IAM: no write access to `originals/` |
 | Libraries | Pillow, pillow-heif (HEIC/HEIF decoding) |
 | Steps | Download → decode → apply EXIF orientation → read `DateTimeOriginal`, width, height → generate sizes → strip all metadata → encode JPEG → upload → update DynamoDB item to `ready` |
@@ -525,7 +525,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 | Places | EXIF GPS → nearest town (population-weighted, ≤ 50 km) from a bundled GeoNames list (CC BY 4.0), with region and country; written in the `ready` transaction: coordinates and place on the photo, place list counts, place photo items (FR-SRCH-1) |
 | Album order | Once `ready`, the photo's album memberships get its final takenAt in `GSI1SK` (they were sorted by the upload time while pending) |
 | Replaced original | The item stores the processed bytes' ETag (`originalETag`). If the original is overwritten after processing (the upload POST is valid 15 min), the photo becomes `failed` and its thumb/preview are deleted, so recipients can't download other bytes than they were shown |
-| Errors — transient | Raise → Lambda async retries (2×) → SQS DLQ (14-day retention) |
+| Errors — transient | The record is reported as a batch item failure → the message returns after the visibility timeout (6 × the Lambda timeout) → after 3 receives the SQS DLQ (14-day retention). (Until 13.6: raise → Lambda async retries (2×) → DLQ) |
 | Packaging | Native wheels for `manylinux` aarch64 (`pip install --platform manylinux2014_aarch64 --only-binary=:all:`) or Docker build |
 | Logs | Structured JSON; 30-day retention |
 | Date fallback (imports) | Imported originals carry `x-amz-meta-taken-at` (Google's `createTime`); used when EXIF has no `DateTimeOriginal`, before the upload time (FR-IMP-4) |
@@ -632,7 +632,13 @@ TypeScript Lambda, arm64, in `apps/api` (same bundle as the API, own handler and
 ### 12.4 Upload queue
 
 - Selected files stored in IndexedDB with status (`queued`/`uploading`/`done`/`failed`).
-- Worker loop: request upload URL → POST to S3 with progress → mark done → invalidate gallery.
+- Large batches (FR-UP-5: a folder or > 500 MB picked at once, computers only): the picked files are not copied or stored; they are read when uploaded and kept only in the tab that picked it, which uploads them whether or not it holds the upload lock, and is not interrupted by another tab or the service worker (its progress counts as activity). Background Sync doesn't cover them. While one runs: "keep this tab open" note, a warning before the tab is closed or reloaded, and Screen Wake Lock where supported. A file moved or deleted since it was picked fails with a message instead of retrying.
+- Phones copy every pick (picked files can lose their read permission on Android), at most 1 GB per pick; the rest is listed as not added.
+- Interrupted large batches (FR-UP-5): a large batch is remembered (folder name, each file's name + size + last change, which are uploaded; no bytes). If its tab closes first, `/upload` says how many photos weren't uploaded; picking the same folder (or files) again uploads only the rest. Forgotten when done, on *Cancel all*, on *Dismiss* and at logout.
+- The whole queue (FR-UP-6): "312 of 1,040 uploaded", uploaded of total size, time left at the speed of the last 30 s, an overall progress bar; *Pause* / *Resume* (stored with the items, so no other tab or the service worker uploads paused files) and *Cancel all* (finished photos stay). Other tabs show "Uploading N photos in another tab" while one tab runs a large batch.
+- Storage (FR-UP-7): a pick that needs more than the space left (quota − used − already waiting) asks first ("Upload anyway" / "Cancel"). At the first upload refused for storage, every file still waiting stops as "storage full" without asking the server for each; "Retry all" sends them again after space is freed.
+- Worker loop: request upload URL → POST to S3 with progress → mark done → invalidate gallery. The gallery refresh is coalesced (at most one per 5 s while uploads finish), so a batch of thousands of files doesn't refetch the gallery after each one.
+- Large queues: the bytes are stored once (status changes rewrite only the item), the UI updates at most once per frame, the upload list is virtualized and the gallery shows at most 20 upload tiles plus "+N more".
 - Retries on `online` event and on app start; Background Sync where supported (Chromium only): the service worker uploads the stored queue once online, even with the app closed, using the stored refresh token (§11.4).
 - Concurrency: 3 parallel uploads.
 
@@ -816,7 +822,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | B-7 | Video support | Needs transcoding (e.g. MediaConvert) and different storage/egress planning | Idea |
 | B-8 | Search & metadata | Date ranges, tags (places and map done: §6.8); location off switch | Idea |
 | B-9 | On-the-fly image resizing | Only if many sizes are needed; current fixed sizes are simpler | Idea |
-| B-11 | SQS queue in front of the thumbnail Lambda | S3 → SQS → thumbnail Lambda with an event source maximum concurrency (e.g. 5), so big upload bursts can't use up the account's Lambda capacity and throttle the API. Only if raising the concurrency quota (12.3a) and reserved concurrency on the thumbnail Lambda aren't enough. Costs: new queue (+ its DLQ replaces the async-invoke DLQ), S3 notification target changes, handler reads SQS records | Idea |
+| B-11 | SQS queue in front of the thumbnail Lambda | S3 → SQS → thumbnail Lambda with an event source maximum concurrency (e.g. 5), so big upload bursts can't use up the account's Lambda capacity and throttle the API. Only if raising the concurrency quota (12.3a) and reserved concurrency on the thumbnail Lambda aren't enough. Costs: new queue (redrives to the existing DLQ), S3 notification target changes, handler reads SQS records | Planned (13.6, §10) |
 | B-10 | Import from Google Photos | Picker API, backend copy (§6.9, §10.1, §11.5); whole library / Takeout not planned | Planned (13.5) |
 | | | | |
 
@@ -843,6 +849,13 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.36 | 2026-11-01 | Continue an interrupted large batch by picking it again (13.1f, §12.4) |
+| 0.35 | 2026-11-01 | Whole-queue progress, time left, pause/resume, cancel all, other tabs' large batch (13.1d, §12.4) |
+| 0.34 | 2026-11-01 | Storage before and during a batch (13.1e): ask before queuing a pick bigger than the space left, stop all waiting files at the first refusal (§12.4) |
+| 0.33 | 2026-11-01 | FR-GAL-5: no placeholder for photos still processing; they appear once ready (user request) |
+| 0.32 | 2026-11-01 | `DELETE /trash` in steps (`{deleted, remaining}`, client repeats), since a big trash took longer than one request may run (§9) |
+| 0.31 | 2026-11-01 | Folders (13.1a): FR-UP-1. Large batches (13.1c): FR-UP-5 exception (in the picking tab only, survives connection loss, not a tab close), phone limit 1 GB per pick (§12.4) |
+| 0.30 | 2026-11-01 | SQS queue in front of the thumbnail Lambda with a maximum concurrency: §10 trigger and transient errors, B-11 planned (13.6) (§17). Upload queue at scale: coalesced gallery refresh, bytes stored once, capped/virtualized upload UI (§12.4) |
 | 0.29 | 2026-11-01 | Gallery: album picker removed, `?album=` redirects to the album page (§12.1). Shared photo locations: FR-SHR-12, `showLocations` on Album (§8.2), `PATCH /albums/{id}` and album photo lists (§9), album page (§12.1) |
 | 0.28 | 2026-10-31 | Collaborative albums: FR-SHR-11 (FR-SHR-4 note), `membersCanAdd` + `coverOwnerId` on Album, membership `ownerId` = photo owner + `albumOwnerId` (§8.2); album routes for members, `POST /albums/{albumId}/save` (§9); album page (§12.1) |
 | 0.27 | 2026-10-31 | Stale-pending sweep (6.11): Pending marker item and the "abandoned uploads" access pattern (§8.2); run by the daily purge |

@@ -49,6 +49,15 @@ logger = logging.getLogger(__name__)
 DERIVED_CACHE_CONTROL = "public, max-age=31536000, immutable"
 
 
+# Tries of a transaction cancelled only by clashes with others, and the pause before the next:
+# random up to 25 ms * 2^n, capped at 1 s (same as the API's `transactWrite`, 13.4).
+TRANSACTION_ATTEMPTS = 8
+
+
+def conflict_pause(attempt: int) -> float:
+    return random.uniform(0, min(1.0, 0.025 * 2**attempt))
+
+
 @dataclass(frozen=True)
 class Outcome:
     status: str
@@ -367,19 +376,23 @@ class Processor:
 
         Returns False if the photo is gone or no longer `pending`.
 
-        Parallel uploads all update Usage, so DynamoDB can cancel this for clashing with another
-        transaction (`TransactionConflict`): retried here at once, since Lambda's own retry comes
-        a minute later and the photo showed as "processing" that long (dev, 2026-10-28)."""
-        for attempt in range(5):
+        Parallel uploads all update Usage and the same place counts, so DynamoDB can cancel this
+        for clashing with another transaction (`TransactionConflict`, nothing applied): retried
+        here after a random, growing pause (the API's policy, `transactWrite`, 13.4), since
+        Lambda's own retry comes a minute later and the photo showed as "processing" that long
+        (dev, 2026-10-28)."""
+        for attempt in range(TRANSACTION_ATTEMPTS):
             try:
                 return self._finish_once(
                     update_expression, user_id, photo_id, size, declared, values, extra_items
                 )
             except ClientError as e:
                 codes = {r.get("Code") for r in e.response.get("CancellationReasons") or []}
-                if attempt == 4 or "TransactionConflict" not in codes:
+                if attempt == TRANSACTION_ATTEMPTS - 1 or "TransactionConflict" not in codes:
                     raise
-                time.sleep(random.uniform(0, 0.1 * 2**attempt))
+                if "ConditionalCheckFailed" in codes:
+                    raise
+                time.sleep(conflict_pause(attempt))
         raise AssertionError("unreachable")
 
     def _finish_once(

@@ -131,6 +131,15 @@ describe("background uploads (9.5)", () => {
     expect(heard).toContainEqual({ type: "changed" });
   });
 
+  it("leaves uploads the user paused alone (13.1d)", async () => {
+    await store.put(item("local-1", { paused: true }));
+    await store.put(item("local-2"));
+    await uploadInBackground(deps());
+    expect(status("local-1")).toBe("queued");
+    expect(status("local-2")).toBe("done");
+    expect(uploadUrl).toHaveBeenCalledOnce();
+  });
+
   it("does nothing without a session or without waiting uploads", async () => {
     const request = vi.spyOn(locks, "request");
     await uploadInBackground(deps({ readSession: async () => null }));

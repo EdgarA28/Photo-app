@@ -2,7 +2,22 @@ import type { Api } from "@/api/api";
 import { attemptUpload, isAbort } from "./attempt";
 import { postToS3, type PostToS3 } from "./s3Post";
 import type { UploadItem, UploadStore } from "./store";
-import { checkFile } from "./validate";
+import {
+  BATCH_SAVE_MS,
+  fileKey,
+  INTERRUPTED_AFTER_MS,
+  type BatchRecord,
+  type BatchStore,
+  type InterruptedBatch,
+} from "./batches";
+import { checkFile, type SkipCode } from "./validate";
+
+/** A picked file that wasn't added, with the reason shown and its group (13.1b). */
+export interface SkippedFile {
+  fileName: string;
+  reason: string;
+  code: SkipCode;
+}
 
 /** A queue item as the UI sees it: plus the progress of a running upload (0–1). */
 export type QueueEntry = UploadItem & { progress: number };
@@ -11,7 +26,16 @@ export interface AddResult {
   added: number;
   /** Total size of the added files. */
   addedBytes: number;
-  rejected: { fileName: string; reason: string }[];
+  rejected: SkippedFile[];
+  /** Files of an interrupted batch picked again that were uploaded already, skipped (13.1f). */
+  alreadyUploaded?: number;
+}
+
+export interface AddOptions {
+  /** Picked as a folder (13.1a): always a large batch, whatever its size. */
+  folder?: boolean;
+  /** The folder's name, to say which batch was interrupted (13.1f). */
+  label?: string | null;
 }
 
 export interface UploadQueue {
@@ -22,17 +46,26 @@ export interface UploadQueue {
   start(userId: string): Promise<void>;
   /** Stops uploading in this tab; the queue stays stored and resumes on the next start. */
   stop(): void;
-  add(files: Iterable<File>): Promise<AddResult>;
+  add(files: Iterable<File>, options?: AddOptions): Promise<AddResult>;
   /** Try a failed upload again. */
   retry(id: string): Promise<void>;
   /** Try every failed upload again (e.g. after freeing up space). */
   retryAll(): Promise<void>;
   /** Cancel and forget an upload (a running one is aborted). */
   remove(id: string): Promise<void>;
-  /** Forget the finished uploads. */
-  clearFinished(): Promise<void>;
   /** Forget everything, for every user on the device (logout, 8.13). */
   clear(): Promise<void>;
+  /** Pause every waiting or running upload (13.1d); running ones stop and start over on resume. */
+  pause(): Promise<void>;
+  resume(): Promise<void>;
+  /** Cancel and forget every upload that isn't finished (13.1d). */
+  cancelAll(): Promise<void>;
+  /** Photos of a large batch still to upload in other tabs of this app (13.1d). */
+  getOtherTabsRemaining(): number;
+  /** Large batches no tab is running any more, with what is left of them (13.1f). */
+  interruptedBatches(): Promise<InterruptedBatch[]>;
+  /** Forget an interrupted batch ("Dismiss"). */
+  dismissBatch(batchId: string): Promise<void>;
   subscribe(listener: () => void): () => void;
   /** Stable between changes (useSyncExternalStore). */
   getSnapshot(): readonly QueueEntry[];
@@ -42,8 +75,16 @@ export interface UploadQueueDeps {
   api: Pick<Api, "photos">;
   store: UploadStore;
   post?: PostToS3;
-  /** After each upload: refresh what shows it (gallery, usage). Awaited, so its tile never blinks. */
+  /**
+   * After uploads: refresh what shows them (gallery, usage). Coalesced to at most one call per
+   * `refreshEveryMs` (13.1-0); an upload stays on screen as uploading until the refresh after it
+   * is done, so its tile never blinks, without holding its upload slot meanwhile.
+   */
   onUploaded?: () => unknown;
+  /** Minimum time between two `onUploaded` calls; the first one runs at once. */
+  refreshEveryMs?: number;
+  /** Runs the change notification for the UI: once per animation frame (13.1-0). */
+  scheduleFrame?: (callback: () => void) => unknown;
   /** Web Locks: one tab uploads, the others show its progress. Absent → this tab always uploads. */
   locks?: LockManager | undefined;
   /** Tells the other tabs about changes. Absent → single tab. */
@@ -58,12 +99,41 @@ export interface UploadQueueDeps {
   registerSync?: (() => unknown) | undefined;
   /** Asks the browser not to evict the queued files (iOS evicts storage of unused sites). */
   requestPersistence?: () => unknown;
+  /** Phones copy every pick (Android can revoke access to picked files), up to `PHONE_PICK_BYTES`. */
+  isPhone?: () => boolean;
+  /** Picks above this total are large batches (13.1c); default `LARGE_BATCH_BYTES`. */
+  largeBatchBytes?: number;
+  /** Remembers large batches so they can be continued (13.1f). Absent → not remembered. */
+  batches?: BatchStore | undefined;
   now?: () => number;
   newId?: () => string;
 }
 
 /** §12.4: 3 parallel uploads. */
 export const CONCURRENCY = 3;
+/**
+ * A pick above this total (or a folder) is a large batch (13.1c, user 2026-11-01): its files are
+ * read at upload time instead of copied, and it is kept only in the tab that picked it.
+ */
+export const LARGE_BATCH_BYTES = 500 * 1024 * 1024;
+/** Phones copy every pick, so one pick is limited to this (13.1c, user 2026-11-01). */
+export const PHONE_PICK_BYTES = 1024 * 1024 * 1024;
+/** Reason for files left out of a phone pick above `PHONE_PICK_BYTES`. */
+export const PHONE_LIMIT =
+  "Not added: up to 1 GB per pick on a phone. Add the rest once these are uploaded, or use a computer.";
+
+/** Phone or tablet: Client Hints where available, else the user agent. */
+export const looksLikePhone = () =>
+  (navigator as { userAgentData?: { mobile?: boolean } }).userAgentData?.mobile ??
+  /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+/** At most one gallery + usage refresh this often while uploads finish (13.1-0). */
+export const REFRESH_EVERY_MS = 5000;
+
+const nextFrame = (callback: () => void) =>
+  typeof requestAnimationFrame === "function"
+    ? requestAnimationFrame(callback)
+    : setTimeout(callback, 16);
 export { RETRY_BASE_MS, RETRY_MAX_MS, retryDelay } from "./attempt";
 
 /** Web Lock held by whoever uploads: one tab, or the service worker (9.5). */
@@ -96,12 +166,27 @@ export const SYNC_REARM_MS = 60_000;
  */
 export const STORE_READ_TIMEOUT_MS = 2000;
 
+/** Stored and still to upload: what another tab or the service worker could take over. */
+const isStoredWork = (item: UploadItem) =>
+  !item.memoryOnly && !item.paused && (item.status === "queued" || item.status === "uploading");
+
+/** How often a tab with a large batch tells the others how far it is (13.1d). */
+export const BATCH_HEARTBEAT_MS = 2000;
+/** Another tab's batch count is forgotten after this long without news (the tab was closed). */
+export const BATCH_STALE_MS = 3 * BATCH_HEARTBEAT_MS;
+/** "changed" messages to the other tabs are gathered this long: a bulk change sends one. */
+export const CHANGED_BROADCAST_MS = 50;
+
 /**
  * Between tabs and the service worker. `working`: the service worker is uploading (its fetch
  * reports no progress), so a tab doesn't take over from it.
  */
 export type UploadMessage =
-  { type: "changed" } | { type: "progress"; id: string; progress: number } | { type: "working" };
+  | { type: "changed" }
+  | { type: "progress"; id: string; progress: number }
+  | { type: "working" }
+  /** A tab's large batch (13.1d): how many of its photos are still to upload. */
+  | { type: "batch"; tab: string; remaining: number };
 
 /**
  * The upload queue (§12.4, FR-UP-1/5/6). Files are stored in IndexedDB first, then a worker loop
@@ -119,12 +204,17 @@ export function createUploadQueue({
   store,
   post = postToS3,
   onUploaded,
+  refreshEveryMs = REFRESH_EVERY_MS,
+  scheduleFrame = nextFrame,
   locks,
   createChannel,
   isOnline = () => navigator.onLine,
   isVisible = () => document.visibilityState === "visible",
   registerSync,
   requestPersistence,
+  isPhone = looksLikePhone,
+  largeBatchBytes = LARGE_BATCH_BYTES,
+  batches,
   now = Date.now,
   newId = () => crypto.randomUUID(),
 }: UploadQueueDeps): UploadQueue {
@@ -156,32 +246,173 @@ export function createUploadQueue({
   /** Uploads running in this tab. */
   const active = new Map<string, AbortController>();
   const lastProgressBroadcast = new Map<string, number>();
+  /** This tab, for its large-batch messages (13.1d). */
+  const tabId = crypto.randomUUID();
+  /** Other tabs' large batches: photos left and when last heard. */
+  const otherTabs = new Map<string, { remaining: number; at: number }>();
+  let otherTabsRemaining = 0;
+  let batchTimer: ReturnType<typeof setInterval> | undefined;
+  let lastBatchSent = 0;
+  let changedTimer: ReturnType<typeof setTimeout> | undefined;
+  /** This tab's large batches being uploaded, as remembered (13.1f). */
+  const liveBatches = new Map<string, BatchRecord>();
+  let batchSaveTimer: ReturnType<typeof setInterval> | undefined;
 
   const listeners = new Set<() => void>();
   let snapshot: readonly QueueEntry[] = [];
+  /** The snapshot is out of date; it is rebuilt when next read. */
+  let dirty = false;
+  let notifyScheduled = false;
+  /** Entries kept while their item and progress are unchanged, so unchanged rows don't render. */
+  const entries = new WeakMap<UploadItem, QueueEntry>();
 
+  /**
+   * Something changed. The snapshot is rebuilt lazily and the UI told at most once per frame:
+   * with thousands of files, progress events would otherwise re-sort and re-render everything
+   * many times a second (13.1-0).
+   */
   function emit() {
+    dirty = true;
+    if (notifyScheduled) return;
+    notifyScheduled = true;
+    scheduleFrame(() => {
+      notifyScheduled = false;
+      for (const listener of listeners) listener();
+    });
+  }
+
+  function getSnapshot(): readonly QueueEntry[] {
+    if (!dirty) return snapshot;
+    dirty = false;
     snapshot = [...items.values()]
       .sort((a, b) => a.addedAt - b.addedAt)
-      .map((item) => ({ ...item, progress: progress.get(item.id) ?? 0 }));
-    for (const listener of listeners) listener();
+      .map((item) => {
+        const value = progress.get(item.id) ?? 0;
+        const known = entries.get(item);
+        if (known?.progress === value) return known;
+        const entry = { ...item, progress: value };
+        entries.set(item, entry);
+        return entry;
+      });
+    return snapshot;
+  }
+
+  /** When `onUploaded` last started, and the next call if one is waiting. */
+  let lastRefresh = -Infinity;
+  let nextRefresh: Promise<void> | undefined;
+
+  /**
+   * Refreshes the gallery and usage after uploads: at once if the last refresh is long enough
+   * ago, else once the interval has passed, for everything that finished meanwhile. Resolves once
+   * a refresh that started after this call has finished (13.1-0).
+   */
+  function refresh(): Promise<void> {
+    if (!onUploaded) return Promise.resolve();
+    if (nextRefresh) return nextRefresh;
+    let resolve!: () => void;
+    const pending = new Promise<void>((r) => (resolve = r));
+    nextRefresh = pending;
+    const go = () => {
+      nextRefresh = undefined;
+      lastRefresh = now();
+      Promise.resolve()
+        .then(onUploaded)
+        .catch((error: unknown) => console.warn("Refreshing after uploads failed", error))
+        .finally(resolve);
+    };
+    const wait = lastRefresh + refreshEveryMs - now();
+    if (wait > 0) setTimeout(go, wait);
+    else go();
+    return pending;
   }
 
   function broadcast(message: UploadMessage) {
     channel?.postMessage(message);
   }
 
+  /**
+   * Saves this tab's large batches (13.1f): what is uploaded so far and a sign of life. A batch
+   * with nothing left to do is forgotten; one whose tab closes stops being saved and shows as
+   * interrupted a little later.
+   */
+  async function saveBatches() {
+    if (!batches) return;
+    const unfinished = new Map<string, number>();
+    for (const item of items.values()) {
+      if (item.batchId && item.status !== "done") {
+        unfinished.set(item.batchId, (unfinished.get(item.batchId) ?? 0) + 1);
+      }
+    }
+    for (const [batchId, record] of [...liveBatches]) {
+      try {
+        if (!unfinished.get(batchId)) {
+          liveBatches.delete(batchId);
+          await batches.delete(batchId);
+        } else {
+          record.heartbeatAt = now();
+          await batches.put(record);
+        }
+      } catch (error) {
+        console.warn("Saving the upload batch failed", error);
+      }
+    }
+  }
+
+  /** Remembered batches of this user that no tab runs any more. */
+  async function interruptedRecords(): Promise<BatchRecord[]> {
+    if (!batches || !userId) return [];
+    const quietSince = now() - INTERRUPTED_AFTER_MS;
+    return (await batches.list(userId)).filter(
+      (record) => !liveBatches.has(record.batchId) && record.heartbeatAt < quietSince,
+    );
+  }
+
+  /** Tells the other tabs the stored queue changed, once for a burst of writes (pause, cancel). */
+  function announceChanged() {
+    if (changedTimer) return;
+    changedTimer = setTimeout(() => {
+      changedTimer = undefined;
+      broadcast({ type: "changed" });
+    }, CHANGED_BROADCAST_MS);
+  }
+
+  /**
+   * Every few seconds: tells the other tabs how much of this tab's large batch is left (they can't
+   * see it, 13.1c), and forgets other tabs' batches that went quiet (closed).
+   */
+  function batchHeartbeat() {
+    let remaining = 0;
+    for (const item of items.values()) {
+      if (item.memoryOnly && (item.status === "queued" || item.status === "uploading")) remaining++;
+    }
+    if (remaining || lastBatchSent) broadcast({ type: "batch", tab: tabId, remaining });
+    lastBatchSent = remaining;
+    const t = now();
+    for (const [tab, batch] of otherTabs) if (t - batch.at > BATCH_STALE_MS) otherTabs.delete(tab);
+    updateOtherTabs();
+  }
+
+  function updateOtherTabs() {
+    let total = 0;
+    for (const batch of otherTabs.values()) total += batch.remaining;
+    if (total === otherTabsRemaining) return;
+    otherTabsRemaining = total;
+    emit();
+  }
+
   async function save(item: UploadItem) {
     items.set(item.id, item);
-    unsaved.add(item.id);
     emit();
+    // A large batch lives in this tab only (13.1c).
+    if (item.memoryOnly) return;
+    unsaved.add(item.id);
     // Not waited for (see STORE_READ_TIMEOUT_MS). The stored copy only matters if the app closes
     // mid-upload; failing to write it must not stop the upload or a retry (found on Android:
     // "Failed to write blobs (InvalidBlob)").
     const written = store.put(item).then(
       () => {
         if (items.get(item.id) === item) unsaved.delete(item.id);
-        broadcast({ type: "changed" });
+        announceChanged();
       },
       (error: unknown) => console.warn("Saving the upload queue failed", error),
     );
@@ -210,7 +441,7 @@ export function createUploadQueue({
     if (!stored || forSession !== session) return null;
     const storedIds = new Set(stored.map((item) => item.id));
     for (const [id, controller] of active) {
-      if (!storedIds.has(id) && !unsaved.has(id)) controller.abort();
+      if (!storedIds.has(id) && !unsaved.has(id) && !items.get(id)?.memoryOnly) controller.abort();
     }
     const known = new Map(items);
     items.clear();
@@ -219,6 +450,8 @@ export function createUploadQueue({
       items.set(item.id, (mine && known.get(item.id)) || item);
     }
     for (const id of unsaved) if (!items.has(id) && known.has(id)) items.set(id, known.get(id)!);
+    // This tab's large batch isn't in the store: kept as it is (13.1c).
+    for (const [id, item] of known) if (item.memoryOnly) items.set(id, item);
     emit();
     // Finished by another tab: refresh what shows it here too (its gallery would stay stale; the
     // uploading tab already did its own before marking the item done).
@@ -226,13 +459,19 @@ export function createUploadQueue({
       (item) =>
         item.status === "done" && known.has(item.id) && known.get(item.id)!.status !== "done",
     );
-    if (finishedElsewhere) await onUploaded?.();
+    if (finishedElsewhere) void refresh();
     return storedIds;
   }
 
   function onMessage(event: MessageEvent<UploadMessage>) {
     const message = event.data;
-    if (message.type === "working") {
+    if (message.type === "batch") {
+      // Its own uploads also count as progress: no takeover from a tab busy with its batch.
+      if (message.remaining)
+        otherTabs.set(message.tab, { remaining: message.remaining, at: now() });
+      else otherTabs.delete(message.tab);
+      updateOtherTabs();
+    } else if (message.type === "working") {
       lastProgress = now();
     } else if (message.type === "progress") {
       lastProgress = now();
@@ -266,23 +505,24 @@ export function createUploadQueue({
     pump();
   }
 
+  /**
+   * Starts queued uploads up to `CONCURRENCY`, oldest first (the items are kept in the order
+   * added), and wakes up for the next backoff that ends. One pass, stopping once all slots are
+   * busy (a finishing upload pumps again): called per added file, so no sorting (13.1-0).
+   */
   function pump() {
     clearTimeout(timer);
-    if (!leader || !userId || !isOnline()) return;
+    if (!userId || !isOnline()) return;
     const t = now();
-    const queued = [...items.values()]
-      .filter((item) => item.status === "queued" && !active.has(item.id))
-      .sort((a, b) => a.addedAt - b.addedAt);
-    for (const item of queued) {
-      if (active.size >= CONCURRENCY) break;
+    let next = Infinity;
+    for (const item of items.values()) {
+      if (active.size >= CONCURRENCY) return;
+      if (item.status !== "queued" || item.paused || active.has(item.id)) continue;
+      // Stored items only in the tab holding the lock; this tab's large batch always here (13.1c).
+      if (!leader && !item.memoryOnly) continue;
       if (item.retryAt <= t) void run(item.id);
+      else next = Math.min(next, item.retryAt);
     }
-    // Wake up for the next backoff that ends.
-    const next = Math.min(
-      ...[...items.values()]
-        .filter((item) => item.status === "queued" && !active.has(item.id) && item.retryAt > t)
-        .map((item) => item.retryAt),
-    );
     if (Number.isFinite(next)) timer = setTimeout(pump, next - t);
   }
 
@@ -291,6 +531,8 @@ export function createUploadQueue({
     const { signal } = controller;
     active.set(id, controller);
     progress.set(id, 0);
+    /** Uploaded: the item's final state, applied once the gallery shows the photo. */
+    let finished: Partial<UploadItem> | undefined;
     try {
       await update(id, { status: "uploading", error: null, errorCode: null });
       const item = items.get(id);
@@ -327,13 +569,44 @@ export function createUploadQueue({
         },
       );
       if (!result || signal.aborted) return;
-      if (result.uploaded) await onUploaded?.();
-      await update(id, result.patch);
+      if (result.uploaded) finished = result.patch;
+      else {
+        await update(id, result.patch);
+        if (result.patch.errorCode === "QUOTA_EXCEEDED") await stopForSpace(result.patch.error);
+      }
     } finally {
       if (active.get(id) === controller) active.delete(id);
-      progress.delete(id);
+      if (finished) progress.set(id, 1);
+      else progress.delete(id);
       lastProgressBroadcast.delete(id);
+      emit();
+      // The slot is free for the next file while the gallery refresh below is waited for.
       pump();
+    }
+    if (!finished) return;
+    await refresh();
+    progress.delete(id);
+    const item = items.get(id);
+    await update(id, finished);
+    // Remembered as uploaded, so a re-pick after an interruption skips it (13.1f).
+    if (item?.batchId && item.sourceKey) liveBatches.get(item.batchId)?.done.push(item.sourceKey);
+  }
+
+  /**
+   * Storage is full (FR-UP-7, 13.1e): every file still waiting would be refused too, so they all
+   * stop here as "storage full" at once, without asking the server for each (a big folder would
+   * otherwise send thousands of requests that fail). Uploads already running finish or fail on
+   * their own; "Retry all" (8.14) sends the rest again once space is freed.
+   */
+  async function stopForSpace(error: string | null | undefined) {
+    for (const item of [...items.values()]) {
+      if (item.status !== "queued" || active.has(item.id)) continue;
+      await update(item.id, {
+        status: "failed",
+        error: error ?? null,
+        errorCode: "QUOTA_EXCEEDED",
+        retryAt: 0,
+      });
     }
   }
 
@@ -345,7 +618,7 @@ export function createUploadQueue({
     progress.delete(id);
     emit();
     store.delete(id).then(
-      () => broadcast({ type: "changed" }),
+      () => announceChanged(),
       (error: unknown) => console.warn("Removing from the upload queue failed", error),
     );
   }
@@ -388,9 +661,8 @@ export function createUploadQueue({
 
   function checkTakeover() {
     if (leader || !userId) return;
-    const waiting = [...items.values()].some(
-      (item) => item.status === "queued" || item.status === "uploading",
-    );
+    // Only stored work needs the lock; this tab uploads its large batch anyway (13.1c).
+    const waiting = [...items.values()].some(isStoredWork);
     if (!waiting) {
       waitingSince = null;
       return;
@@ -409,10 +681,14 @@ export function createUploadQueue({
     leader = false;
     releaseLock = undefined;
     clearTimeout(timer);
-    for (const controller of active.values()) controller.abort();
-    active.clear();
-    progress.clear();
-    void reload();
+    // The new holder restarts the stored uploads; this tab's large batch carries on here (13.1c).
+    for (const [id, controller] of active) {
+      if (items.get(id)?.memoryOnly) continue;
+      controller.abort();
+      active.delete(id);
+      progress.delete(id);
+    }
+    void reload().then(pump);
     requestLock(forSession);
   }
 
@@ -422,7 +698,8 @@ export function createUploadQueue({
 
   /** Asks for Background Sync if there is anything to upload (registering again is harmless). */
   function armSync() {
-    if ([...items.values()].some((item) => item.status === "queued" || item.status === "uploading"))
+    // The service worker can only upload what is stored, not a large batch (13.1c).
+    if ([...items.values()].some(isStoredWork))
       void Promise.resolve(registerSync?.()).catch(() => {});
   }
 
@@ -442,6 +719,14 @@ export function createUploadQueue({
   function stop() {
     session++;
     clearTimeout(timer);
+    clearInterval(batchTimer);
+    batchTimer = undefined;
+    clearInterval(batchSaveTimer);
+    batchSaveTimer = undefined;
+    // Not saved any more: shows as interrupted on the next start (13.1f).
+    liveBatches.clear();
+    otherTabs.clear();
+    otherTabsRemaining = 0;
     clearInterval(ticker);
     ticker = undefined;
     document.removeEventListener("visibilitychange", onVisibilityChange);
@@ -470,6 +755,8 @@ export function createUploadQueue({
     const forSession = session;
     channel = createChannel?.();
     channel?.addEventListener("message", onMessage);
+    if (channel) batchTimer = setInterval(batchHeartbeat, BATCH_HEARTBEAT_MS);
+    if (batches) batchSaveTimer = setInterval(() => void saveBatches(), BATCH_SAVE_MS);
     window.addEventListener("online", onOnline);
     await reload();
     if (forSession !== session) return;
@@ -489,31 +776,95 @@ export function createUploadQueue({
 
     stop,
 
-    async add(files) {
+    async add(files, options = {}) {
       const result: AddResult = { added: 0, addedBytes: 0, rejected: [] };
       if (!userId) return result;
       const owner = userId;
+      const accepted: { file: File; fileName: string; contentType: UploadItem["contentType"] }[] =
+        [];
       for (const file of files) {
         const check = checkFile(file);
-        if (!check.ok) {
-          result.rejected.push({ fileName: file.name || "photo", reason: check.reason });
-          continue;
+        if (check.ok) accepted.push({ file, ...check });
+        else {
+          result.rejected.push({
+            fileName: file.name || "photo",
+            reason: check.reason,
+            code: check.code,
+          });
         }
-        // Our own copy of the bytes, read now: on Android a picked file is a reference whose read
-        // permission can lapse, and every later write of it to IndexedDB then fails (InvalidBlob).
-        let copy: Blob;
+      }
+      const phone = isPhone();
+      const total = accepted.reduce((sum, { file }) => sum + file.size, 0);
+      // 13.1c: a folder or a big pick on a computer is read from the disk at upload time and kept
+      // in this tab only; phones copy every pick (below), so one pick is capped there.
+      const large = !phone && (options.folder === true || total > largeBatchBytes);
+      let picked = 0;
+
+      // 13.1f: a large batch is remembered; picked again after an interruption, the files already
+      // uploaded are skipped and the same batch goes on.
+      let batch: BatchRecord | undefined;
+      let todo = accepted;
+      if (large && batches) {
+        let interrupted: BatchRecord[] = [];
         try {
-          copy = new Blob([await file.arrayBuffer()], { type: file.type });
-        } catch {
-          result.rejected.push({ fileName: check.fileName, reason: UNREADABLE_FILE });
+          interrupted = await interruptedRecords();
+        } catch (error) {
+          console.warn("Reading the remembered upload batches failed", error);
+        }
+        const keys = accepted.map(({ file }) => fileKey(file));
+        const pickedKeys = new Set(keys);
+        const overlap = (record: BatchRecord) =>
+          record.keys.filter((key) => pickedKeys.has(key)).length;
+        batch = interrupted
+          .filter((record) => overlap(record) > 0)
+          .sort((a, b) => overlap(b) - overlap(a))[0];
+        const uploaded = new Set(interrupted.flatMap((record) => record.done));
+        todo = accepted.filter(({ file }) => !uploaded.has(fileKey(file)));
+        if (accepted.length > todo.length) result.alreadyUploaded = accepted.length - todo.length;
+        batch = batch
+          ? { ...batch, keys: [...new Set([...batch.keys, ...keys])] }
+          : {
+              batchId: crypto.randomUUID(),
+              userId: owner,
+              label: options.label ?? null,
+              createdAt: now(),
+              heartbeatAt: now(),
+              keys,
+              done: [],
+            };
+        batch.heartbeatAt = now();
+        if (todo.length) {
+          liveBatches.set(batch.batchId, batch);
+          await batches.put(batch).catch((error: unknown) => {
+            console.warn("Saving the upload batch failed", error);
+          });
+        }
+      }
+
+      for (const { file, fileName, contentType } of todo) {
+        if (phone && picked + file.size > PHONE_PICK_BYTES) {
+          result.rejected.push({ fileName, reason: PHONE_LIMIT, code: "phoneLimit" });
           continue;
         }
+        let bytes: Blob = file;
+        if (!large) {
+          // Our own copy of the bytes, read now: on Android a picked file is a reference whose
+          // read permission can lapse, and every later write of it to IndexedDB then fails
+          // (InvalidBlob).
+          try {
+            bytes = new Blob([await file.arrayBuffer()], { type: file.type });
+          } catch {
+            result.rejected.push({ fileName, reason: UNREADABLE_FILE, code: "unreadable" });
+            continue;
+          }
+        }
+        picked += file.size;
         await save({
           id: newId(),
           userId: owner,
-          file: copy,
-          fileName: check.fileName,
-          contentType: check.contentType,
+          file: bytes,
+          fileName,
+          contentType,
           sizeBytes: file.size,
           photoId: null,
           status: "queued",
@@ -522,13 +873,15 @@ export function createUploadQueue({
           error: null,
           errorCode: null,
           addedAt: now(),
+          ...(large && { memoryOnly: true }),
+          ...(batch && { batchId: batch.batchId, sourceKey: fileKey(file) }),
         });
         result.added++;
         result.addedBytes += file.size;
         // Upload the first ones while the rest are still being read.
         pump();
       }
-      if (result.added && !persistenceRequested) {
+      if (result.added && !large && !persistenceRequested) {
         persistenceRequested = true;
         void Promise.resolve(requestPersistence?.()).catch(() => {});
       }
@@ -557,16 +910,62 @@ export function createUploadQueue({
 
     remove: forget,
 
-    async clearFinished() {
-      for (const item of [...items.values()]) if (item.status === "done") await forget(item.id);
+    async pause() {
+      const targets = [...items.values()].filter(
+        (item) => !item.paused && (item.status === "queued" || item.status === "uploading"),
+      );
+      // All marked first (in memory at once), so a stopping upload's freed slot starts nothing.
+      const writes = targets.map((item) =>
+        update(item.id, { status: "queued", paused: true, retryAt: 0 }),
+      );
+      // Running uploads stop; they start over (re-signing the same photo, 5.6a) on resume.
+      for (const item of targets) {
+        active.get(item.id)?.abort();
+        active.delete(item.id);
+        progress.delete(item.id);
+      }
+      await Promise.all(writes);
+      pump();
     },
+
+    async resume() {
+      for (const item of [...items.values()]) {
+        if (item.paused) await update(item.id, { paused: false, retryAt: 0 });
+      }
+      pump();
+    },
+
+    async cancelAll() {
+      for (const item of [...items.values()]) if (item.status !== "done") await forget(item.id);
+      // Cancelled on purpose: nothing to continue later (13.1f).
+      for (const batchId of [...liveBatches.keys()]) {
+        liveBatches.delete(batchId);
+        await batches?.delete(batchId).catch(() => {});
+      }
+    },
+
+    async interruptedBatches() {
+      return (await interruptedRecords()).map((record) => ({
+        batchId: record.batchId,
+        label: record.label,
+        total: record.keys.length,
+        remaining: record.keys.length - new Set(record.done).size,
+      }));
+    },
+
+    async dismissBatch(batchId) {
+      await batches?.delete(batchId);
+    },
+
+    getOtherTabsRemaining: () => otherTabsRemaining,
 
     async clear() {
       for (const controller of active.values()) controller.abort();
       items.clear();
       progress.clear();
       emit();
-      await store.clear();
+      liveBatches.clear();
+      await Promise.all([store.clear(), batches?.clear()]);
       broadcast({ type: "changed" });
     },
 
@@ -575,6 +974,6 @@ export function createUploadQueue({
       return () => listeners.delete(listener);
     },
 
-    getSnapshot: () => snapshot,
+    getSnapshot,
   };
 }

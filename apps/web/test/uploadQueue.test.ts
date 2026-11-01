@@ -4,6 +4,7 @@ import type { Api } from "../src/api/api";
 import { ApiRequestError } from "../src/api/errors";
 import {
   CONCURRENCY,
+  PHONE_LIMIT,
   RETRY_BASE_MS,
   RETRY_MAX_MS,
   retryDelay,
@@ -121,6 +122,7 @@ describe("upload queue (§12.4, FR-UP-1/5/6)", () => {
     expect(result.added).toBe(1);
     expect(result.rejected.map((r) => r.fileName)).toEqual(["notes.pdf", "huge.jpg", "empty.png"]);
     expect(result.rejected[1]!.reason).toBe("Larger than 50 MB");
+    expect(result.rejected.map((r) => r.code)).toEqual(["type", "size", "empty"]);
     expect([...store.items.values()].map((i) => i.contentType)).toEqual(["image/heic"]);
   });
 
@@ -400,6 +402,292 @@ describe("upload queue (§12.4, FR-UP-1/5/6)", () => {
   });
 });
 
+describe("upload queue at scale (13.1-0)", () => {
+  it("refreshes the gallery at once, then at most once per interval, without holding a slot", async () => {
+    const { api } = uploadApi();
+    const { post, calls } = controlledPost();
+    const onUploaded = vi.fn();
+    const { queue } = testUploadQueue(api, { post, onUploaded, refreshEveryMs: 300 });
+    await queue.start(USER);
+    await queue.add([1, 2, 3, 4, 5, 6].map((n) => testFile(`IMG_${n}.jpg`)));
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
+
+    calls[0]!.resolve();
+    await vi.waitFor(() => expect(statuses(queue)[0]).toBe("done"));
+    expect(onUploaded).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(calls).toHaveLength(4));
+
+    calls[1]!.resolve();
+    calls[2]!.resolve();
+    // Their slots go to the next files at once…
+    await vi.waitFor(() => expect(calls).toHaveLength(6));
+    // …while they stay on screen as uploaded-but-not-yet-shown until the next refresh.
+    expect(queue.getSnapshot().slice(1, 3)).toMatchObject([
+      { status: "uploading", progress: 1 },
+      { status: "uploading", progress: 1 },
+    ]);
+    expect(onUploaded).toHaveBeenCalledOnce();
+
+    await vi.waitFor(() => expect(statuses(queue).slice(0, 3)).toEqual(["done", "done", "done"]));
+    expect(onUploaded).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps going when the refresh fails", async () => {
+    const { api } = uploadApi();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { queue } = testUploadQueue(api, {
+      onUploaded: () => Promise.reject(new Error("offline")),
+    });
+    await queue.start(USER);
+    await queue.add([testFile("IMG_1.jpg")]);
+    await vi.waitFor(() => expect(statuses(queue)).toEqual(["done"]));
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("tells the UI once per frame; the snapshot is always current and keeps unchanged entries", async () => {
+    const { api } = uploadApi();
+    const { post, calls } = controlledPost();
+    const frames: (() => void)[] = [];
+    const { queue } = testUploadQueue(api, { post, scheduleFrame: (cb) => frames.push(cb) });
+    const listener = vi.fn();
+    queue.subscribe(listener);
+    await queue.start(USER);
+    await queue.add([1, 2].map((n) => testFile(`IMG_${n}.jpg`)));
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    frames.splice(0).forEach((frame) => frame());
+
+    const before = queue.getSnapshot();
+    for (let i = 1; i <= 10; i++) calls[0]!.progress(i / 10);
+    expect(frames).toHaveLength(1);
+    expect(listener).toHaveBeenCalledTimes(1);
+    const after = queue.getSnapshot();
+    expect(after[0]!.progress).toBe(1);
+    // Stable between changes (useSyncExternalStore), and the other row didn't change.
+    expect(queue.getSnapshot()).toBe(after);
+    expect(after[1]).toBe(before[1]);
+
+    frames.splice(0).forEach((frame) => frame());
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it("handles 5,000 files: 3 at a time, in the order added", async () => {
+    const { api } = uploadApi();
+    const { post, calls } = controlledPost();
+    const frames: (() => void)[] = [];
+    const { queue } = testUploadQueue(api, {
+      post,
+      refreshEveryMs: 0,
+      scheduleFrame: (cb) => frames.push(cb),
+    });
+    await queue.start(USER);
+    const files = Array.from({ length: 5000 }, (_, i) => testFile(`IMG_${i}.jpg`, 10));
+
+    const started = performance.now();
+    expect((await queue.add(files)).added).toBe(5000);
+    // Linear work per file (it was quadratic): generous, to stay stable on slow CI machines.
+    expect(performance.now() - started).toBeLessThan(5000);
+    expect(queue.getSnapshot()).toHaveLength(5000);
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
+    // One notification for the whole batch, not one per file.
+    expect(frames.length).toBeLessThanOrEqual(1);
+
+    for (let i = 0; i < 5; i++) {
+      calls[i]!.resolve();
+      await vi.waitFor(() => expect(calls).toHaveLength(4 + i));
+    }
+    expect(calls.map((call) => (call.file as File).name ?? "")).toHaveLength(8);
+    const uploading = queue
+      .getSnapshot()
+      .filter((entry) => entry.status === "uploading" && entry.progress < 1)
+      .map((entry) => entry.fileName);
+    expect(uploading).toEqual(["IMG_5.jpg", "IMG_6.jpg", "IMG_7.jpg"]);
+  });
+});
+
+describe("large batches stay in the tab that picked them (13.1c)", () => {
+  /** Two 1,000-byte files are a large batch with this threshold. */
+  const LARGE = 1500;
+
+  it("reads a large pick from the disk at upload time and stores nothing", async () => {
+    const { api } = uploadApi();
+    const { post, calls } = controlledPost();
+    const requestPersistence = vi.fn();
+    const { queue, store } = testUploadQueue(api, {
+      post,
+      largeBatchBytes: LARGE,
+      requestPersistence,
+    });
+    await queue.start(USER);
+    const files = [testFile("IMG_1.jpg"), testFile("IMG_2.jpg")];
+    const read = vi.spyOn(files[0]!, "arrayBuffer");
+
+    expect(await queue.add(files)).toMatchObject({ added: 2, addedBytes: 2000 });
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    // The picked files themselves, not copies; nothing in IndexedDB.
+    expect(calls[0]!.file).toBe(files[0]);
+    expect(read).not.toHaveBeenCalled();
+    expect(store.items.size).toBe(0);
+    expect(queue.getSnapshot().every((entry) => entry.memoryOnly)).toBe(true);
+    expect(requestPersistence).not.toHaveBeenCalled();
+
+    calls[0]!.resolve();
+    calls[1]!.resolve();
+    await vi.waitFor(() => expect(statuses(queue)).toEqual(["done", "done"]));
+    expect(store.items.size).toBe(0);
+  });
+
+  it("treats a folder as a large batch whatever its size", async () => {
+    const { api } = uploadApi();
+    const { queue, store } = testUploadQueue(api, { post: () => new Promise(() => {}) });
+    await queue.start(USER);
+    await queue.add([testFile("IMG_1.jpg")], { folder: true });
+    expect(queue.getSnapshot()[0]!.memoryOnly).toBe(true);
+    expect(store.items.size).toBe(0);
+  });
+
+  it("keeps small picks stored and copied, as before", async () => {
+    const { api } = uploadApi();
+    const { queue, store } = testUploadQueue(api, {
+      post: () => new Promise(() => {}),
+      largeBatchBytes: LARGE,
+    });
+    await queue.start(USER);
+    await queue.add([testFile("IMG_1.jpg")]);
+    expect(queue.getSnapshot()[0]!.memoryOnly).toBeUndefined();
+    await vi.waitFor(() => expect(store.items.size).toBe(1));
+  });
+
+  it("fails a file that was moved or deleted since it was picked, without retrying", async () => {
+    const { api, uploadUrl } = uploadApi();
+    const { queue } = testUploadQueue(api, { largeBatchBytes: LARGE });
+    await queue.start(USER);
+    const gone = testFile("IMG_1.jpg");
+    vi.spyOn(gone, "slice").mockReturnValue({
+      arrayBuffer: () => Promise.reject(new DOMException("gone", "NotFoundError")),
+    } as unknown as Blob);
+
+    await queue.add([gone, testFile("IMG_2.jpg")]);
+    await vi.waitFor(() => expect(statuses(queue)).toEqual(["failed", "done"]));
+    expect(queue.getSnapshot()[0]).toMatchObject({ errorCode: "FILE_MISSING" });
+    expect(uploadUrl).toHaveBeenCalledOnce();
+  });
+
+  it("phones copy every pick, up to 1 GB, and say why the rest wasn't added", async () => {
+    const { api } = uploadApi();
+    const { queue, store } = testUploadQueue(api, {
+      post: () => new Promise(() => {}),
+      isPhone: () => true,
+      largeBatchBytes: LARGE,
+    });
+    await queue.start(USER);
+    // 25 photos of 45 MB = 1,125 MB (sizes faked; the bytes are a few).
+    const files = Array.from({ length: 25 }, (_, i) => {
+      const file = testFile(`IMG_${i}.jpg`, 10);
+      Object.defineProperty(file, "size", { value: 45 * 1024 * 1024 });
+      return file;
+    });
+
+    const result = await queue.add(files);
+    expect(result.added).toBe(22);
+    expect(result.rejected).toHaveLength(3);
+    expect(result.rejected[0]).toEqual({
+      fileName: "IMG_22.jpg",
+      reason: PHONE_LIMIT,
+      code: "phoneLimit",
+    });
+    // Copied and stored as before, not a large batch.
+    expect(queue.getSnapshot().some((entry) => entry.memoryOnly)).toBe(false);
+    await vi.waitFor(() => expect(store.items.size).toBe(22));
+  });
+});
+
+describe("the whole queue: pause, resume, cancel (13.1d)", () => {
+  it("pauses everything: running uploads stop, nothing starts, the pause is stored", async () => {
+    const { api, uploadUrl } = uploadApi();
+    const { post, calls } = controlledPost();
+    const { queue, store } = testUploadQueue(api, { post });
+    await queue.start(USER);
+    await queue.add([1, 2, 3, 4].map((n) => testFile(`IMG_${n}.jpg`)));
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
+
+    await queue.pause();
+    expect(calls.every((call) => call.signal?.aborted)).toBe(true);
+    expect(queue.getSnapshot().map((e) => [e.status, e.paused])).toEqual([
+      ["queued", true],
+      ["queued", true],
+      ["queued", true],
+      ["queued", true],
+    ]);
+    // Stored, so another tab or the service worker leaves them alone too.
+    await vi.waitFor(() => expect([...store.items.values()].every((i) => i.paused)).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(uploadUrl).toHaveBeenCalledTimes(3);
+
+    await queue.resume();
+    // They start over, re-signing the same photos (5.6a).
+    await vi.waitFor(() => expect(calls).toHaveLength(6));
+    expect(uploadUrl).toHaveBeenLastCalledWith(expect.objectContaining({ photoId: testId(3) }));
+    expect(queue.getSnapshot().some((e) => e.paused)).toBe(false);
+  });
+
+  it("cancels every unfinished upload, keeping the finished ones", async () => {
+    const { api } = uploadApi();
+    const { post, calls } = controlledPost();
+    const { queue, store } = testUploadQueue(api, { post });
+    await queue.start(USER);
+    await queue.add([1, 2, 3, 4].map((n) => testFile(`IMG_${n}.jpg`)));
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
+    calls[0]!.resolve();
+    await vi.waitFor(() => expect(statuses(queue)[0]).toBe("done"));
+
+    await queue.cancelAll();
+    expect(statuses(queue)).toEqual(["done"]);
+    expect(calls.slice(1, 3).every((call) => call.signal?.aborted)).toBe(true);
+    await vi.waitFor(() => expect(store.items.size).toBe(1));
+  });
+});
+
+describe("storage full (13.1e, FR-UP-7)", () => {
+  const full = () => new ApiRequestError("QUOTA_EXCEEDED", "Not enough storage", 413);
+
+  it("stops every waiting file at the first refusal, without asking the server for each", async () => {
+    let refuse = false;
+    const { api, uploadUrl } = uploadApi(() => (refuse ? full() : undefined));
+    const { post, calls } = controlledPost();
+    const { queue } = testUploadQueue(api, { post });
+    await queue.start(USER);
+    await queue.add([1, 2, 3, 4, 5, 6].map((n) => testFile(`IMG_${n}.jpg`)));
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
+
+    // Storage runs out: the next file is refused…
+    refuse = true;
+    calls[0]!.resolve();
+    await vi.waitFor(() => expect(statuses(queue)[3]).toBe("failed"));
+    // …and the ones behind it stop as well, untried; running uploads carry on.
+    expect(statuses(queue)).toEqual([
+      "done",
+      "uploading",
+      "uploading",
+      "failed",
+      "failed",
+      "failed",
+    ]);
+    expect(uploadUrl).toHaveBeenCalledTimes(4);
+    expect(
+      queue
+        .getSnapshot()
+        .slice(3)
+        .map((e) => e.errorCode),
+    ).toEqual(["QUOTA_EXCEEDED", "QUOTA_EXCEEDED", "QUOTA_EXCEEDED"]);
+
+    // Space freed: Retry all sends them again.
+    refuse = false;
+    await queue.retryAll();
+    await vi.waitFor(() => expect(uploadUrl).toHaveBeenCalledTimes(5));
+  });
+});
+
 describe("upload queue: files from the device (Android, 2026-10-26)", () => {
   it("keeps its own copy of the bytes, read when the file is added", async () => {
     const store = new MemoryUploadStore();
@@ -425,7 +713,9 @@ describe("upload queue: files from the device (Android, 2026-10-26)", () => {
     const result = await queue.add([unreadable, testFile("IMG_2.jpg")]);
 
     expect(result.added).toBe(1);
-    expect(result.rejected).toEqual([{ fileName: "cloud.jpg", reason: UNREADABLE_FILE }]);
+    expect(result.rejected).toEqual([
+      { fileName: "cloud.jpg", reason: UNREADABLE_FILE, code: "unreadable" },
+    ]);
   });
 
   it("keeps uploading when saving the queue to IndexedDB fails", async () => {

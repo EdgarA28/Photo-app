@@ -1,6 +1,16 @@
 import type { Usage } from "@photo-app/shared";
 import { Link } from "@tanstack/react-router";
-import { CircleAlert, HardDrive, RotateCw, X } from "lucide-react";
+import { HardDrive, RotateCw } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/format";
 
@@ -48,31 +58,37 @@ export function StorageFullBanner({
 }
 
 /**
- * The picked files are larger than the space left (FR-UP-7). A warning, not a refusal: the server
- * has the final say, and photos may be deleted while the uploads wait.
+ * The picked files need more space than is left (FR-UP-7, 13.1e): asked before anything is
+ * queued, so a big folder doesn't run for hours only to stop at "storage full". "Upload anyway"
+ * still queues them all: the server has the final say, and photos may be deleted meanwhile; the
+ * queue stops the rest at the first refusal.
  */
-export function SpaceWarning({
+export function SpaceConfirm({
   needed,
   left,
-  onDismiss,
+  onUpload,
+  onCancel,
 }: {
   needed: number;
   left: number;
-  onDismiss: () => void;
+  onUpload: () => void;
+  onCancel: () => void;
 }) {
   return (
-    <div
-      role="alert"
-      className="flex gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm"
-    >
-      <CircleAlert aria-hidden className="mt-0.5 size-4 shrink-0 text-amber-600" />
-      <p className="min-w-0 flex-1">
-        These photos need {formatBytes(needed)}, but only {formatBytes(left)} is left. Some won't
-        upload until you free up space.
-      </p>
-      <Button variant="ghost" size="icon-xs" aria-label="Dismiss" onClick={onDismiss}>
-        <X aria-hidden />
-      </Button>
-    </div>
+    <AlertDialog open onOpenChange={(open) => !open && onCancel()}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Not enough storage for all of these</AlertDialogTitle>
+          <AlertDialogDescription>
+            These photos need {formatBytes(needed)}, but only {formatBytes(left)} is left. Uploads
+            stop once your storage is full; free up space first, or upload anyway.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={onUpload}>Upload anyway</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

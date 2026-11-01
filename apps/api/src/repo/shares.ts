@@ -1,9 +1,4 @@
-import {
-  DeleteCommand,
-  GetCommand,
-  TransactWriteCommand,
-  UpdateCommand,
-} from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import type { Page, ShareStatus } from "@photo-app/shared";
 import {
   conditionFailedAt,
@@ -12,6 +7,7 @@ import {
   queryPage,
   stripKeys,
   type Db,
+  transactWrite,
 } from "./db";
 import {
   ALBUM_SK_PREFIX,
@@ -75,26 +71,24 @@ export function sharesRepo(db: Db) {
     async create(share: ShareRecord): Promise<CreateShareResult> {
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          await db.client.send(
-            new TransactWriteCommand({
-              TransactItems: [
-                {
-                  ConditionCheck: {
-                    TableName: db.table,
-                    Key: albumKey(share.ownerId, share.albumId),
-                    ConditionExpression: "attribute_exists(PK)",
-                  },
+          await transactWrite(db, {
+            TransactItems: [
+              {
+                ConditionCheck: {
+                  TableName: db.table,
+                  Key: albumKey(share.ownerId, share.albumId),
+                  ConditionExpression: "attribute_exists(PK)",
                 },
-                {
-                  Put: {
-                    TableName: db.table,
-                    Item: shareItem(share),
-                    ConditionExpression: "attribute_not_exists(PK)",
-                  },
+              },
+              {
+                Put: {
+                  TableName: db.table,
+                  Item: shareItem(share),
+                  ConditionExpression: "attribute_not_exists(PK)",
                 },
-              ],
-            }),
-          );
+              },
+            ],
+          });
           return { created: true, share };
         } catch (err) {
           if (conditionFailedAt(err, 0)) return "album-not-found";

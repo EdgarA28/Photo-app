@@ -25,7 +25,11 @@ function setup(photos = [trashed(0, 1), trashed(1, 14.5), trashed(2, 3)]) {
   const responses: Record<string, unknown> = {
     ...defaultResponses,
     "GET /trash": () => ({ items }),
-    "DELETE /trash": () => void (items = []),
+    "DELETE /trash": () => {
+      const deleted = items.length;
+      items = [];
+      return { deleted, remaining: 0 };
+    },
   };
   for (const photo of photos) {
     responses[`POST /trash/${photo.photoId}/restore`] = () => {
@@ -131,5 +135,81 @@ describe("daysLeft", () => {
     expect(daysLeft(at("2026-11-12T12:00:00.000Z"), now)).toBe(15);
     expect(daysLeft(at("2026-10-29T11:00:00.000Z"), now)).toBe(1);
     expect(daysLeft(at("2026-10-28T11:00:00.000Z"), now)).toBe(1);
+  });
+
+  it("empties a big trash in steps, showing how far it got", async () => {
+    let items = [trashed(0, 1), trashed(1, 2), trashed(2, 3), trashed(3, 4), trashed(4, 5)];
+    let release!: () => void;
+    const { api, request } = fakeApi({
+      ...defaultResponses,
+      "GET /trash": () => ({ items }),
+      // Two per request; the second request waits, so the progress can be seen.
+      "DELETE /trash": async () => {
+        if (items.length < 5) await new Promise<void>((resolve) => (release = resolve));
+        const deleted = Math.min(2, items.length);
+        items = items.slice(deleted);
+        return { deleted, remaining: items.length };
+      },
+    } as Parameters<typeof fakeApi>[0]);
+    await renderAt("/trash", { api });
+    fireEvent.click(await screen.findByRole("button", { name: "Empty trash" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Empty the trash?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Empty trash" }));
+
+    expect(await within(dialog).findByText("Deleting… 2 of 5")).toBeTruthy();
+    release();
+    await waitFor(() => expect(within(dialog).queryByText("Deleting… 4 of 5")).toBeTruthy());
+    release();
+    expect(
+      await screen.findByText("The trash is empty.", { selector: "p:not([role])" }),
+    ).toBeTruthy();
+    expect(calls(request, "DELETE")).toEqual(["/trash", "/trash", "/trash"]);
+  });
+
+  it("gives up when the trash stops getting smaller", async () => {
+    const { api, request } = fakeApi({
+      ...defaultResponses,
+      "GET /trash": { items: [trashed(0, 1)] },
+      "DELETE /trash": { deleted: 0, remaining: 1 },
+    } as Parameters<typeof fakeApi>[0]);
+    await renderAt("/trash", { api });
+    fireEvent.click(await screen.findByRole("button", { name: "Empty trash" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Empty the trash?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Empty trash" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveProperty(
+      "textContent",
+      "The trash couldn't be emptied. Try again.",
+    );
+    expect(calls(request, "DELETE")).toHaveLength(3);
+  });
+
+  it("carries on by itself after a temporary server error mid-way", async () => {
+    let items = [trashed(0, 1), trashed(1, 2), trashed(2, 3)];
+    let calls = 0;
+    const { api } = fakeApi({
+      ...defaultResponses,
+      "GET /trash": () => ({ items }),
+      "DELETE /trash": () => {
+        calls++;
+        if (calls === 2) return new ApiRequestError("INTERNAL_ERROR", "Something went wrong", 500);
+        const deleted = Math.min(2, items.length);
+        items = items.slice(deleted);
+        return { deleted, remaining: items.length };
+      },
+    } as Parameters<typeof fakeApi>[0]);
+    await renderAt("/trash", { api });
+    fireEvent.click(await screen.findByRole("button", { name: "Empty trash" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Empty the trash?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Empty trash" }));
+
+    expect(
+      await screen.findByText(
+        "The trash is empty.",
+        { selector: "p:not([role])" },
+        { timeout: 3000 },
+      ),
+    ).toBeTruthy();
+    expect(calls).toBe(3);
   });
 });
