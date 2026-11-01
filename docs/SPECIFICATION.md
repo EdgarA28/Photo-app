@@ -602,7 +602,7 @@ TypeScript Lambda, arm64, in `apps/api` (same bundle as the API, own handler and
 | `/login` | Login page (Google + email) |
 | `/auth/callback` | OAuth code exchange |
 | `/_authenticated` (layout) | `beforeLoad` guard → redirect to `/login` if no session |
-| `/gallery` | Main gallery; search params `album`, `place` (not both), `sort` (Zod-validated); place search box at the top (FR-SRCH-2) |
+| `/gallery` | Main gallery; search params `place`, `sort` (Zod-validated); place search box at the top (FR-SRCH-2). No album picker (albums open from `/albums`); an old `?album=` link redirects to `/albums/$albumId` |
 | `/photos/$photoId` | Full-screen viewer |
 | `/albums` | Invitations (accept / decline) + my albums + shared with me |
 | `/albums/$albumId` | Album view. Owner: "Members can add photos" (FR-SHR-11) and "Share photo locations" (FR-SHR-12) switches in the share dialog; members see "Locations are shown in this album". Member of a collaborative album: Add photos (picked in the gallery), remove own photos; "Added by @name" in the viewer |
@@ -843,7 +843,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
-| 0.29 | 2026-11-01 | Shared photo locations: FR-SHR-12, `showLocations` on Album (§8.2), `PATCH /albums/{id}` and album photo lists (§9), album page (§12.1) |
+| 0.29 | 2026-11-01 | Gallery: album picker removed, `?album=` redirects to the album page (§12.1). Shared photo locations: FR-SHR-12, `showLocations` on Album (§8.2), `PATCH /albums/{id}` and album photo lists (§9), album page (§12.1) |
 | 0.28 | 2026-10-31 | Collaborative albums: FR-SHR-11 (FR-SHR-4 note), `membersCanAdd` + `coverOwnerId` on Album, membership `ownerId` = photo owner + `albumOwnerId` (§8.2); album routes for members, `POST /albums/{albumId}/save` (§9); album page (§12.1) |
 | 0.27 | 2026-10-31 | Stale-pending sweep (6.11): Pending marker item and the "abandoned uploads" access pattern (§8.2); run by the daily purge |
 | 0.26 | 2026-10-31 | Save shared photos to my gallery: FR-SHR-10 (FR-SHR-4 note), `POST /shared-albums/{albumId}/save` (§9), permanent upload claim `shared-{photoId}` (§8.2) |

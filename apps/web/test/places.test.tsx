@@ -140,12 +140,9 @@ describe("searching the gallery by place (13.2f)", () => {
     expect(router.state.location.search).not.toHaveProperty("place");
   });
 
-  it("picking a place leaves an album filter, and the place list opens the viewer inside it", async () => {
-    const album = testId(900);
-    const { api } = setup({
-      [`GET /albums/${album}/photos`]: { items: [], nextCursor: null },
-    });
-    const { router } = await renderAt(`/gallery?album=${album}`, { api });
+  it("picking a place filters the gallery, and the place list opens the viewer inside it", async () => {
+    const { api } = setup();
+    const { router } = await renderAt("/gallery", { api });
     const box = await screen.findByRole("combobox", { name: "Search places" });
     fireEvent.change(box, { target: { value: "berlin" } });
     fireEvent.click((await screen.findAllByRole("option"))[0]!);

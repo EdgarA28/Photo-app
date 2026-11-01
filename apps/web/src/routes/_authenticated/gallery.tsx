@@ -1,6 +1,12 @@
 import { photoSortSchema, TRASH_RETENTION_DAYS, type PhotoSort } from "@photo-app/shared";
 import { useInfiniteQuery, useQuery, useSuspenseInfiniteQuery } from "@tanstack/react-query";
-import { createFileRoute, Link, useRouter, type ErrorComponentProps } from "@tanstack/react-router";
+import {
+  createFileRoute,
+  Link,
+  redirect,
+  useRouter,
+  type ErrorComponentProps,
+} from "@tanstack/react-router";
 import { Link2, MapPin, X } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { AddToAlbumDialog } from "@/albums/AddToAlbumDialog";
@@ -39,6 +45,13 @@ import { useUploads } from "@/upload/useUploads";
 
 export const Route = createFileRoute("/_authenticated/gallery")({
   validateSearch: gallerySearchSchema,
+  // The gallery has no album picker any more (user request 2026-11-01): an old link or bookmark
+  // to `/gallery?album=` opens that album's own page, which shows the same photos.
+  beforeLoad: ({ search: { album, addTo } }) => {
+    if (album && !addTo) {
+      throw redirect({ to: "/albums/$albumId", params: { albumId: album }, replace: true });
+    }
+  },
   loaderDeps: ({ search: { album, place, sort } }) => ({ album, place, sort }),
   // `staleTime: "static"` = use cached pages as they are (the replacement for the deprecated
   // ensureInfiniteQueryData); the component's query refetches stale data in the background.
@@ -87,9 +100,8 @@ function Gallery() {
                 })
               }
             />
-            {/* One row on a phone too: the album picker gives up width (FR-GAL-7). */}
             <div className="flex w-full gap-2 md:w-auto">
-              <GalleryFilters album={album} sort={sort} />
+              <GalleryFilters sort={sort} />
               {(photos.length > 0 || selection.active) && (
                 <SelectButton
                   active={selection.active}
@@ -387,8 +399,6 @@ function AddToBar({ albumId, photoIds }: { albumId: string; photoIds: string[] }
   );
 }
 
-const ALL_PHOTOS = "all";
-
 const SORT_LABELS: Record<PhotoSort, string> = {
   "taken-desc": "Newest first",
   "taken-asc": "Oldest first",
@@ -400,42 +410,11 @@ const SHORT_SORT_LABELS: Record<PhotoSort, string> = {
   "taken-asc": "Oldest",
 };
 
-function GalleryFilters({ album, sort }: { album: string | undefined; sort: PhotoSort }) {
-  const { api } = Route.useRouteContext();
+/** Sort order. Albums open from the Albums page (no album picker here); places from the search. */
+function GalleryFilters({ sort }: { sort: PhotoSort }) {
   const navigate = Route.useNavigate();
-  // Not in the loader: the photos shouldn't wait for (or fail with) the album list.
-  const { data: albums } = useQuery(albumsQuery(api));
-  const items = albums?.items ?? [];
-  // e.g. an album shared with me, which isn't in my own list.
-  const unlisted = album !== undefined && !items.some((a) => a.albumId === album);
-
   return (
     <div className="flex min-w-0 flex-1 gap-2 md:flex-none">
-      <Select
-        value={album ?? ALL_PHOTOS}
-        onValueChange={(value) =>
-          void navigate({
-            search: (prev) => ({
-              ...prev,
-              album: value === ALL_PHOTOS ? undefined : value,
-              place: undefined,
-            }),
-          })
-        }
-      >
-        <SelectTrigger aria-label="Album" className="min-w-0 flex-1 md:w-44 md:flex-none">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={ALL_PHOTOS}>All photos</SelectItem>
-          {items.map((a) => (
-            <SelectItem key={a.albumId} value={a.albumId}>
-              {a.name}
-            </SelectItem>
-          ))}
-          {unlisted && <SelectItem value={album}>Selected album</SelectItem>}
-        </SelectContent>
-      </Select>
       <Select
         value={sort}
         onValueChange={(value) =>

@@ -6,7 +6,7 @@ import {
   PROCESSING_WINDOW_MS,
   processingPollInterval,
 } from "../src/queries/photos";
-import { emptyPage, fakeApi, testId, testMe, testPhoto, testPhotoPage } from "./fakes";
+import { fakeApi, testId, testMe, testPhoto, testPhotoPage } from "./fakes";
 import { REMOTE_CHANGES_POLL_MS } from "../src/queries/remoteChanges";
 import { defaultResponses, renderAt } from "./render";
 import { LONG_PRESS_MS } from "../src/gallery/useDragSelect";
@@ -246,53 +246,19 @@ describe("gallery filters in the URL (FR-GAL-3)", () => {
     );
   });
 
-  it("filters to an album chosen in the album menu", async () => {
+  it("has no album menu, only the sort order (user request 2026-11-01)", async () => {
+    const { api } = setup({ "GET /photos": testPhotoPage(0, 1) });
+    await renderAt("/gallery", { api });
+    await screen.findByRole("link", { name: "IMG_0.jpg" });
+    expect(screen.queryByRole("combobox", { name: "Album" })).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Sort order" })).toBeTruthy();
+  });
+
+  it("opens an old album link on the album's own page", async () => {
     const { api } = setup({ [`GET /albums/${album.albumId}/photos`]: testPhotoPage(50, 2) });
-    const { router } = await renderAt("/gallery", { api });
-    await chooseOption("Album", "Holidays");
-    await waitFor(() =>
-      expect(router.state.location.search).toEqual({ album: album.albumId, sort: "taken-desc" }),
-    );
-    expect(await screen.findByRole("link", { name: "IMG_50.jpg" })).toBeTruthy();
-  });
-
-  it("lists an album from the URL by date taken, with the sort menu (§12.3)", async () => {
-    const { api, request } = setup({ [`GET /albums/${album.albumId}/photos`]: emptyPage });
-    await renderAt(`/gallery?album=${album.albumId}&sort=taken-asc`, { api });
-    expect(await screen.findByText("This album has no photos yet.")).toBeTruthy();
-    expect(screen.queryByRole("link", { name: "Upload photos" })).toBeNull();
-    expect(screen.getByRole("combobox", { name: "Sort order" }).textContent).toContain(
-      "Oldest first",
-    );
-    await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Album" }).textContent).toBe("Holidays"),
-    );
-    expect(queriesTo(request, `/albums/${album.albumId}/photos`)).toEqual([
-      { sort: "taken-asc", cursor: undefined },
-    ]);
-    expect(queriesTo(request, "/photos")).toEqual([]);
-  });
-
-  it("names an album that isn't in my list, e.g. one shared with me", async () => {
-    const shared = testId(901);
-    const { api } = setup({ [`GET /albums/${shared}/photos`]: testPhotoPage(0, 1) });
-    await renderAt(`/gallery?album=${shared}`, { api });
-    await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "Album" }).textContent).toBe("Selected album"),
-    );
-  });
-
-  it("explains a missing album and goes back to all photos", async () => {
-    const gone = testId(902);
-    const { api } = setup({
-      [`GET /albums/${gone}/photos`]: new ApiRequestError("NOT_FOUND", "Album not found", 404),
-      "GET /photos": testPhotoPage(0, 1),
-    });
-    const { router } = await renderAt(`/gallery?album=${gone}`, { api });
-    expect(await screen.findByText("This item doesn't exist or was deleted.")).toBeTruthy();
-    fireEvent.click(screen.getByRole("link", { name: "Show all photos" }));
-    expect(await screen.findByRole("link", { name: "IMG_0.jpg" })).toBeTruthy();
-    expect(router.state.location.search).toEqual({ sort: "taken-desc" });
+    const { router } = await renderAt(`/gallery?album=${album.albumId}&sort=taken-asc`, { api });
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/albums/${album.albumId}`));
+    expect(await screen.findByRole("heading", { name: "Holidays" })).toBeTruthy();
   });
 });
 
@@ -540,16 +506,6 @@ describe("deleting selected photos (FR-DEL-1/2)", () => {
       `/photos/${testId(2)}`,
       `/photos/${testId(1)}`,
     ]);
-  });
-
-  it("offers no delete in an album shared with me", async () => {
-    const shared = testId(901);
-    const { api } = setup({ [`GET /albums/${shared}/photos`]: testPhotoPage(0, 2) });
-    await renderAt(`/gallery?album=${shared}`, { api });
-    fireEvent.click(await screen.findByRole("button", { name: "Select" }));
-    await screen.findByRole("toolbar");
-    expect(screen.getByRole("button", { name: "Add to album" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   });
 });
 
