@@ -40,6 +40,9 @@ export interface UploadItem {
    * Stored with the item so another uploader doesn't take it up meanwhile.
    */
   paused?: boolean;
+  /** A large batch's record (13.1f) and this file's key in it; memory-only items only. */
+  batchId?: string;
+  sourceKey?: string;
 }
 
 /** Persistence of the queue; IndexedDB in the app, in memory in tests. */

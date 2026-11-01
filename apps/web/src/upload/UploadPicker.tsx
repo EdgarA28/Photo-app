@@ -4,6 +4,7 @@ import { useRef, useState, type DragEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { folderLabel } from "./batches";
 import { filesFromDrop, filesFromFolderInput } from "./folders";
 import type { AddOptions } from "./queue";
 import { ACCEPT } from "./validate";
@@ -32,7 +33,12 @@ export function UploadPicker({
   }
 
   function takeFolder(input: HTMLInputElement) {
-    if (input.files?.length) onFiles(filesFromFolderInput(input.files), { folder: true });
+    if (input.files?.length) {
+      onFiles(filesFromFolderInput(input.files), {
+        folder: true,
+        label: folderLabel([...input.files]),
+      });
+    }
     input.value = "";
   }
 
@@ -57,8 +63,8 @@ export function UploadPicker({
         const dropped = filesFromDrop(event.dataTransfer);
         setReading(true);
         dropped
-          .then(({ files, folder }) => {
-            if (files.length) onFiles(files, folder ? { folder } : undefined);
+          .then(({ files, folder, label }) => {
+            if (files.length) onFiles(files, folder ? { folder, label: label ?? null } : undefined);
           })
           .catch((error: unknown) => console.warn("Reading the dropped folder failed", error))
           .finally(() => setReading(false));

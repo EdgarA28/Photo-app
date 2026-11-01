@@ -2,6 +2,14 @@ import type { Api } from "@/api/api";
 import { attemptUpload, isAbort } from "./attempt";
 import { postToS3, type PostToS3 } from "./s3Post";
 import type { UploadItem, UploadStore } from "./store";
+import {
+  BATCH_SAVE_MS,
+  fileKey,
+  INTERRUPTED_AFTER_MS,
+  type BatchRecord,
+  type BatchStore,
+  type InterruptedBatch,
+} from "./batches";
 import { checkFile, type SkipCode } from "./validate";
 
 /** A picked file that wasn't added, with the reason shown and its group (13.1b). */
@@ -19,11 +27,15 @@ export interface AddResult {
   /** Total size of the added files. */
   addedBytes: number;
   rejected: SkippedFile[];
+  /** Files of an interrupted batch picked again that were uploaded already, skipped (13.1f). */
+  alreadyUploaded?: number;
 }
 
 export interface AddOptions {
   /** Picked as a folder (13.1a): always a large batch, whatever its size. */
   folder?: boolean;
+  /** The folder's name, to say which batch was interrupted (13.1f). */
+  label?: string | null;
 }
 
 export interface UploadQueue {
@@ -50,6 +62,10 @@ export interface UploadQueue {
   cancelAll(): Promise<void>;
   /** Photos of a large batch still to upload in other tabs of this app (13.1d). */
   getOtherTabsRemaining(): number;
+  /** Large batches no tab is running any more, with what is left of them (13.1f). */
+  interruptedBatches(): Promise<InterruptedBatch[]>;
+  /** Forget an interrupted batch ("Dismiss"). */
+  dismissBatch(batchId: string): Promise<void>;
   subscribe(listener: () => void): () => void;
   /** Stable between changes (useSyncExternalStore). */
   getSnapshot(): readonly QueueEntry[];
@@ -87,6 +103,8 @@ export interface UploadQueueDeps {
   isPhone?: () => boolean;
   /** Picks above this total are large batches (13.1c); default `LARGE_BATCH_BYTES`. */
   largeBatchBytes?: number;
+  /** Remembers large batches so they can be continued (13.1f). Absent → not remembered. */
+  batches?: BatchStore | undefined;
   now?: () => number;
   newId?: () => string;
 }
@@ -196,6 +214,7 @@ export function createUploadQueue({
   requestPersistence,
   isPhone = looksLikePhone,
   largeBatchBytes = LARGE_BATCH_BYTES,
+  batches,
   now = Date.now,
   newId = () => crypto.randomUUID(),
 }: UploadQueueDeps): UploadQueue {
@@ -235,6 +254,9 @@ export function createUploadQueue({
   let batchTimer: ReturnType<typeof setInterval> | undefined;
   let lastBatchSent = 0;
   let changedTimer: ReturnType<typeof setTimeout> | undefined;
+  /** This tab's large batches being uploaded, as remembered (13.1f). */
+  const liveBatches = new Map<string, BatchRecord>();
+  let batchSaveTimer: ReturnType<typeof setInterval> | undefined;
 
   const listeners = new Set<() => void>();
   let snapshot: readonly QueueEntry[] = [];
@@ -306,6 +328,43 @@ export function createUploadQueue({
 
   function broadcast(message: UploadMessage) {
     channel?.postMessage(message);
+  }
+
+  /**
+   * Saves this tab's large batches (13.1f): what is uploaded so far and a sign of life. A batch
+   * with nothing left to do is forgotten; one whose tab closes stops being saved and shows as
+   * interrupted a little later.
+   */
+  async function saveBatches() {
+    if (!batches) return;
+    const unfinished = new Map<string, number>();
+    for (const item of items.values()) {
+      if (item.batchId && item.status !== "done") {
+        unfinished.set(item.batchId, (unfinished.get(item.batchId) ?? 0) + 1);
+      }
+    }
+    for (const [batchId, record] of [...liveBatches]) {
+      try {
+        if (!unfinished.get(batchId)) {
+          liveBatches.delete(batchId);
+          await batches.delete(batchId);
+        } else {
+          record.heartbeatAt = now();
+          await batches.put(record);
+        }
+      } catch (error) {
+        console.warn("Saving the upload batch failed", error);
+      }
+    }
+  }
+
+  /** Remembered batches of this user that no tab runs any more. */
+  async function interruptedRecords(): Promise<BatchRecord[]> {
+    if (!batches || !userId) return [];
+    const quietSince = now() - INTERRUPTED_AFTER_MS;
+    return (await batches.list(userId)).filter(
+      (record) => !liveBatches.has(record.batchId) && record.heartbeatAt < quietSince,
+    );
   }
 
   /** Tells the other tabs the stored queue changed, once for a burst of writes (pause, cancel). */
@@ -527,7 +586,10 @@ export function createUploadQueue({
     if (!finished) return;
     await refresh();
     progress.delete(id);
+    const item = items.get(id);
     await update(id, finished);
+    // Remembered as uploaded, so a re-pick after an interruption skips it (13.1f).
+    if (item?.batchId && item.sourceKey) liveBatches.get(item.batchId)?.done.push(item.sourceKey);
   }
 
   /**
@@ -659,6 +721,10 @@ export function createUploadQueue({
     clearTimeout(timer);
     clearInterval(batchTimer);
     batchTimer = undefined;
+    clearInterval(batchSaveTimer);
+    batchSaveTimer = undefined;
+    // Not saved any more: shows as interrupted on the next start (13.1f).
+    liveBatches.clear();
     otherTabs.clear();
     otherTabsRemaining = 0;
     clearInterval(ticker);
@@ -690,6 +756,7 @@ export function createUploadQueue({
     channel = createChannel?.();
     channel?.addEventListener("message", onMessage);
     if (channel) batchTimer = setInterval(batchHeartbeat, BATCH_HEARTBEAT_MS);
+    if (batches) batchSaveTimer = setInterval(() => void saveBatches(), BATCH_SAVE_MS);
     window.addEventListener("online", onOnline);
     await reload();
     if (forSession !== session) return;
@@ -733,7 +800,48 @@ export function createUploadQueue({
       const large = !phone && (options.folder === true || total > largeBatchBytes);
       let picked = 0;
 
-      for (const { file, fileName, contentType } of accepted) {
+      // 13.1f: a large batch is remembered; picked again after an interruption, the files already
+      // uploaded are skipped and the same batch goes on.
+      let batch: BatchRecord | undefined;
+      let todo = accepted;
+      if (large && batches) {
+        let interrupted: BatchRecord[] = [];
+        try {
+          interrupted = await interruptedRecords();
+        } catch (error) {
+          console.warn("Reading the remembered upload batches failed", error);
+        }
+        const keys = accepted.map(({ file }) => fileKey(file));
+        const pickedKeys = new Set(keys);
+        const overlap = (record: BatchRecord) =>
+          record.keys.filter((key) => pickedKeys.has(key)).length;
+        batch = interrupted
+          .filter((record) => overlap(record) > 0)
+          .sort((a, b) => overlap(b) - overlap(a))[0];
+        const uploaded = new Set(interrupted.flatMap((record) => record.done));
+        todo = accepted.filter(({ file }) => !uploaded.has(fileKey(file)));
+        if (accepted.length > todo.length) result.alreadyUploaded = accepted.length - todo.length;
+        batch = batch
+          ? { ...batch, keys: [...new Set([...batch.keys, ...keys])] }
+          : {
+              batchId: crypto.randomUUID(),
+              userId: owner,
+              label: options.label ?? null,
+              createdAt: now(),
+              heartbeatAt: now(),
+              keys,
+              done: [],
+            };
+        batch.heartbeatAt = now();
+        if (todo.length) {
+          liveBatches.set(batch.batchId, batch);
+          await batches.put(batch).catch((error: unknown) => {
+            console.warn("Saving the upload batch failed", error);
+          });
+        }
+      }
+
+      for (const { file, fileName, contentType } of todo) {
         if (phone && picked + file.size > PHONE_PICK_BYTES) {
           result.rejected.push({ fileName, reason: PHONE_LIMIT, code: "phoneLimit" });
           continue;
@@ -766,6 +874,7 @@ export function createUploadQueue({
           errorCode: null,
           addedAt: now(),
           ...(large && { memoryOnly: true }),
+          ...(batch && { batchId: batch.batchId, sourceKey: fileKey(file) }),
         });
         result.added++;
         result.addedBytes += file.size;
@@ -828,6 +937,24 @@ export function createUploadQueue({
 
     async cancelAll() {
       for (const item of [...items.values()]) if (item.status !== "done") await forget(item.id);
+      // Cancelled on purpose: nothing to continue later (13.1f).
+      for (const batchId of [...liveBatches.keys()]) {
+        liveBatches.delete(batchId);
+        await batches?.delete(batchId).catch(() => {});
+      }
+    },
+
+    async interruptedBatches() {
+      return (await interruptedRecords()).map((record) => ({
+        batchId: record.batchId,
+        label: record.label,
+        total: record.keys.length,
+        remaining: record.keys.length - new Set(record.done).size,
+      }));
+    },
+
+    async dismissBatch(batchId) {
+      await batches?.delete(batchId);
     },
 
     getOtherTabsRemaining: () => otherTabsRemaining,
@@ -837,7 +964,8 @@ export function createUploadQueue({
       items.clear();
       progress.clear();
       emit();
-      await store.clear();
+      liveBatches.clear();
+      await Promise.all([store.clear(), batches?.clear()]);
       broadcast({ type: "changed" });
     },
 

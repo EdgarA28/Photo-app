@@ -10,6 +10,7 @@ import type { PersistedQueryCache } from "../src/queries/persistedCache";
 import { createUploadQueue, type UploadQueueDeps } from "../src/upload/queue";
 import type { PostToS3 } from "../src/upload/s3Post";
 import type { ShareInbox, SharedFile, WaitingPhoto } from "../src/upload/shareInbox";
+import type { BatchRecord, BatchStore } from "../src/upload/batches";
 import type { UploadItem, UploadStore } from "../src/upload/store";
 
 export const testConfig: AppConfig = {
@@ -286,6 +287,24 @@ export class MemoryUploadStore implements UploadStore {
   }
   async clear() {
     this.items.clear();
+  }
+}
+
+export class MemoryBatchStore implements BatchStore {
+  readonly records = new Map<string, BatchRecord>();
+  async list(userId: string) {
+    return [...this.records.values()]
+      .filter((record) => record.userId === userId)
+      .map((record) => structuredClone(record));
+  }
+  async put(record: BatchRecord) {
+    this.records.set(record.batchId, structuredClone(record));
+  }
+  async delete(batchId: string) {
+    this.records.delete(batchId);
+  }
+  async clear() {
+    this.records.clear();
   }
 }
 

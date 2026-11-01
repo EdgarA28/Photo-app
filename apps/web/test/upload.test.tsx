@@ -2,11 +2,13 @@ import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "../src/api/errors";
 import { refreshAfterUpload } from "../src/queries/photos";
+import { fileKey } from "../src/upload/batches";
 import type { UploadQueue } from "../src/upload/queue";
 import {
   controlledPost,
   fakeApi,
   fakeAuth,
+  MemoryBatchStore,
   MemoryShareInbox,
   testFile,
   testId,
@@ -583,5 +585,60 @@ describe("big batches on screen (13.1-0)", () => {
     vi.spyOn(queue, "getOtherTabsRemaining").mockReturnValue(1234);
     await renderAt("/upload", { api, uploads: queue });
     expect(await screen.findByText(/Uploading 1,234 photos in\s+another tab/)).toBeTruthy();
+  });
+
+  it("offers to continue a large batch whose tab was closed (13.1f)", async () => {
+    const { api } = setup();
+    const batches = new MemoryBatchStore();
+    const inFolder = (name: string) => {
+      const file = testFile(name);
+      Object.defineProperty(file, "webkitRelativePath", { value: `Trip/${name}` });
+      return file;
+    };
+    const picked = [inFolder("A.jpg"), inFolder("B.jpg"), inFolder("C.jpg")];
+    await batches.put({
+      batchId: "b1",
+      userId: testUser.sub,
+      label: "Trip",
+      createdAt: 0,
+      heartbeatAt: Date.now() - 60_000,
+      keys: picked.map(fileKey),
+      done: [fileKey(picked[0]!)],
+    });
+    const { queue } = testUploadQueue(api, { post: () => new Promise(() => {}), batches });
+    await renderAt("/upload", { api, uploads: queue });
+
+    const notice = await screen.findByText("2 photos from “Trip” weren't uploaded");
+    expect(notice.closest("[role=status]")!.textContent).toContain("Choose the folder again");
+
+    pick(picked, "upload-folder");
+    expect(await screen.findByText("1 photo was uploaded before and was skipped.")).toBeTruthy();
+    await waitFor(() =>
+      expect(queue.getSnapshot().map((entry) => entry.fileName)).toEqual(["B.jpg", "C.jpg"]),
+    );
+    // Going on: no longer offered.
+    await waitFor(() => expect(screen.queryByText(/weren't uploaded/)).toBeNull());
+  });
+
+  it("dismisses an interrupted batch for good (13.1f)", async () => {
+    const { api } = setup();
+    const batches = new MemoryBatchStore();
+    await batches.put({
+      batchId: "b1",
+      userId: testUser.sub,
+      label: null,
+      createdAt: 0,
+      heartbeatAt: Date.now() - 60_000,
+      keys: ["a", "b"],
+      done: [],
+    });
+    const { queue } = testUploadQueue(api, { batches });
+    await renderAt("/upload", { api, uploads: queue });
+    const notice = (await screen.findByText("2 photos of 2 weren't uploaded")).closest(
+      "[role=status]",
+    ) as HTMLElement;
+    fireEvent.click(within(notice).getByRole("button", { name: "Dismiss" }));
+    await waitFor(() => expect(screen.queryByText(/weren't uploaded/)).toBeNull());
+    expect(batches.records.size).toBe(0);
   });
 });

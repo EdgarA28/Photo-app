@@ -73,12 +73,13 @@ describe("folders (13.1a)", () => {
       ]),
     );
     expect(result.folder).toBe(true);
+    expect(result.label).toBe("Photos");
     expect(names(result.files)).toEqual(["loose.jpg", "a.jpg", "b.heic"]);
   });
 
   it("dropped files alone aren't a folder", async () => {
     const result = await filesFromDrop(drop([testFile("a.jpg"), testFile("b.jpg")]));
-    expect(result).toEqual({ files: expect.any(Array), folder: false });
+    expect(result).toEqual({ files: expect.any(Array), folder: false, label: null });
     expect(names(result.files)).toEqual(["a.jpg", "b.jpg"]);
   });
 

@@ -8,6 +8,8 @@ export interface PickedFiles {
   files: File[];
   /** At least one folder was in it: always a large batch (13.1c). */
   folder: boolean;
+  /** The (first) dropped folder's name, to name the batch (13.1f). */
+  label?: string | null;
 }
 
 /** Hidden files and system leftovers, skipped without a word. */
@@ -40,6 +42,7 @@ export function filesFromDrop(dataTransfer: DataTransfer): Promise<PickedFiles> 
 async function walk(entries: FileSystemEntry[]): Promise<PickedFiles> {
   const files: File[] = [];
   let folder = false;
+  const label = entries.find((entry) => entry.isDirectory && !isHidden(entry.name))?.name ?? null;
   const visit = async (entry: FileSystemEntry): Promise<void> => {
     if (isHidden(entry.name)) return;
     if (entry.isFile) {
@@ -50,7 +53,7 @@ async function walk(entries: FileSystemEntry[]): Promise<PickedFiles> {
     }
   };
   for (const entry of entries) await visit(entry);
-  return { files, folder };
+  return { files, folder, label };
 }
 
 const fileOf = (entry: FileSystemFileEntry) =>

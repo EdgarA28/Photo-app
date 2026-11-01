@@ -13,6 +13,8 @@ import type { AddOptions, AddResult } from "@/upload/queue";
 import { UploadList } from "@/upload/UploadList";
 import type { WaitingPhoto } from "@/upload/shareInbox";
 import { SharedPhotos } from "@/upload/SharedPhotos";
+import type { InterruptedBatch } from "@/upload/batches";
+import { InterruptedBatches } from "@/upload/InterruptedBatches";
 import { SkippedFiles } from "@/upload/SkippedFiles";
 import { UploadPicker } from "@/upload/UploadPicker";
 import { checkFile } from "@/upload/validate";
@@ -53,6 +55,9 @@ function Upload() {
   const { data: me } = useQuery(meQuery(api));
   /** The last pick's outcome, while it skipped files (13.1b). */
   const [picked, setPicked] = useState<Pick<AddResult, "added" | "rejected"> | null>(null);
+  /** Files of an interrupted batch picked again that were uploaded already (13.1f). */
+  const [alreadyUploaded, setAlreadyUploaded] = useState(0);
+  const [interrupted, setInterrupted] = useState<InterruptedBatch[]>([]);
   /** A pick that needs more space than is left, waiting for the user's go-ahead (13.1e). */
   const [tooBig, setTooBig] = useState<{
     files: File[];
@@ -90,7 +95,30 @@ function Upload() {
   async function queueFiles(files: File[], options?: AddOptions) {
     const result = await queue.add(files, options);
     setPicked(result.rejected.length ? result : null);
+    setAlreadyUploaded(result.alreadyUploaded ?? 0);
+    void loadInterrupted();
   }
+
+  /** Large batches stopped by a closed tab, to continue (13.1f). */
+  async function loadInterrupted() {
+    try {
+      await queue.start(user.sub);
+      setInterrupted(await queue.interruptedBatches());
+    } catch (error) {
+      console.warn("Reading the interrupted uploads failed", error);
+    }
+  }
+
+  async function dismissBatch(batchId: string) {
+    setInterrupted((batches) => batches.filter((batch) => batch.batchId !== batchId));
+    await queue.dismissBatch(batchId).catch(() => {});
+  }
+
+  // On opening the page: the queue starts with the layout, which runs after this page's effects.
+  useEffect(() => {
+    void loadInterrupted();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per visit
+  }, []);
 
   // Shared photos (9.6) wait in the inbox, through a login if needed, until the user uploads or
   // discards them: never added unasked, since any website can POST to the share target (CSRF).
@@ -140,7 +168,17 @@ function Upload() {
           onDiscard={() => void decideShared(false)}
         />
       )}
+      {interrupted.length > 0 && (
+        <InterruptedBatches batches={interrupted} onDismiss={(id) => void dismissBatch(id)} />
+      )}
       <UploadPicker onFiles={(files, options) => void add(files, options)} />
+      {alreadyUploaded > 0 && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {alreadyUploaded === 1
+            ? "1 photo was uploaded before and was skipped."
+            : `${alreadyUploaded.toLocaleString()} photos were uploaded before and were skipped.`}
+        </p>
+      )}
       {storageFull > 0 && (
         <StorageFullBanner count={storageFull} usage={me?.usage} onRetry={retryAll} />
       )}

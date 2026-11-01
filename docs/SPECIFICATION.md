@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.35 |
+| **Version** | 0.36 |
 | **Date** | 2026-10-31 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -634,6 +634,7 @@ TypeScript Lambda, arm64, in `apps/api` (same bundle as the API, own handler and
 - Selected files stored in IndexedDB with status (`queued`/`uploading`/`done`/`failed`).
 - Large batches (FR-UP-5: a folder or > 500 MB picked at once, computers only): the picked files are not copied or stored; they are read when uploaded and kept only in the tab that picked it, which uploads them whether or not it holds the upload lock, and is not interrupted by another tab or the service worker (its progress counts as activity). Background Sync doesn't cover them. While one runs: "keep this tab open" note, a warning before the tab is closed or reloaded, and Screen Wake Lock where supported. A file moved or deleted since it was picked fails with a message instead of retrying.
 - Phones copy every pick (picked files can lose their read permission on Android), at most 1 GB per pick; the rest is listed as not added.
+- Interrupted large batches (FR-UP-5): a large batch is remembered (folder name, each file's name + size + last change, which are uploaded; no bytes). If its tab closes first, `/upload` says how many photos weren't uploaded; picking the same folder (or files) again uploads only the rest. Forgotten when done, on *Cancel all*, on *Dismiss* and at logout.
 - The whole queue (FR-UP-6): "312 of 1,040 uploaded", uploaded of total size, time left at the speed of the last 30 s, an overall progress bar; *Pause* / *Resume* (stored with the items, so no other tab or the service worker uploads paused files) and *Cancel all* (finished photos stay). Other tabs show "Uploading N photos in another tab" while one tab runs a large batch.
 - Storage (FR-UP-7): a pick that needs more than the space left (quota − used − already waiting) asks first ("Upload anyway" / "Cancel"). At the first upload refused for storage, every file still waiting stops as "storage full" without asking the server for each; "Retry all" sends them again after space is freed.
 - Worker loop: request upload URL → POST to S3 with progress → mark done → invalidate gallery. The gallery refresh is coalesced (at most one per 5 s while uploads finish), so a batch of thousands of files doesn't refetch the gallery after each one.
@@ -848,6 +849,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.36 | 2026-11-01 | Continue an interrupted large batch by picking it again (13.1f, §12.4) |
 | 0.35 | 2026-11-01 | Whole-queue progress, time left, pause/resume, cancel all, other tabs' large batch (13.1d, §12.4) |
 | 0.34 | 2026-11-01 | Storage before and during a batch (13.1e): ask before queuing a pick bigger than the space left, stop all waiting files at the first refusal (§12.4) |
 | 0.33 | 2026-11-01 | FR-GAL-5: no placeholder for photos still processing; they appear once ready (user request) |
