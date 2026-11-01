@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.29 |
+| **Version** | 0.30 |
 | **Date** | 2026-10-31 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -513,7 +513,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 
 | Aspect | Specification |
 |---|---|
-| Trigger | S3 `ObjectCreated:*` on prefix `users/` |
+| Trigger | S3 `ObjectCreated:*` on prefix `users/` → SQS queue `photo-app-{env}-thumbnails` → Lambda event source mapping with a maximum concurrency (default 5), so upload bursts (bulk upload, imports) can't use up the account's Lambda concurrency and throttle the API (B-11, planned 13.6; today S3 invokes the Lambda directly) |
 | Loop protection | Process only keys matching `users/{userId}/originals/{file}`; ignore everything else. IAM: no write access to `originals/` |
 | Libraries | Pillow, pillow-heif (HEIC/HEIF decoding) |
 | Steps | Download → decode → apply EXIF orientation → read `DateTimeOriginal`, width, height → generate sizes → strip all metadata → encode JPEG → upload → update DynamoDB item to `ready` |
@@ -525,7 +525,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 | Places | EXIF GPS → nearest town (population-weighted, ≤ 50 km) from a bundled GeoNames list (CC BY 4.0), with region and country; written in the `ready` transaction: coordinates and place on the photo, place list counts, place photo items (FR-SRCH-1) |
 | Album order | Once `ready`, the photo's album memberships get its final takenAt in `GSI1SK` (they were sorted by the upload time while pending) |
 | Replaced original | The item stores the processed bytes' ETag (`originalETag`). If the original is overwritten after processing (the upload POST is valid 15 min), the photo becomes `failed` and its thumb/preview are deleted, so recipients can't download other bytes than they were shown |
-| Errors — transient | Raise → Lambda async retries (2×) → SQS DLQ (14-day retention) |
+| Errors — transient | The record is reported as a batch item failure → the message returns after the visibility timeout (6 × the Lambda timeout) → after 3 receives the SQS DLQ (14-day retention). (Until 13.6: raise → Lambda async retries (2×) → DLQ) |
 | Packaging | Native wheels for `manylinux` aarch64 (`pip install --platform manylinux2014_aarch64 --only-binary=:all:`) or Docker build |
 | Logs | Structured JSON; 30-day retention |
 | Date fallback (imports) | Imported originals carry `x-amz-meta-taken-at` (Google's `createTime`); used when EXIF has no `DateTimeOriginal`, before the upload time (FR-IMP-4) |
@@ -816,7 +816,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | B-7 | Video support | Needs transcoding (e.g. MediaConvert) and different storage/egress planning | Idea |
 | B-8 | Search & metadata | Date ranges, tags (places and map done: §6.8); location off switch | Idea |
 | B-9 | On-the-fly image resizing | Only if many sizes are needed; current fixed sizes are simpler | Idea |
-| B-11 | SQS queue in front of the thumbnail Lambda | S3 → SQS → thumbnail Lambda with an event source maximum concurrency (e.g. 5), so big upload bursts can't use up the account's Lambda capacity and throttle the API. Only if raising the concurrency quota (12.3a) and reserved concurrency on the thumbnail Lambda aren't enough. Costs: new queue (+ its DLQ replaces the async-invoke DLQ), S3 notification target changes, handler reads SQS records | Idea |
+| B-11 | SQS queue in front of the thumbnail Lambda | S3 → SQS → thumbnail Lambda with an event source maximum concurrency (e.g. 5), so big upload bursts can't use up the account's Lambda capacity and throttle the API. Only if raising the concurrency quota (12.3a) and reserved concurrency on the thumbnail Lambda aren't enough. Costs: new queue (redrives to the existing DLQ), S3 notification target changes, handler reads SQS records | Planned (13.6, §10) |
 | B-10 | Import from Google Photos | Picker API, backend copy (§6.9, §10.1, §11.5); whole library / Takeout not planned | Planned (13.5) |
 | | | | |
 
@@ -843,6 +843,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.30 | 2026-11-01 | SQS queue in front of the thumbnail Lambda with a maximum concurrency: §10 trigger and transient errors, B-11 planned (13.6) (§17) |
 | 0.29 | 2026-11-01 | Gallery: album picker removed, `?album=` redirects to the album page (§12.1). Shared photo locations: FR-SHR-12, `showLocations` on Album (§8.2), `PATCH /albums/{id}` and album photo lists (§9), album page (§12.1) |
 | 0.28 | 2026-10-31 | Collaborative albums: FR-SHR-11 (FR-SHR-4 note), `membersCanAdd` + `coverOwnerId` on Album, membership `ownerId` = photo owner + `albumOwnerId` (§8.2); album routes for members, `POST /albums/{albumId}/save` (§9); album page (§12.1) |
 | 0.27 | 2026-10-31 | Stale-pending sweep (6.11): Pending marker item and the "abandoned uploads" access pattern (§8.2); run by the daily purge |
