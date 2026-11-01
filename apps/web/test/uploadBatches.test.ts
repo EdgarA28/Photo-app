@@ -2,6 +2,7 @@ import type { UploadUrlRequest } from "@photo-app/shared";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Api } from "../src/api/api";
+import type { PostToS3 } from "../src/upload/s3Post";
 import {
   BATCH_SAVE_MS,
   createIdbBatchStore,
@@ -49,7 +50,7 @@ async function wait(ms: number) {
   await vi.advanceTimersByTimeAsync(ms);
 }
 
-function queueWith(batches: MemoryBatchStore, post = controlledPost().post) {
+function queueWith(batches: MemoryBatchStore, post: PostToS3 = controlledPost().post) {
   const { api, uploadUrl } = uploadApi();
   const { queue } = testUploadQueue(api, {
     post,
