@@ -2,9 +2,10 @@
 # - trash purge (FR-DEL-3): deletes every trashed photo whose 15 days are up (files, item, place
 #   entries, Usage);
 # - stale-pending sweep (6.11): deletes `pending` photos over a day old whose original never
-#   arrived, releasing their quota reservation (album memberships, Usage `bytesReserved`).
+#   arrived, releasing their quota reservation (album memberships, Usage `bytesReserved`), and
+#   sends those whose original did arrive back to the thumbnail queue (13.6).
 # Same bundle as the API (dist/purge.mjs), own role: it only touches photo items, pending markers
-# and photo objects, and is invoked only by its schedule.
+# and photo objects, sends to the thumbnail queue only, and is invoked only by its schedule.
 
 locals {
   purge_name = "photo-app-${var.environment}-trash-purge"
@@ -57,6 +58,15 @@ data "aws_iam_policy_document" "purge" {
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["${aws_cloudwatch_log_group.purge.arn}:*"]
   }
+
+  # Stale-pending sweep: a photo still pending a day after its original arrived lost its queue
+  # messages; one new message lets the thumbnail Lambda process it (13.6). Same account, so this
+  # identity policy is enough next to the queue policy (which admits S3 only). SSE-SQS: no KMS.
+  statement {
+    sid       = "RetryProcessing"
+    actions   = ["sqs:SendMessage"]
+    resources = [var.thumbnail_queue_arn]
+  }
 }
 
 resource "aws_iam_role_policy" "purge" {
@@ -89,9 +99,10 @@ resource "aws_lambda_function" "purge" {
 
   environment {
     variables = {
-      TABLE_NAME   = var.table_name
-      PHOTO_BUCKET = var.bucket_name
-      NODE_OPTIONS = "--enable-source-maps"
+      TABLE_NAME          = var.table_name
+      PHOTO_BUCKET        = var.bucket_name
+      THUMBNAIL_QUEUE_URL = var.thumbnail_queue_url
+      NODE_OPTIONS        = "--enable-source-maps"
     }
   }
 

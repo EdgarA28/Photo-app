@@ -1,6 +1,7 @@
 import type { PendingMarker, PhotoRecord, Repositories } from "../repo";
 import { errorFields, log } from "./log";
 import type { PhotoStorage } from "./storage";
+import type { RetryProcessing } from "./thumbnailRetry";
 import { inBatches } from "./trash";
 
 /**
@@ -17,7 +18,9 @@ export const STALE_PENDING_AFTER_MS = 24 * 60 * 60 * 1000;
 export interface SweepResult {
   /** Abandoned uploads deleted (their reservation released). */
   removed: number;
-  /** Still pending although the original is in S3: processing failed (see the thumbnail DLQ). */
+  /** Still pending although the original is in S3: processing failed or its queue messages were
+   * lost (see the thumbnail DLQ). Processing is retried for each one when `retryProcessing` is
+   * given. */
   stuck: number;
   /** Markers dropped because their photo is no longer pending (ready, failed or deleted). */
   cleared: number;
@@ -34,15 +37,17 @@ const isAbandoned = (record: PhotoRecord) =>
 /**
  * Checks every marker older than the cut-off: photo gone or no longer pending → marker dropped;
  * still pending and no original in S3 → photo deleted like `DELETE /photos/{id}` would (album
- * memberships, `bytesReserved`), then the marker; original present → left alone, logged as a
- * warning every day until someone looks (the marker stays). Stops starting new work at
- * `deadline` (epoch ms); what's left waits for the next run.
+ * memberships, `bytesReserved`), then the marker; original present → processing retried with
+ * `retryProcessing` (a new thumbnail queue message) and logged as a warning; the marker stays, so
+ * it is retried every day until the photo is processed. Stops starting new work at `deadline`
+ * (epoch ms); what's left waits for the next run.
  */
 export async function sweepStalePending(
   repos: Repositories,
   storage: PhotoStorage,
   now: Date,
   deadline = Number.POSITIVE_INFINITY,
+  retryProcessing?: RetryProcessing,
 ): Promise<SweepResult> {
   const markers = await repos.photos.listPendingMarkers(
     new Date(now.getTime() - STALE_PENDING_AFTER_MS),
@@ -56,7 +61,9 @@ export async function sweepStalePending(
       break;
     }
     const chunk = markers.slice(i, i + CHUNK);
-    const outcomes = await inBatches(chunk, (marker) => sweepOne(repos, storage, marker));
+    const outcomes = await inBatches(chunk, (marker) =>
+      sweepOne(repos, storage, marker, retryProcessing),
+    );
     outcomes.forEach((outcome, j) => {
       if (outcome.status === "fulfilled") result[outcome.value]++;
       else {
@@ -75,15 +82,18 @@ async function sweepOne(
   repos: Repositories,
   storage: PhotoStorage,
   marker: PendingMarker,
+  retryProcessing?: RetryProcessing,
 ): Promise<Outcome> {
   const { userId, photoId } = marker;
   const record = await repos.photos.get(userId, photoId);
   if (record && isAbandoned(record)) {
     if (await storage.exists(record.originalKey)) {
+      await retryProcessing?.(record);
       log("WARN", "Photo still pending a day after its original arrived", {
         userId,
         photoId,
         uploadedAt: marker.uploadedAt,
+        processingRetried: retryProcessing !== undefined,
       });
       return "stuck";
     }

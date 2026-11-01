@@ -14,6 +14,7 @@ import {
   type Db,
 } from "../src/repo/db";
 import { attachmentDisposition, s3PhotoStorage } from "../src/lib/storage";
+import { sqsRetryProcessing } from "../src/lib/thumbnailRetry";
 import { cognitoUserDirectory } from "../src/lib/users";
 
 const USER = "3f1c2b4a-9d8e-4f7a-b6c5-1a2b3c4d5e6f";
@@ -381,5 +382,36 @@ describe("retryOnConflict (13.4)", () => {
     });
     expect(await retryOnConflict(write, { pause: () => 0 })).toBe("ok");
     expect(write).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("sqsRetryProcessing (6.11, 13.6)", () => {
+  test("sends an S3-event-shaped message for the original to the thumbnail queue", async () => {
+    const sent: { QueueUrl?: string; MessageBody?: string }[] = [];
+    const client = {
+      send: async (command: { input: (typeof sent)[number] }) => void sent.push(command.input),
+    };
+    const retry = sqsRetryProcessing(client as never, "https://sqs.example/q", "photos-bucket");
+    await retry({
+      originalKey: "users/u-1/originals/01ABC.jpg",
+      sizeBytes: 1234,
+      uploadedAt: "2026-11-01T20:08:09.409Z",
+    } as never);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.QueueUrl).toBe("https://sqs.example/q");
+    expect(JSON.parse(sent[0]!.MessageBody!)).toEqual({
+      Records: [
+        {
+          eventSource: "aws:s3",
+          eventName: "ObjectCreated:Retry",
+          eventTime: "2026-11-01T20:08:09.409Z",
+          s3: {
+            bucket: { name: "photos-bucket" },
+            object: { key: "users/u-1/originals/01ABC.jpg", size: 1234 },
+          },
+        },
+      ],
+    });
   });
 });

@@ -63,14 +63,17 @@ module "api" {
   # Built by `pnpm build` (apps/api); run it before planning.
   source_dir = "${path.root}/../../../apps/api/dist"
 
-  table_name    = module.database.table_name
-  table_arn     = module.database.table_arn
-  bucket_name   = module.storage.bucket_name
-  bucket_arn    = module.storage.bucket_arn
-  user_pool_id  = module.auth.user_pool_id
-  user_pool_arn = module.auth.user_pool_arn
-  issuer_url    = module.auth.issuer_url
-  audience      = [module.auth.web_client_id]
+  table_name   = module.database.table_name
+  table_arn    = module.database.table_arn
+  bucket_name  = module.storage.bucket_name
+  bucket_arn   = module.storage.bucket_arn
+  user_pool_id = module.auth.user_pool_id
+  # The daily sweep re-sends stuck photos (6.11, 13.6).
+  thumbnail_queue_arn = module.thumbnails.queue_arn
+  thumbnail_queue_url = module.thumbnails.queue_url
+  user_pool_arn       = module.auth.user_pool_arn
+  issuer_url          = module.auth.issuer_url
+  audience            = [module.auth.web_client_id]
 
   # FR-ACC-2, spec §13.2: 10 GB in prod.
   default_quota_bytes = 10 * 1024 * 1024 * 1024

@@ -28,6 +28,16 @@ variable "bucket_arn" {
   type        = string
 }
 
+variable "thumbnail_queue_arn" {
+  description = "Thumbnail queue ARN (thumbnails module): the daily sweep re-sends stuck photos to it (6.11, 13.6)."
+  type        = string
+}
+
+variable "thumbnail_queue_url" {
+  description = "Thumbnail queue URL (thumbnails module), for the same sweep."
+  type        = string
+}
+
 variable "user_pool_id" {
   description = "Cognito user pool (auth module): USER_POOL_ID, profile and email lookups."
   type        = string

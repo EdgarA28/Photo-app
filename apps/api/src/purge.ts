@@ -3,20 +3,29 @@
  * schedule (api infra module):
  * - trash purge (FR-DEL-3): deletes every trashed photo whose 15 days are up;
  * - stale-pending sweep (6.11): deletes uploads started over a day ago that never arrived, which
- *   releases the quota they reserved (5.6b).
- * Shares the repositories and storage with the API; needs only the table and the photo bucket.
+ *   releases the quota they reserved (5.6b), and sends the ones whose original did arrive back to
+ *   the thumbnail queue (13.6).
+ * Shares the repositories and storage with the API; needs the table, the photo bucket and the
+ * thumbnail queue.
  */
 import { S3Client } from "@aws-sdk/client-s3";
+import { SQSClient } from "@aws-sdk/client-sqs";
 import { loadPurgeConfig } from "./lib/config";
 import { log } from "./lib/log";
 import { sweepStalePending } from "./lib/pending";
 import { s3PhotoStorage } from "./lib/storage";
+import { sqsRetryProcessing } from "./lib/thumbnailRetry";
 import { purgeExpired } from "./lib/trash";
 import { createDocumentClient, createRepositories } from "./repo";
 
 const config = loadPurgeConfig();
 const repos = createRepositories({ client: createDocumentClient(), table: config.tableName });
 const storage = s3PhotoStorage(new S3Client({}), config.photoBucket);
+const retryProcessing = sqsRetryProcessing(
+  new SQSClient({}),
+  config.thumbnailQueueUrl,
+  config.photoBucket,
+);
 
 /** Room left at the end of the run for the work in flight and the final logs. */
 const SAFETY_MARGIN_MS = 30_000;
@@ -33,7 +42,7 @@ export async function handler(_event?: unknown, context?: Context): Promise<void
   const deadline = context
     ? Date.now() + context.getRemainingTimeInMillis() - SAFETY_MARGIN_MS
     : undefined;
-  const sweep = await sweepStalePending(repos, storage, new Date(), deadline);
+  const sweep = await sweepStalePending(repos, storage, new Date(), deadline, retryProcessing);
   log(sweep.failed || sweep.stuck ? "WARN" : "INFO", "Stale-pending sweep done", { ...sweep });
 
   // Failures are retried by the next daily run; a failed invocation makes them visible in metrics.

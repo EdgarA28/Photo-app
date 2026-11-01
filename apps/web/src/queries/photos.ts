@@ -58,6 +58,15 @@ export function shownPhotos<T extends { status: string }>(pages: readonly { item
 }
 
 /**
+ * Recent uploads of the loaded pages still processing: hidden (`shownPhotos`), so select mode
+ * can't pick them. A delete mentions them, or they look like they came back once ready (dev
+ * 2026-11-01: 6 of 530 were still processing when the rest was deleted, FR-DEL-1).
+ */
+export function processingCount(pages: readonly { items: Photo[] }[], now = Date.now()): number {
+  return pages.reduce((n, page) => n + page.items.filter((p) => isProcessing(p, now)).length, 0);
+}
+
+/**
  * Poll interval for the loaded pages: every `BATCH_POLL_MS` while uploads are running (13.1j),
  * else every `PROCESSING_POLL_MS` while a recent upload is still processing.
  */

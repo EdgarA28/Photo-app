@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.41 |
+| **Version** | 0.42 |
 | **Date** | 2026-11-01 |
 | **Owner** | Edgar |
 | **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5), videos (Phase 14) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
@@ -538,7 +538,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 
 | Aspect | Specification |
 |---|---|
-| Trigger | S3 `ObjectCreated:*` on prefix `users/` → SQS queue `photo-app-{env}-thumbnails` → Lambda event source mapping with a maximum concurrency (default 5), so upload bursts (bulk upload, imports) can't use up the account's Lambda concurrency and throttle the API (B-11, 13.6). Lambda event filters can't drop the thumb/preview events (no wildcard; all keys start with `users/`), so the handler skips them |
+| Trigger | S3 → EventBridge, rule for `Object Created` with key `users/*/originals/*` → SQS queue `photo-app-{env}-thumbnails` → Lambda event source mapping with a maximum concurrency (default 5), so upload bursts (bulk upload, imports) can't use up the account's Lambda concurrency and throttle the API (B-11, 13.6). Only originals: the thumbs/previews the function writes must not trigger it (Lambda's recursive loop detection drops such S3 → SQS → Lambda → same-bucket chains; S3 notification and Lambda event filters have no wildcard). The handler still skips anything that isn't an original |
 | Loop protection | Process only keys matching `users/{userId}/originals/{file}`; ignore everything else. IAM: no write access to `originals/` |
 | Libraries | Pillow, pillow-heif (HEIC/HEIF decoding) |
 | Steps | Download → decode → apply EXIF orientation → read `DateTimeOriginal`, width, height → generate sizes → strip all metadata → encode JPEG → upload → update DynamoDB item to `ready` |
@@ -550,7 +550,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 | Places | EXIF GPS → nearest town (population-weighted, ≤ 50 km) from a bundled GeoNames list (CC BY 4.0), with region and country; written in the `ready` transaction: coordinates and place on the photo, place list counts, place photo items (FR-SRCH-1) |
 | Album order | Once `ready`, the photo's album memberships get its final takenAt in `GSI1SK` (they were sorted by the upload time while pending) |
 | Replaced original | The item stores the processed bytes' ETag (`originalETag`). If the original is overwritten after processing (the upload POST is valid 15 min), the photo becomes `failed` and its thumb/preview are deleted, so recipients can't download other bytes than they were shown |
-| Errors — transient | The record is reported as a batch item failure → the message returns after the visibility timeout (6 × the Lambda timeout) → after 3 receives the SQS DLQ (14-day retention). |
+| Errors — transient | The record is reported as a batch item failure → the message returns after the visibility timeout (6 × the Lambda timeout) → after 5 receives the SQS DLQ (14-day retention). A photo still `pending` a day after its original arrived is sent to the queue again by the daily stale-pending sweep (6.11). |
 | Packaging | Native wheels for `manylinux` aarch64 (`pip install --platform manylinux2014_aarch64 --only-binary=:all:`) or Docker build |
 | Logs | Structured JSON; 30-day retention |
 | Date fallback (imports) | Imported originals carry `x-amz-meta-taken-at` (Google's `createTime`); used when EXIF has no `DateTimeOriginal`, before the upload time (FR-IMP-4) |
@@ -578,13 +578,13 @@ Second handler in `services/thumbnails` (`thumbnails.video_handler.handler`), so
 
 | Aspect | Specification |
 |---|---|
-| Trigger | S3 `ObjectCreated:*` on `users/` with suffix `.mp4` / `.mov` → SQS `photo-app-{env}-videos` → event source mapping, batch 1, **maximum concurrency 2**. The photo extensions go to the thumbnail queue (§10); S3 routes by suffix, one notification entry per extension |
+| Trigger | EventBridge rule for originals with suffix `.mp4` / `.mov` (`users/*/originals/*.mp4`, `*.mov`) → SQS `photo-app-{env}-videos` → event source mapping, batch 1, **maximum concurrency 2**. The thumbnail rule then excludes these suffixes (§10) |
 | Tools | ffprobe + ffmpeg (static arm64 build, LGPL preferred) in the package |
 | Reading | Through a short pre-signed GET URL, so ffprobe/ffmpeg read only what they need with range requests (a 2 GB file isn't downloaded); fallback: download to `/tmp` |
 | Metadata | Duration, width/height (rotation applied), codec, `creation_time` → takenAt (same fallback as photos), GPS (`com.apple.quicktime.location.ISO6709` / `location`) → place (FR-SRCH-1) |
 | Poster | Frame at ~1 s (the first frame for shorter clips) → the same thumb (400 px, q75) and preview (1600 px, q82) JPEGs as photos |
 | Done | The photos' `ready` transaction (§10) plus `mediaType`, `durationMs`, `videoCodec`, `playable` |
-| Errors | Not a video / unreadable / no video stream → `failed`, no retry; transient → batch item failure → DLQ after 3 receives (14 days) |
+| Errors | Not a video / unreadable / no video stream → `failed`, no retry; transient → batch item failure → DLQ after 5 receives (14 days) |
 | Limits | Memory ~3008 MB, timeout ~5 min, visibility timeout 6 × the timeout; skip sources over `MAX_VIDEO_BYTES` |
 | Logs | Structured JSON; 30-day retention |
 
@@ -895,6 +895,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.36 | 2026-11-01 | Continue an interrupted large batch by picking it again (13.1f, §12.4) |
 | 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.38 | 2026-11-01 | Less gallery polling while uploads run: 15 s instead of 3 s, refreshes during a batch only mark lists stale (13.1j, §12.4) |
+| 0.42 | 2026-11-01 | §10: trigger via EventBridge, originals only (recursive loop detection dropped invocations); §10.2 video trigger likewise; DLQ after 5 receives (was 3); the stale-pending sweep re-sends photos stuck with their original in S3 to the thumbnail queue (dev: the queue trigger lost 19 messages) |
 | 0.41 | 2026-11-01 | Videos specified (Phase 14, decisions of 14.0 = the proposed defaults): FR-VID-1–10 (§6.10), scope (§2), keys + Photo attributes (§8), `/videos/*` multipart routes (§9), video service (§10.2), upload queue + viewer (§12.4), modules + quota defaults (§13), cost (§16), B-7 (§17) |
 | 0.40 | 2026-11-01 | Thumbnail queue (13.6) built and in dev: §10 trigger/retries describe the current state, note that event filtering can't drop derived-object events; B-11 done (§17) |
 | 0.39 | 2026-11-01 | Mobile data warning for picks ≥ 200 MB, upload-page note while uploading over mobile data, phone hint that big imports are a computer's job (13.1l, §12.4) |

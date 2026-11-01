@@ -555,6 +555,41 @@ describe("deleting selected photos (FR-DEL-1/2)", () => {
     expect(tiles().map((t) => t.getAttribute("aria-label"))).toEqual(["IMG_1.jpg"]);
   });
 
+  it("says that uploads still processing aren't included (dev, 2026-11-01)", async () => {
+    const processing = (n: number) =>
+      testPhoto(n, {
+        status: "pending",
+        width: null,
+        height: null,
+        thumbUrl: null,
+        uploadedAt: new Date().toISOString(),
+      });
+    // An abandoned upload (pending for long) is not "processing" and isn't mentioned.
+    const abandoned = testPhoto(9, {
+      status: "pending",
+      width: null,
+      height: null,
+      thumbUrl: null,
+      uploadedAt: new Date(Date.now() - PROCESSING_WINDOW_MS - 1000).toISOString(),
+    });
+    const { api } = setup({
+      "GET /photos": {
+        items: [testPhoto(0), processing(5), processing(6), abandoned],
+        nextCursor: null,
+      },
+      [`DELETE /photos/${testId(0)}`]: undefined,
+    });
+    await renderAt("/gallery", { api });
+    const dialog = await selectAndConfirm(["IMG_0.jpg"], "Move this photo to the trash?");
+    expect(dialog.textContent).toContain(
+      "2 photos still processing aren't included and will appear in the gallery when ready.",
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Move to trash" }));
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "Moved 1 photo to the trash. 2 photos still processing aren't included and will appear in the gallery when ready.",
+    );
+  });
+
   it("keeps the failed photos selected and retries only those", async () => {
     let fail = true;
     const { api, request } = setup({

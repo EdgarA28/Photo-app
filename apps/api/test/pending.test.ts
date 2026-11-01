@@ -127,13 +127,38 @@ describe("sweepStalePending (6.11)", () => {
     expect(await allMarkers()).toHaveLength(0);
   });
 
-  test("still pending although the original arrived: left alone, marker kept", async () => {
+  test("still pending although the original arrived: processing retried, marker kept", async () => {
     const user = newUserId();
     const photo = await pending(user, ago(2 * 24 * HOUR_MS));
     t.objects.add(photo.originalKey);
+    const retried: string[] = [];
+    const retry = async (record: { photoId: string }) => void retried.push(record.photoId);
 
-    expect(await sweep()).toEqual({ removed: 0, stuck: 1, cleared: 0, failed: 0, deferred: 0 });
+    expect(await sweepStalePending(t.repos, t.storage, NOW, undefined, retry)).toEqual({
+      removed: 0,
+      stuck: 1,
+      cleared: 0,
+      failed: 0,
+      deferred: 0,
+    });
+    expect(retried).toEqual([photo.photoId]);
     expect(await t.repos.photos.get(user, photo.photoId)).toMatchObject({ status: "pending" });
+    expect(await marker(photo)).toBeDefined();
+    // Without a retry it is only reported.
+    expect(await sweep()).toMatchObject({ stuck: 1 });
+  });
+
+  test("a failed retry counts as failed, the marker stays for the next run (13.6)", async () => {
+    const user = newUserId();
+    const photo = await pending(user, ago(2 * 24 * HOUR_MS));
+    t.objects.add(photo.originalKey);
+    const retry = async () => {
+      throw new Error("SQS down");
+    };
+    expect(await sweepStalePending(t.repos, t.storage, NOW, undefined, retry)).toMatchObject({
+      stuck: 0,
+      failed: 1,
+    });
     expect(await marker(photo)).toBeDefined();
   });
 

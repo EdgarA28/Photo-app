@@ -37,15 +37,17 @@ resource "aws_sqs_queue" "thumbnails" {
   message_retention_seconds  = 4 * 24 * 60 * 60
   sqs_managed_sse_enabled    = true
 
-  # Transient errors: the message comes back after the visibility timeout; after 3 receives it
-  # moves to the DLQ.
+  # Transient errors: the message comes back after the visibility timeout; after 5 receives it
+  # moves to the DLQ. 5 is AWS's minimum for Lambda consumers: a receive can also be lost without
+  # any invocation (dev 2026-11-01: 19 messages received 3× by the event source mapping, never
+  # passed to the function, so 2 photos stayed pending; the daily sweep now retries those, 6.11).
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.dlq.arn
-    maxReceiveCount     = 3
+    maxReceiveCount     = 5
   })
 }
 
-# Messages that failed 3 times (the S3 event as sent). 14 days (longer than the queue's 4, as
+# Messages that failed 5 times (the event as sent). 14 days (longer than the queue's 4, as
 # SQS keeps the original enqueue time) to inspect or redrive to the queue.
 resource "aws_sqs_queue" "dlq" {
   name                      = "${local.name}-dlq"
@@ -53,22 +55,23 @@ resource "aws_sqs_queue" "dlq" {
   sqs_managed_sse_enabled   = true
 }
 
-# Only this account's photo bucket may send (confused-deputy protection).
+# Only the originals rule of this account may send (confused-deputy protection). The daily sweep
+# (api module) sends with its own role's identity policy, same account.
 data "aws_iam_policy_document" "queue" {
   statement {
-    sid       = "PhotoBucket"
+    sid       = "OriginalsRule"
     actions   = ["sqs:SendMessage"]
     resources = [aws_sqs_queue.thumbnails.arn]
 
     principals {
       type        = "Service"
-      identifiers = ["s3.amazonaws.com"]
+      identifiers = ["events.amazonaws.com"]
     }
 
     condition {
       test     = "ArnEquals"
       variable = "aws:SourceArn"
-      values   = [var.bucket_arn]
+      values   = [aws_cloudwatch_event_rule.originals.arn]
     }
 
     condition {
@@ -185,20 +188,39 @@ resource "aws_lambda_function" "thumbnails" {
 
 data "aws_caller_identity" "current" {}
 
-# Spec §10: every object created under users/. S3 filters can't express users/*/originals/, and
-# Lambda event filters can't either (prefix/suffix only, and all keys start with users/), so the
-# handler skips thumbs, previews and anything else (a few ms each inside a batch).
+# Spec §10: only originals (`users/*/originals/*`) reach the queue. S3 notification filters and
+# Lambda event filters have prefix/suffix only (every key starts with users/), but EventBridge
+# rules have wildcards. Until 2026-11-01 the bucket notified the queue directly with every object
+# under users/, so the thumbs/previews this function writes came back to it: Lambda's recursive
+# loop detection (S3 → SQS → Lambda → same bucket) then dropped invocations
+# (`RecursiveInvocationsDropped`), and photos stayed pending. Now the function's own writes never
+# trigger it; the handler still skips anything that isn't an original.
 resource "aws_s3_bucket_notification" "photos" {
-  bucket = var.bucket_name
+  bucket      = var.bucket_name
+  eventbridge = true
 
-  queue {
-    queue_arn     = aws_sqs_queue.thumbnails.arn
-    events        = ["s3:ObjectCreated:*"]
-    filter_prefix = "users/"
-  }
+  # The rule and its target exist before S3 switches over, so no event lands on an empty bus.
+  depends_on = [aws_cloudwatch_event_target.originals, aws_sqs_queue_policy.thumbnails]
+}
 
-  # S3 checks it may send (with a test event) when the configuration is saved.
-  depends_on = [aws_sqs_queue_policy.thumbnails]
+resource "aws_cloudwatch_event_rule" "originals" {
+  name        = "${local.name}-originals"
+  description = "Originals created in the photo bucket → thumbnail queue (spec §10)"
+  event_pattern = jsonencode({
+    source        = ["aws.s3"]
+    "detail-type" = ["Object Created"]
+    detail = {
+      bucket = { name = [var.bucket_name] }
+      object = { key = [{ wildcard = "users/*/originals/*" }] }
+    }
+  })
+}
+
+# The whole event as the message body (handler: `source = aws.s3`). EventBridge retries delivery
+# for up to 24 h by default; a photo whose event is lost anyway is re-sent by the daily sweep.
+resource "aws_cloudwatch_event_target" "originals" {
+  rule = aws_cloudwatch_event_rule.originals.name
+  arn  = aws_sqs_queue.thumbnails.arn
 }
 
 resource "aws_lambda_event_source_mapping" "thumbnails" {
@@ -212,5 +234,11 @@ resource "aws_lambda_event_source_mapping" "thumbnails" {
 
   scaling_config {
     maximum_concurrency = var.maximum_concurrency
+  }
+
+  # Polled / filtered / invoked / failed-invoke / dropped event counts (AWS/Lambda, by ESM UUID):
+  # shows whether messages are received but never handed to the function (dev 2026-11-01).
+  metrics_config {
+    metrics = ["EventCount"]
   }
 }

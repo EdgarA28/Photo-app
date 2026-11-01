@@ -92,8 +92,8 @@ run "queue_then_dlq" {
   }
 
   assert {
-    condition     = jsondecode(aws_sqs_queue.thumbnails.redrive_policy).maxReceiveCount == 3
-    error_message = "After 3 receives a message moves to the DLQ (spec §10)."
+    condition     = jsondecode(aws_sqs_queue.thumbnails.redrive_policy).maxReceiveCount == 5
+    error_message = "After 5 receives a message moves to the DLQ (spec §10, AWS's minimum for Lambda)."
   }
 
   assert {
@@ -102,28 +102,43 @@ run "queue_then_dlq" {
   }
 }
 
-run "triggered_by_uploads_under_users" {
+run "triggered_by_originals_only" {
   command = plan
 
   assert {
     condition = (
-      one(aws_s3_bucket_notification.photos.queue).filter_prefix == "users/" &&
-      one(aws_s3_bucket_notification.photos.queue).events == toset(["s3:ObjectCreated:*"]) &&
+      aws_s3_bucket_notification.photos.eventbridge == true &&
+      length(aws_s3_bucket_notification.photos.queue) == 0 &&
       length(aws_s3_bucket_notification.photos.lambda_function) == 0
     )
-    error_message = "S3 ObjectCreated:* on prefix users/ goes to the queue, not the Lambda (spec §10, 13.6)."
+    error_message = "The bucket sends its events to EventBridge only, not straight to the queue or the Lambda (spec §10)."
+  }
+
+  assert {
+    condition = jsondecode(aws_cloudwatch_event_rule.originals.event_pattern) == {
+      source        = ["aws.s3"]
+      "detail-type" = ["Object Created"]
+      detail = {
+        bucket = { name = ["photo-app-photos-test-123456789012"] }
+        object = { key = [{ wildcard = "users/*/originals/*" }] }
+      }
+    }
+    error_message = "Only originals created in the photo bucket match: the function's own thumbs/previews never trigger it (no recursive loop, dev 2026-11-01)."
+  }
+
+  assert {
+    condition     = aws_cloudwatch_event_target.originals.rule == "photo-app-test-thumbnails-originals"
+    error_message = "The originals rule targets the thumbnail queue."
   }
 
   assert {
     condition = (
       data.aws_iam_policy_document.queue.statement[0].actions == toset(["sqs:SendMessage"]) &&
-      one([for p in data.aws_iam_policy_document.queue.statement[0].principals : p.identifiers]) == toset(["s3.amazonaws.com"]) &&
-      toset([for c in data.aws_iam_policy_document.queue.statement[0].condition : "${c.variable}=${one(c.values)}"]) == toset([
-        "aws:SourceArn=arn:aws:s3:::photo-app-photos-test-123456789012",
-        "aws:SourceAccount=123456789012",
-      ])
+      one([for p in data.aws_iam_policy_document.queue.statement[0].principals : p.identifiers]) == toset(["events.amazonaws.com"]) &&
+      toset([for c in data.aws_iam_policy_document.queue.statement[0].condition : c.variable]) == toset(["aws:SourceArn", "aws:SourceAccount"]) &&
+      length(data.aws_iam_policy_document.queue.statement) == 1
     )
-    error_message = "Only the photo bucket in this account may send to the queue."
+    error_message = "Only EventBridge (the originals rule, this account) may send to the queue."
   }
 }
 
@@ -137,6 +152,11 @@ run "event_source_mapping" {
       one(aws_lambda_event_source_mapping.thumbnails.scaling_config).maximum_concurrency == 5
     )
     error_message = "Batches of 5, per-message failures, at most 5 Lambdas at once by default (spec §10, B-11)."
+  }
+
+  assert {
+    condition     = one(aws_lambda_event_source_mapping.thumbnails.metrics_config).metrics == toset(["EventCount"])
+    error_message = "Event count metrics on, to see messages received but never invoked (dev 2026-11-01)."
   }
 }
 

@@ -674,6 +674,77 @@ def test_sqs_message_is_processed(aws: tuple[Any, Any], jpeg_plain: bytes) -> No
     assert exists(s3, PREVIEW)
 
 
+def eventbridge_event(key: str, size: int, etag: str | None = None) -> dict[str, Any]:
+    """What the originals rule puts on the queue: the whole EventBridge event (spec §10)."""
+    return {
+        "version": "0",
+        "id": "6a0dd55e-8c7e-9836-e064-859b90c7ad7f",
+        "detail-type": "Object Created",
+        "source": "aws.s3",
+        "account": "123456789012",
+        "time": "2026-11-01T22:21:13Z",
+        "region": "us-east-1",
+        "resources": [f"arn:aws:s3:::{BUCKET}"],
+        "detail": {
+            "version": "0",
+            "bucket": {"name": BUCKET},
+            "object": {"key": key, "size": size, "etag": etag, "sequencer": "00641C71589DC414A8"},
+            "reason": "PostObject",
+        },
+    }
+
+
+def test_sqs_eventbridge_event_is_processed(aws: tuple[Any, Any], jpeg_plain: bytes) -> None:
+    s3, dynamodb = aws
+    put_pending(dynamodb, declared=len(jpeg_plain))
+    etag = s3.put_object(Bucket=BUCKET, Key=ORIGINAL, Body=jpeg_plain)["ETag"].strip('"')
+
+    result = handler_module.handler(sqs_event(eventbridge_event(ORIGINAL, len(jpeg_plain), etag)))
+
+    assert result == {"batchItemFailures": []}
+    item = get(dynamodb, PHOTO_KEY)
+    assert item is not None
+    assert item["status"]["S"] == "ready"
+    assert item["originalETag"]["S"] == etag
+    assert exists(s3, THUMB)
+    # A duplicate delivery is skipped (same ETag).
+    again = handler_module.handler(sqs_event(eventbridge_event(ORIGINAL, len(jpeg_plain), etag)))
+    assert again == {"batchItemFailures": []}
+
+
+def test_sqs_eventbridge_derived_object_is_skipped(aws: tuple[Any, Any]) -> None:
+    # The rule only matches originals; the handler still guards against anything else.
+    result = handler_module.handler(sqs_event(eventbridge_event(THUMB, 10)))
+    assert result == {"batchItemFailures": []}
+
+
+def test_sqs_sweep_retry_message_is_processed(aws: tuple[Any, Any], jpeg_plain: bytes) -> None:
+    # The daily sweep re-sends stuck photos (apps/api lib/thumbnailRetry.ts, 6.11/13.6): the S3
+    # event shape without eTag, size from the item.
+    s3, dynamodb = aws
+    put_pending(dynamodb, declared=len(jpeg_plain))
+    s3.put_object(Bucket=BUCKET, Key=ORIGINAL, Body=jpeg_plain)
+    retry = {
+        "Records": [
+            {
+                "eventSource": "aws:s3",
+                "eventName": "ObjectCreated:Retry",
+                "eventTime": "2026-11-01T20:08:09.409Z",
+                "s3": {
+                    "bucket": {"name": BUCKET},
+                    "object": {"key": ORIGINAL, "size": len(jpeg_plain)},
+                },
+            }
+        ]
+    }
+
+    assert handler_module.handler(sqs_event(retry)) == {"batchItemFailures": []}
+    item = get(dynamodb, PHOTO_KEY)
+    assert item is not None
+    assert item["status"]["S"] == "ready"
+    assert item["originalETag"]["S"]
+
+
 def test_sqs_derived_objects_and_test_event_are_ignored(aws: tuple[Any, Any]) -> None:
     # Thumbs/previews come through the queue too (S3 can't filter them); S3's test event when the
     # notification is saved has no Records.

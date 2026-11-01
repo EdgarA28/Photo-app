@@ -38,7 +38,7 @@ import { useSelection } from "@/gallery/useSelection";
 import { ShareLinkDialog } from "@/links/ShareLinkDialog";
 import { albumsQuery, useAddToAlbum } from "@/queries/albums";
 import { sharedAlbumsQuery } from "@/queries/shares";
-import { galleryQuery, shownPhotos, useDeletePhotos } from "@/queries/photos";
+import { galleryQuery, processingCount, shownPhotos, useDeletePhotos } from "@/queries/photos";
 import { placesQuery } from "@/queries/places";
 import { GalleryUploads } from "@/upload/GalleryUploads";
 import { useUploads } from "@/upload/useUploads";
@@ -68,6 +68,7 @@ function Gallery() {
   const { data, hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } =
     useSuspenseInfiniteQuery(galleryQuery(api, { album, place, sort }));
   const photos = useMemo(() => shownPhotos(data.pages), [data]);
+  const processing = useMemo(() => processingCount(data.pages), [data]);
   // Not-yet-uploaded files (FR-UP-6); uploads go to all photos, not to the album or place viewed.
   const entries = useUploads();
   const uploads = useMemo(
@@ -161,6 +162,7 @@ function Gallery() {
           <SelectionActions
             photoIds={selection.ids}
             own={own}
+            processing={processing}
             onCancel={selection.stop}
             onDeleted={selection.drop}
             onDone={(message) => {
@@ -175,6 +177,10 @@ function Gallery() {
 
 const photosText = (count: number) => (count === 1 ? "1 photo" : `${count} photos`);
 
+/** Uploads still processing aren't shown or picked; they appear (not deleted) once ready. */
+const stillProcessing = (count: number) =>
+  `${photosText(count)} still processing ${count === 1 ? "isn't" : "aren't"} included and will appear in the gallery when ready.`;
+
 /**
  * Select mode in the gallery (8.11): add the picked photos to an album (FR-ALB-2), delete them
  * (FR-DEL-1/2) or make a public link to them (FR-SHR-8); the last two for own photos only.
@@ -182,12 +188,15 @@ const photosText = (count: number) => (count === 1 ? "1 photo" : `${count} photo
 function SelectionActions({
   photoIds,
   own,
+  processing,
   onCancel,
   onDeleted,
   onDone,
 }: {
   photoIds: string[];
   own: boolean;
+  /** Hidden uploads still processing, which can't be picked (`processingCount`). */
+  processing: number;
   onCancel: () => void;
   /** Some photos were deleted, others failed: those stay picked for another try. */
   onDeleted: (photoIds: string[]) => void;
@@ -196,7 +205,14 @@ function SelectionActions({
   const [choosing, setChoosing] = useState(false);
   return (
     <SelectionBar count={photoIds.length} onCancel={onCancel}>
-      {own && <DeleteSelected photoIds={photoIds} onDeleted={onDeleted} onDone={onDone} />}
+      {own && (
+        <DeleteSelected
+          photoIds={photoIds}
+          processing={processing}
+          onDeleted={onDeleted}
+          onDone={onDone}
+        />
+      )}
       {own && (
         <ShareLinkDialog
           photoIds={photoIds}
@@ -246,10 +262,12 @@ function SelectionActions({
  */
 function DeleteSelected({
   photoIds,
+  processing,
   onDeleted,
   onDone,
 }: {
   photoIds: string[];
+  processing: number;
   onDeleted: (photoIds: string[]) => void;
   onDone: (message: ReactNode) => void;
 }) {
@@ -290,6 +308,7 @@ function DeleteSelected({
             {photoIds.length === 1 ? "It" : "They"} will be removed from your library and from all
             albums, and deleted for good after {TRASH_RETENTION_DAYS} days. Until then you can
             restore {photoIds.length === 1 ? "it" : "them"} from the trash.
+            {processing > 0 && <> {stillProcessing(processing)}</>}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {(remove.isError || partial) && (
@@ -323,7 +342,7 @@ function DeleteSelected({
                       >
                         trash
                       </Link>
-                      .
+                      .{processing > 0 && <> {stillProcessing(processing)}</>}
                     </>,
                   );
                 },

@@ -4,8 +4,13 @@ output "function_name" {
 }
 
 output "dlq_url" {
-  description = "Messages that failed 3 receives (NFR-OPS-1); inspect or redrive to the queue from here."
+  description = "Messages that failed 5 receives (NFR-OPS-1); inspect or redrive to the queue from here."
   value       = aws_sqs_queue.dlq.url
+}
+
+output "queue_arn" {
+  description = "Thumbnail queue ARN; the daily sweep may send stuck photos to it (6.11)."
+  value       = aws_sqs_queue.thumbnails.arn
 }
 
 output "queue_url" {

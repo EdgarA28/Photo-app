@@ -1,10 +1,14 @@
 """Lambda entry point `thumbnails.handler.handler` (spec §10).
 
-Triggered by the SQS queue `photo-app-{env}-thumbnails` (13.6), which receives the S3
-`ObjectCreated:*` events on prefix `users/`. Each message body is one S3 event. Transient errors
-put that message in `batchItemFailures` (the mapping uses `ReportBatchItemFailures`): it comes
-back after the visibility timeout, and after 3 receives SQS moves it to the DLQ. Permanent errors
-are handled by the processor (`failed`, success).
+Triggered by the SQS queue `photo-app-{env}-thumbnails` (13.6). Its messages are:
+- EventBridge `Object Created` events from the photo bucket, for originals only (the rule
+  `photo-app-{env}-thumbnails-originals` matches `users/*/originals/*`), so the thumbs/previews
+  written here never come back (Lambda's recursive loop detection dropped them, dev 2026-11-01);
+- S3 notification events (`Records`): the daily sweep's retries (apps/api `thumbnailRetry.ts`)
+  and messages queued before the switch to EventBridge.
+Transient errors put that message in `batchItemFailures` (the mapping uses
+`ReportBatchItemFailures`): it comes back after the visibility timeout, and after 5 receives SQS
+moves it to the DLQ. Permanent errors are handled by the processor (`failed`, success).
 
 Direct S3 events (the trigger before 13.6) are still accepted, so events sent just before the
 switch don't fail: there a transient error raises, and Lambda's async retries apply.
@@ -60,8 +64,8 @@ def _handle_sqs(messages: list[dict[str, Any]], context: Any) -> dict[str, Any]:
             break
         try:
             body = json.loads(message["body"])
-            # S3 sends `s3:TestEvent` (no Records) when the notification is saved.
-            for record in body.get("Records", []):
+            # S3 sends `s3:TestEvent` (no Records) when a notification is saved.
+            for record in _s3_records(body):
                 _process_s3_record(record)
         except Exception:
             # Idempotent per photo, so retrying a message whose first record succeeded is safe.
@@ -75,6 +79,29 @@ def _handle_sqs(messages: list[dict[str, Any]], context: Any) -> dict[str, Any]:
             failures.append({"itemIdentifier": message["messageId"]})
     # Only this key: anything else in the response would fail the whole batch.
     return {"batchItemFailures": failures}
+
+
+def _s3_records(body: dict[str, Any]) -> list[dict[str, Any]]:
+    """The S3 records of a message body, an EventBridge event turned into the notification shape."""
+    if body.get("source") == "aws.s3" and isinstance(body.get("detail"), dict):
+        detail = body["detail"]
+        obj = detail.get("object", {})
+        return [
+            {
+                "eventTime": body.get("time"),
+                "s3": {
+                    "bucket": {"name": detail["bucket"]["name"]},
+                    # Plain key in EventBridge; unquote_plus below doesn't change ours (ASCII,
+                    # no `+` or `%`, §8.1).
+                    "object": {
+                        "key": obj["key"],
+                        "size": obj.get("size", 0),
+                        "eTag": obj.get("etag"),
+                    },
+                },
+            }
+        ]
+    return body.get("Records", [])
 
 
 def _process_s3_record(record: dict[str, Any]) -> dict[str, str | None]:
