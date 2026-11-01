@@ -9,7 +9,7 @@ import { formatBytes } from "@/lib/format";
 import { MAX_SHARED_BYTES, MAX_SHARED_FILES } from "@/pwa/shareTarget";
 import { meQuery } from "@/queries/me";
 import { SpaceWarning, StorageFullBanner } from "@/upload/QuotaNotices";
-import type { AddResult } from "@/upload/queue";
+import type { AddOptions, AddResult } from "@/upload/queue";
 import { UploadList } from "@/upload/UploadList";
 import type { WaitingPhoto } from "@/upload/shareInbox";
 import { SharedPhotos } from "@/upload/SharedPhotos";
@@ -54,10 +54,10 @@ function Upload() {
     (entry) => entry.status === "failed" && entry.errorCode === "QUOTA_EXCEEDED",
   ).length;
 
-  async function add(files: File[]) {
+  async function add(files: File[], options?: AddOptions) {
     // Space left after what is stored and what is already waiting to upload.
     const waiting = entries.filter(isActive).reduce((sum, entry) => sum + entry.sizeBytes, 0);
-    const result = await queue.add(files);
+    const result = await queue.add(files, options);
     setRejected(result.rejected);
     const left = me ? Math.max(me.usage.quotaBytes - me.usage.bytesUsed - waiting, 0) : Infinity;
     setSpace(result.addedBytes > left ? { needed: result.addedBytes, left } : null);
@@ -112,7 +112,7 @@ function Upload() {
           onDiscard={() => void decideShared(false)}
         />
       )}
-      <UploadPicker onFiles={(files) => void add(files)} />
+      <UploadPicker onFiles={(files, options) => void add(files, options)} />
       {storageFull > 0 && (
         <StorageFullBanner count={storageFull} usage={me?.usage} onRetry={retryAll} />
       )}

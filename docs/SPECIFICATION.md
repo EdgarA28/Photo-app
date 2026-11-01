@@ -247,7 +247,7 @@ IDs are stable — reference them in issues, PRs and tests.
 
 | ID | Requirement |
 |---|---|
-| FR-UP-1 | Users can select one or many photos (file picker, drag & drop, or camera on mobile). |
+| FR-UP-1 | Users can select one or many photos (file picker, drag & drop, or camera on mobile), and on computers a whole folder with its subfolders (folder picker or dropping a folder). |
 | FR-UP-2 | Supported formats: JPEG, PNG, HEIC/HEIF, WebP. |
 | FR-UP-3 | Maximum file size: 50 MB per photo. |
 | FR-UP-4 | Uploads go directly from the client to S3; photo bytes never pass through the API. |
@@ -846,7 +846,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
-| 0.31 | 2026-11-01 | Large batches (13.1c): FR-UP-5 exception (in the picking tab only, survives connection loss, not a tab close), phone limit 1 GB per pick (§12.4) |
+| 0.31 | 2026-11-01 | Folders (13.1a): FR-UP-1. Large batches (13.1c): FR-UP-5 exception (in the picking tab only, survives connection loss, not a tab close), phone limit 1 GB per pick (§12.4) |
 | 0.30 | 2026-11-01 | SQS queue in front of the thumbnail Lambda with a maximum concurrency: §10 trigger and transient errors, B-11 planned (13.6) (§17). Upload queue at scale: coalesced gallery refresh, bytes stored once, capped/virtualized upload UI (§12.4) |
 | 0.29 | 2026-11-01 | Gallery: album picker removed, `?album=` redirects to the album page (§12.1). Shared photo locations: FR-SHR-12, `showLocations` on Album (§8.2), `PATCH /albums/{id}` and album photo lists (§9), album page (§12.1) |
 | 0.28 | 2026-10-31 | Collaborative albums: FR-SHR-11 (FR-SHR-4 note), `membersCanAdd` + `coverOwnerId` on Album, membership `ownerId` = photo owner + `albumOwnerId` (§8.2); album routes for members, `POST /albums/{albumId}/save` (§9); album page (§12.1) |

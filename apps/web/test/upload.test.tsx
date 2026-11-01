@@ -68,12 +68,20 @@ describe("upload page (FR-UP-1/5/6)", () => {
     const { api, queue } = setup();
     await renderAt("/upload", { api, uploads: queue });
 
-    const zone = screen.getByText(/Drag photos here/).closest("[class*='border-dashed']")!;
+    const zone = screen
+      .getByText(/Drag photos or a folder here/)
+      .closest("[class*='border-dashed']")!;
     fireEvent.drop(zone, { dataTransfer: { files: [testFile("dropped.jpg")], types: ["Files"] } });
     pick([testFile("camera.jpg")], "upload-camera");
 
     await waitFor(() =>
-      expect(queue.getSnapshot().map((e) => e.fileName)).toEqual(["dropped.jpg", "camera.jpg"]),
+      // A drop is handed over after the (folder) check, so it may come second.
+      expect(
+        queue
+          .getSnapshot()
+          .map((e) => e.fileName)
+          .sort(),
+      ).toEqual(["camera.jpg", "dropped.jpg"]),
     );
   });
 
@@ -432,5 +440,69 @@ describe("big batches on screen (13.1-0)", () => {
     const event = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("uploads a picked folder as a large batch (13.1a)", async () => {
+    const { api, queue, store } = setup();
+    await renderAt("/upload", { api, uploads: queue });
+    expect(screen.getByRole("button", { name: "Choose folder" })).toBeTruthy();
+    expect(screen.getByTestId("upload-folder").hasAttribute("webkitdirectory")).toBe(true);
+    const inFolder = (path: string) => {
+      const file = testFile(path.split("/").at(-1)!);
+      Object.defineProperty(file, "webkitRelativePath", { value: path });
+      return file;
+    };
+    pick([inFolder("Trip/IMG_1.jpg"), inFolder("Trip/.DS_Store")], "upload-folder");
+
+    expect(await screen.findByText(/Large upload: keep this tab open/)).toBeTruthy();
+    expect(queue.getSnapshot().map((entry) => [entry.fileName, entry.memoryOnly])).toEqual([
+      ["IMG_1.jpg", true],
+    ]);
+    expect(store.items.size).toBe(0);
+  });
+
+  it("walks a dropped folder (13.1a)", async () => {
+    const { api, queue } = setup();
+    await renderAt("/upload", { api, uploads: queue });
+    const photo = testFile("IMG_1.jpg");
+    const folder = {
+      name: "Trip",
+      isFile: false,
+      isDirectory: true,
+      createReader: () => {
+        let done = false;
+        return {
+          readEntries: (resolve: (entries: unknown[]) => void) => {
+            const batch = done
+              ? []
+              : [
+                  {
+                    name: photo.name,
+                    isFile: true,
+                    isDirectory: false,
+                    file: (r: (f: File) => void) => r(photo),
+                  },
+                ];
+            done = true;
+            resolve(batch);
+          },
+        };
+      },
+    };
+    const zone = screen
+      .getByText(/Drag photos or a folder here/)
+      .closest("[class*='border-dashed']")!;
+    fireEvent.drop(zone, {
+      dataTransfer: {
+        files: [],
+        types: ["Files"],
+        items: [{ kind: "file", webkitGetAsEntry: () => folder }],
+      },
+    });
+
+    await waitFor(() =>
+      expect(queue.getSnapshot().map((entry) => entry.fileName)).toEqual(["IMG_1.jpg"]),
+    );
+    expect(queue.getSnapshot()[0]!.memoryOnly).toBe(true);
   });
 });
