@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Version** | 0.39 |
+| **Version** | 0.40 |
 | **Date** | 2026-11-01 |
 | **Owner** | Edgar |
-| **Status** | Draft — implemented and running in dev except the planned features (13.5 Google Photos import, 13.6 thumbnail queue) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
+| **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
 
 > Living document. New features go into [§17 Feature backlog](#17-feature-backlog) first, then get a full spec section once they are planned. Record every change in [§19 Changelog](#19-changelog).
 
@@ -513,7 +513,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 
 | Aspect | Specification |
 |---|---|
-| Trigger | S3 `ObjectCreated:*` on prefix `users/` → SQS queue `photo-app-{env}-thumbnails` → Lambda event source mapping with a maximum concurrency (default 5), so upload bursts (bulk upload, imports) can't use up the account's Lambda concurrency and throttle the API (B-11, planned 13.6; today S3 invokes the Lambda directly) |
+| Trigger | S3 `ObjectCreated:*` on prefix `users/` → SQS queue `photo-app-{env}-thumbnails` → Lambda event source mapping with a maximum concurrency (default 5), so upload bursts (bulk upload, imports) can't use up the account's Lambda concurrency and throttle the API (B-11, 13.6). Lambda event filters can't drop the thumb/preview events (no wildcard; all keys start with `users/`), so the handler skips them |
 | Loop protection | Process only keys matching `users/{userId}/originals/{file}`; ignore everything else. IAM: no write access to `originals/` |
 | Libraries | Pillow, pillow-heif (HEIC/HEIF decoding) |
 | Steps | Download → decode → apply EXIF orientation → read `DateTimeOriginal`, width, height → generate sizes → strip all metadata → encode JPEG → upload → update DynamoDB item to `ready` |
@@ -525,7 +525,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 | Places | EXIF GPS → nearest town (population-weighted, ≤ 50 km) from a bundled GeoNames list (CC BY 4.0), with region and country; written in the `ready` transaction: coordinates and place on the photo, place list counts, place photo items (FR-SRCH-1) |
 | Album order | Once `ready`, the photo's album memberships get its final takenAt in `GSI1SK` (they were sorted by the upload time while pending) |
 | Replaced original | The item stores the processed bytes' ETag (`originalETag`). If the original is overwritten after processing (the upload POST is valid 15 min), the photo becomes `failed` and its thumb/preview are deleted, so recipients can't download other bytes than they were shown |
-| Errors — transient | The record is reported as a batch item failure → the message returns after the visibility timeout (6 × the Lambda timeout) → after 3 receives the SQS DLQ (14-day retention). (Until 13.6: raise → Lambda async retries (2×) → DLQ) |
+| Errors — transient | The record is reported as a batch item failure → the message returns after the visibility timeout (6 × the Lambda timeout) → after 3 receives the SQS DLQ (14-day retention). |
 | Packaging | Native wheels for `manylinux` aarch64 (`pip install --platform manylinux2014_aarch64 --only-binary=:all:`) or Docker build |
 | Logs | Structured JSON; 30-day retention |
 | Date fallback (imports) | Imported originals carry `x-amz-meta-taken-at` (Google's `createTime`); used when EXIF has no `DateTimeOriginal`, before the upload time (FR-IMP-4) |
@@ -823,7 +823,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | B-7 | Video support | Needs transcoding (e.g. MediaConvert) and different storage/egress planning | Idea |
 | B-8 | Search & metadata | Date ranges, tags (places and map done: §6.8); location off switch | Idea |
 | B-9 | On-the-fly image resizing | Only if many sizes are needed; current fixed sizes are simpler | Idea |
-| B-11 | SQS queue in front of the thumbnail Lambda | S3 → SQS → thumbnail Lambda with an event source maximum concurrency (e.g. 5), so big upload bursts can't use up the account's Lambda capacity and throttle the API. Only if raising the concurrency quota (12.3a) and reserved concurrency on the thumbnail Lambda aren't enough. Costs: new queue (redrives to the existing DLQ), S3 notification target changes, handler reads SQS records | Planned (13.6, §10) |
+| B-11 | SQS queue in front of the thumbnail Lambda | S3 → SQS → thumbnail Lambda with an event source maximum concurrency (e.g. 5), so big upload bursts can't use up the account's Lambda capacity and throttle the API. Only if raising the concurrency quota (12.3a) and reserved concurrency on the thumbnail Lambda aren't enough. Costs: new queue (redrives to the existing DLQ), S3 notification target changes, handler reads SQS records | Done in dev (13.6, §10) |
 | B-10 | Import from Google Photos | Picker API, backend copy (§6.9, §10.1, §11.5); whole library / Takeout not planned | Planned (13.5) |
 | | | | |
 
@@ -853,6 +853,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.36 | 2026-11-01 | Continue an interrupted large batch by picking it again (13.1f, §12.4) |
 | 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.38 | 2026-11-01 | Less gallery polling while uploads run: 15 s instead of 3 s, refreshes during a batch only mark lists stale (13.1j, §12.4) |
+| 0.40 | 2026-11-01 | Thumbnail queue (13.6) built and in dev: §10 trigger/retries describe the current state, note that event filtering can't drop derived-object events; B-11 done (§17) |
 | 0.39 | 2026-11-01 | Mobile data warning for picks ≥ 200 MB, upload-page note while uploading over mobile data, phone hint that big imports are a computer's job (13.1l, §12.4) |
 | 0.35 | 2026-11-01 | Whole-queue progress, time left, pause/resume, cancel all, other tabs' large batch (13.1d, §12.4) |
 | 0.34 | 2026-11-01 | Storage before and during a batch (13.1e): ask before queuing a pick bigger than the space left, stop all waiting files at the first refusal (§12.4) |
