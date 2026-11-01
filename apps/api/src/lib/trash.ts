@@ -1,4 +1,4 @@
-import { previewKey, thumbKey } from "@photo-app/shared";
+import { previewKey, thumbKey, type EmptyTrashResult } from "@photo-app/shared";
 import type { PhotoRecord, Repositories } from "../repo";
 import { errorFields, log } from "./log";
 import type { PhotoStorage } from "./storage";
@@ -38,17 +38,43 @@ export const isTrashed = (record: PhotoRecord) => record.trashedAt !== undefined
 const isExpired = (now: Date) => (record: PhotoRecord) =>
   record.purgeAt !== undefined && record.purgeAt <= now.toISOString();
 
-/** "Empty trash": every photo in the user's trash. Returns how many were deleted. */
+/**
+ * How long one "Empty trash" request keeps deleting before it answers with what is left: the API
+ * Lambda stops at 10 s, and a batch already started may still need a few seconds (S3 deletes,
+ * conflict retries, 13.4). 534 photos took over 10 s and the request failed (dev, 2026-11-01).
+ */
+export const EMPTY_TRASH_BUDGET_MS = 5000;
+
+/**
+ * "Empty trash", one step: deletes the user's trashed photos, `CONCURRENCY` at a time, until the
+ * time budget is used up, and returns how many it deleted and how many are still in the trash
+ * (the client asks again until none are left). A failed delete is thrown, as before.
+ */
 export async function emptyTrash(
   repos: Repositories,
   storage: PhotoStorage,
   userId: string,
-): Promise<number> {
+  {
+    budgetMs = EMPTY_TRASH_BUDGET_MS,
+    now = Date.now,
+  }: { budgetMs?: number; now?: () => number } = {},
+): Promise<EmptyTrashResult> {
+  const deadline = now() + budgetMs;
   const trashed = await repos.photos.listTrashed(userId);
-  const results = await inBatches(trashed, (record) => deleteTrashedPhoto(repos, storage, record));
-  const failed = results.find((result) => result.status === "rejected");
-  if (failed) throw failed.reason;
-  return results.filter((result) => result.status === "fulfilled" && result.value).length;
+  let deleted = 0;
+  let done = 0;
+  // At least one batch per request, so every request makes progress.
+  do {
+    const batch = trashed.slice(done, done + CONCURRENCY);
+    const results = await Promise.allSettled(
+      batch.map((record) => deleteTrashedPhoto(repos, storage, record)),
+    );
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed) throw failed.reason;
+    deleted += results.filter((result) => result.status === "fulfilled" && result.value).length;
+    done += batch.length;
+  } while (done < trashed.length && now() < deadline);
+  return { deleted, remaining: trashed.length - done };
 }
 
 export interface PurgeResult {

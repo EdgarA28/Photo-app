@@ -13,7 +13,7 @@ import {
   trashListSchema,
 } from "@photo-app/shared";
 import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
-import { purgeExpired } from "../src/lib/trash";
+import { emptyTrash, purgeExpired } from "../src/lib/trash";
 import type { Db, Repositories } from "../src/repo";
 import {
   BERLIN,
@@ -278,7 +278,9 @@ describe("DELETE /trash/{photoId} and DELETE /trash", () => {
     for (const photo of photos) await api(user, "DELETE", `/photos/${photo.photoId}`);
     await api(other, "DELETE", `/photos/${othersPhoto.photoId}`);
 
-    expect((await api(user, "DELETE", "/trash")).status).toBe(204);
+    const res = await api(user, "DELETE", "/trash");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deleted: 3, remaining: 0 });
     expect(await trash(user)).toEqual([]);
     expect(await gallery(user)).toEqual([kept.photoId]);
     expect(await repos.usage.get(user)).toMatchObject({ photoCount: 1, bytesUsed: 1000 });
@@ -306,12 +308,34 @@ describe("DELETE /trash/{photoId} and DELETE /trash", () => {
       return send(command as never);
     }) as typeof db.client.send);
     try {
-      expect((await api(user, "DELETE", "/trash")).status).toBe(204);
+      expect((await api(user, "DELETE", "/trash")).status).toBe(200);
     } finally {
       spy.mockRestore();
     }
     expect(conflicts).toBe(2);
     expect(await trash(user)).toEqual([]);
+    expect(await repos.usage.get(user)).toMatchObject({ photoCount: 0, bytesUsed: 0 });
+  });
+
+  test("a big trash is emptied a few seconds at a time: deleted and remaining", async () => {
+    // 534 photos took longer than the API Lambda's 10 s (dev, 2026-11-01).
+    const user = newUserId();
+    const photos = [];
+    for (let i = 0; i < 7; i++) photos.push(await readyPhoto(user));
+    for (const photo of photos) await api(user, "DELETE", `/photos/${photo.photoId}`);
+
+    // No time left: one batch (5 at a time) per call, so every call gets somewhere.
+    expect(await emptyTrash(repos, storage, user, { budgetMs: 0 })).toEqual({
+      deleted: 5,
+      remaining: 2,
+    });
+    expect(await trash(user)).toHaveLength(2);
+    expect(await emptyTrash(repos, storage, user, { budgetMs: 0 })).toEqual({
+      deleted: 2,
+      remaining: 0,
+    });
+    expect(await trash(user)).toEqual([]);
+    expect(await emptyTrash(repos, storage, user)).toEqual({ deleted: 0, remaining: 0 });
     expect(await repos.usage.get(user)).toMatchObject({ photoCount: 0, bytesUsed: 0 });
   });
 

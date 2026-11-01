@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.31 |
+| **Version** | 0.32 |
 | **Date** | 2026-10-31 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -468,7 +468,7 @@ Access patterns:
 | `GET` | `/trash` | Own photos in the trash (with `trashedAt`, `purgeAt`), most recently deleted first, one response (FR-DEL-3) |
 | `POST` | `/trash/{photoId}/restore` | Restore a photo from the trash; returns the photo (FR-DEL-3) |
 | `DELETE` | `/trash/{photoId}` | Delete a trashed photo for good (FR-DEL-1/3) |
-| `DELETE` | `/trash` | Empty the trash (FR-DEL-3) |
+| `DELETE` | `/trash` | Empty the trash (FR-DEL-3), a few seconds at a time: `{deleted, remaining}`; the client repeats it until `remaining` is 0 |
 | `GET` | `/places` | Own places with photo counts, most photos first (FR-SRCH-2) |
 | `GET` | `/places/map` | Own ready photos with GPS as map pins: `photoId`, `lat`/`lon` rounded to 3 decimals, `takenAt`, `thumbUrl`, `placeId` (its town, or null); newest first, one response (FR-SRCH-5) |
 | `GET` | `/places/{placeId}/photos` | Photos at an own place by date taken `?sort&cursor&limit`; 404 for a place the caller doesn't have |
@@ -846,6 +846,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.32 | 2026-11-01 | `DELETE /trash` in steps (`{deleted, remaining}`, client repeats), since a big trash took longer than one request may run (§9) |
 | 0.31 | 2026-11-01 | Folders (13.1a): FR-UP-1. Large batches (13.1c): FR-UP-5 exception (in the picking tab only, survives connection loss, not a tab close), phone limit 1 GB per pick (§12.4) |
 | 0.30 | 2026-11-01 | SQS queue in front of the thumbnail Lambda with a maximum concurrency: §10 trigger and transient errors, B-11 planned (13.6) (§17). Upload queue at scale: coalesced gallery refresh, bytes stored once, capped/virtualized upload UI (§12.4) |
 | 0.29 | 2026-11-01 | Gallery: album picker removed, `?album=` redirects to the album page (§12.1). Shared photo locations: FR-SHR-12, `showLocations` on Album (§8.2), `PATCH /albums/{id}` and album photo lists (§9), album page (§12.1) |

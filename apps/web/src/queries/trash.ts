@@ -64,11 +64,31 @@ export const useRestorePhotos = () => useTrashAction((api, photoId) => api.trash
 export const useDeleteForever = () =>
   useTrashAction((api, photoId) => api.trash.deleteForever(photoId));
 
+/** Requests in a row that deleted nothing before "Empty trash" gives up (the trash didn't shrink). */
+const EMPTY_TRASH_STALLS = 3;
+
+/**
+ * Empties the trash (FR-DEL-3). The API deletes a few seconds' worth per request and says how many
+ * are left (a big trash doesn't fit in one request, dev 2026-11-01), so this asks again until none
+ * are, reporting progress as `onProgress(deleted, total)`.
+ */
 export function useEmptyTrash() {
   const api = useRouteContext({ from: "__root__", select: (context) => context.api });
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () => api.trash.empty(),
+    mutationFn: async (onProgress?: (deleted: number, total: number) => void) => {
+      let deleted = 0;
+      let stalls = 0;
+      for (;;) {
+        const step = await api.trash.empty();
+        deleted += step.deleted;
+        onProgress?.(deleted, deleted + step.remaining);
+        if (step.remaining === 0) return deleted;
+        stalls = step.deleted === 0 ? stalls + 1 : 0;
+        if (stalls >= EMPTY_TRASH_STALLS)
+          throw new Error("The trash couldn't be emptied. Try again.");
+      }
+    },
     onSettled: () => invalidateAfterTrash(queryClient),
   });
 }

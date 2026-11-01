@@ -216,7 +216,8 @@ export function fakeApi(responses: Record<string, FakeResponse> = {}) {
       const key = `${method} ${path}`;
       if (!(key in responses)) throw new Error(`fakeApi: no response for ${key}`);
       const entry = responses[key];
-      const value = typeof entry === "function" ? entry(options.query) : entry;
+      // A function may answer later (a Promise), e.g. to hold a request open in a test.
+      const value: unknown = await (typeof entry === "function" ? entry(options.query) : entry);
       if (value instanceof Error) throw value;
       return options.schema ? options.schema.parse(value) : undefined;
     },
