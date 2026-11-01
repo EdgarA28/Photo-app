@@ -4,7 +4,14 @@ import { DeleteObjectsCommand, HeadObjectCommand, NotFound, S3Client } from "@aw
 import { DOWNLOAD_URL_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS } from "@photo-app/shared";
 import { describe, expect, test, vi } from "vitest";
 import { loadConfig } from "../src/lib/config";
-import { conditionFailedAt, isTransactionConflict } from "../src/repo/db";
+import {
+  conditionFailedAt,
+  conflictPause,
+  isTransactionConflict,
+  TRANSACTION_ATTEMPTS,
+  transactWrite,
+  type Db,
+} from "../src/repo/db";
 import { attachmentDisposition, s3PhotoStorage } from "../src/lib/storage";
 import { cognitoUserDirectory } from "../src/lib/users";
 
@@ -295,5 +302,61 @@ describe("transaction failure helpers", () => {
   test("conditionFailedAt: the reason at that index", () => {
     expect(conditionFailedAt(cancelled("None", "ConditionalCheckFailed"), 1)).toBe(true);
     expect(conditionFailedAt(cancelled("None", "ConditionalCheckFailed"), 0)).toBe(false);
+  });
+});
+
+describe("transactWrite (13.4)", () => {
+  /** A client whose sends fail with these errors in turn, then succeed. */
+  function failing(...errors: Error[]) {
+    const send = vi.fn(async () => {
+      const error = errors.shift();
+      if (error) throw error;
+      return {};
+    });
+    return { db: { client: { send }, table: "t" } as unknown as Db, send };
+  }
+  const reasons = (...codes: string[]) =>
+    Object.assign(new Error("cancelled"), {
+      name: "TransactionCanceledException",
+      CancellationReasons: codes.map((Code) => ({ Code })),
+    });
+  const conflict = () => reasons("None", "TransactionConflict");
+  const input = { TransactItems: [] };
+  const noPause = { pause: () => 0 };
+
+  test("retries a transaction cancelled by clashes until it goes through", async () => {
+    const { db, send } = failing(conflict(), conflict(), conflict());
+    await transactWrite(db, input, noPause);
+    expect(send).toHaveBeenCalledTimes(4);
+  });
+
+  test("gives up after the last attempt with the conflict", async () => {
+    const { db, send } = failing(...Array.from({ length: 20 }, conflict));
+    await expect(transactWrite(db, input, noPause)).rejects.toMatchObject({
+      name: "TransactionCanceledException",
+    });
+    expect(send).toHaveBeenCalledTimes(TRANSACTION_ATTEMPTS);
+  });
+
+  test("throws a failed condition at once, for the caller", async () => {
+    const { db, send } = failing(reasons("ConditionalCheckFailed", "TransactionConflict"));
+    await expect(transactWrite(db, input, noPause)).rejects.toThrow("cancelled");
+    expect(send).toHaveBeenCalledOnce();
+  });
+
+  test("throws other errors at once", async () => {
+    const { db, send } = failing(new Error("network"));
+    await expect(transactWrite(db, input, noPause)).rejects.toThrow("network");
+    expect(send).toHaveBeenCalledOnce();
+  });
+
+  test("pauses a random, growing time, at most 1 s", () => {
+    const random = vi.spyOn(Math, "random").mockReturnValue(0.999);
+    expect(conflictPause(0)).toBeCloseTo(25, 0);
+    expect(conflictPause(3)).toBeCloseTo(200, 0);
+    expect(conflictPause(10)).toBeLessThanOrEqual(1000);
+    random.mockReturnValue(0);
+    expect(conflictPause(5)).toBe(0);
+    random.mockRestore();
   });
 });

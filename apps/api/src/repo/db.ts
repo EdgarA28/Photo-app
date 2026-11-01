@@ -4,8 +4,10 @@ import {
   BatchWriteCommand,
   DynamoDBDocumentClient,
   QueryCommand,
+  TransactWriteCommand,
   type NativeAttributeValue,
   type QueryCommandInput,
+  type TransactWriteCommandInput,
 } from "@aws-sdk/lib-dynamodb";
 import type { Page } from "@photo-app/shared";
 import { decodeCursor, encodeCursor, type CursorKey } from "./cursor";
@@ -153,6 +155,36 @@ export function isConditionalCheckFailed(err: unknown): boolean {
 
 function* chunks<T>(values: T[], size: number): Generator<T[]> {
   for (let i = 0; i < values.length; i += size) yield values.slice(i, i + size);
+}
+
+/** Tries of a transaction cancelled only by clashes with others; ~3 s of pauses at most. */
+export const TRANSACTION_ATTEMPTS = 8;
+/** Pause before the next try: random up to 25 ms · 2ⁿ, capped at 1 s ("full jitter"). */
+export const conflictPause = (attempt: number) => Math.random() * Math.min(1000, 25 * 2 ** attempt);
+
+/**
+ * TransactWriteItems with retries on `TransactionConflict` (13.4). Many photos changed in parallel
+ * (bulk upload, emptying the trash, deleting a selection) update the same shared counters (Usage,
+ * place counts, album counts) at the same moment; DynamoDB then cancels the clashing transactions
+ * without applying anything. Trying again after a random, growing pause spreads them out, so the
+ * counters stay exact without the caller seeing an error. A failed condition is not a conflict:
+ * it is thrown at once for the caller to handle, as before.
+ */
+export async function transactWrite(
+  db: Db,
+  input: TransactWriteCommandInput,
+  { attempts = TRANSACTION_ATTEMPTS, pause = conflictPause } = {},
+): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await db.client.send(new TransactWriteCommand(input));
+      return;
+    } catch (err) {
+      if (!isTransactionConflict(err) || attempt >= attempts - 1) throw err;
+      const ms = pause(attempt);
+      await new Promise((resolve) => setTimeout(resolve, ms));
+    }
+  }
 }
 
 function backoff(attempt: number): Promise<void> {

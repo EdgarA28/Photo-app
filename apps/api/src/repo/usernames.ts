@@ -1,6 +1,6 @@
-import { GetCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand } from "@aws-sdk/lib-dynamodb";
 import { USERNAME_HOLD_DAYS } from "@photo-app/shared";
-import { batchGet, conditionFailedAt, isTransactionConflict, stripKeys, type Db } from "./db";
+import { batchGet, conditionFailedAt, stripKeys, transactWrite, type Db } from "./db";
 import { profileKey, usernameKey } from "./keys";
 
 /** Profile item without key attributes (spec §8.2): what a user's username is. */
@@ -71,57 +71,55 @@ export function usernamesRepo(db: Db) {
         const profile: ProfileRecord = { userId, username, usernameChangedAt: now };
         const claim: ClaimRecord = { username, userId, claimedAt: now };
         try {
-          await db.client.send(
-            new TransactWriteCommand({
-              TransactItems: [
-                {
-                  // A Put replaces the whole item, so a reclaimed name loses releasedAt/heldUntil.
-                  Put: {
-                    TableName: db.table,
-                    Item: { ...usernameKey(username), entity: "username", ...claim },
-                    ConditionExpression:
-                      "attribute_not_exists(PK) OR userId = :me OR heldUntil < :now",
-                    ExpressionAttributeValues: { ":me": userId, ":now": now },
-                  },
+          await transactWrite(db, {
+            TransactItems: [
+              {
+                // A Put replaces the whole item, so a reclaimed name loses releasedAt/heldUntil.
+                Put: {
+                  TableName: db.table,
+                  Item: { ...usernameKey(username), entity: "username", ...claim },
+                  ConditionExpression:
+                    "attribute_not_exists(PK) OR userId = :me OR heldUntil < :now",
+                  ExpressionAttributeValues: { ":me": userId, ":now": now },
                 },
-                {
-                  Put: {
-                    TableName: db.table,
-                    Item: { ...profileKey(userId), entity: "profile", ...profile },
-                    ...(current
-                      ? {
-                          ConditionExpression: "username = :old",
-                          ExpressionAttributeValues: { ":old": current.username },
-                        }
-                      : { ConditionExpression: "attribute_not_exists(PK)" }),
-                  },
+              },
+              {
+                Put: {
+                  TableName: db.table,
+                  Item: { ...profileKey(userId), entity: "profile", ...profile },
+                  ...(current
+                    ? {
+                        ConditionExpression: "username = :old",
+                        ExpressionAttributeValues: { ":old": current.username },
+                      }
+                    : { ConditionExpression: "attribute_not_exists(PK)" }),
                 },
-                ...(current
-                  ? [
-                      {
-                        Update: {
-                          TableName: db.table,
-                          Key: usernameKey(current.username),
-                          UpdateExpression: "SET releasedAt = :now, heldUntil = :until",
-                          ConditionExpression: "userId = :me",
-                          ExpressionAttributeValues: {
-                            ":me": userId,
-                            ":now": now,
-                            ":until": new Date(Date.parse(now) + HOLD_MS).toISOString(),
-                          },
+              },
+              ...(current
+                ? [
+                    {
+                      Update: {
+                        TableName: db.table,
+                        Key: usernameKey(current.username),
+                        UpdateExpression: "SET releasedAt = :now, heldUntil = :until",
+                        ConditionExpression: "userId = :me",
+                        ExpressionAttributeValues: {
+                          ":me": userId,
+                          ":now": now,
+                          ":until": new Date(Date.parse(now) + HOLD_MS).toISOString(),
                         },
                       },
-                    ]
-                  : []),
-              ],
-            }),
-          );
+                    },
+                  ]
+                : []),
+            ],
+          });
           return "ok";
         } catch (err) {
           if (conditionFailedAt(err, 0)) return "taken";
-          // The profile changed since we read it (another rename), or another transaction on
-          // the same name was in flight: read again and retry.
-          if (!conditionFailedAt(err, 1) && !isTransactionConflict(err)) throw err;
+          // The profile changed since we read it (another rename): read again and retry.
+          // (A clash with another transaction is retried inside transactWrite.)
+          if (!conditionFailedAt(err, 1)) throw err;
         }
       }
       throw new Error(`Username of ${userId} kept changing while being set`);
