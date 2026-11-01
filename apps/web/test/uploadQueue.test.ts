@@ -432,6 +432,42 @@ describe("upload queue at scale (13.1-0)", () => {
     expect(onUploaded).toHaveBeenCalledTimes(2);
   });
 
+  it("asks for light refreshes while more uploads are going, a full one after the last (13.1j)", async () => {
+    const { api } = uploadApi();
+    const { post, calls } = controlledPost();
+    const onUploaded = vi.fn();
+    const { queue } = testUploadQueue(api, { post, onUploaded, refreshEveryMs: 0 });
+    await queue.start(USER);
+    expect(queue.isRunning()).toBe(false);
+    await queue.add([1, 2].map((n) => testFile(`IMG_${n}.jpg`)));
+    expect(queue.isRunning()).toBe(true);
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+
+    calls[0]!.resolve();
+    await vi.waitFor(() => expect(onUploaded).toHaveBeenCalledTimes(1));
+    expect(onUploaded).toHaveBeenLastCalledWith(true);
+
+    // Sent and only waiting for its refresh: no longer counts as running.
+    calls[1]!.resolve();
+    await vi.waitFor(() => expect(statuses(queue)).toEqual(["done", "done"]));
+    expect(onUploaded).toHaveBeenLastCalledWith(false);
+    expect(queue.isRunning()).toBe(false);
+  });
+
+  it("doesn't count paused uploads as running (13.1j)", async () => {
+    const { api } = uploadApi();
+    const { post, calls } = controlledPost();
+    const { queue } = testUploadQueue(api, { post });
+    await queue.start(USER);
+    await queue.add([testFile("IMG_1.jpg")]);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(queue.isRunning()).toBe(true);
+    await queue.pause();
+    await vi.waitFor(() => expect(queue.isRunning()).toBe(false));
+    await queue.resume();
+    expect(queue.isRunning()).toBe(true);
+  });
+
   it("keeps going when the refresh fails", async () => {
     const { api } = uploadApi();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

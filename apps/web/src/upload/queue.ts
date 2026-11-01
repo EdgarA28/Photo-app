@@ -62,6 +62,12 @@ export interface UploadQueue {
   cancelAll(): Promise<void>;
   /** Photos of a large batch still to upload in other tabs of this app (13.1d). */
   getOtherTabsRemaining(): number;
+  /**
+   * Whether uploads are still going, here or in another tab: anything waiting (not paused) or
+   * not fully sent yet. An upload sent and only waiting for its gallery refresh doesn't count.
+   * Lets the gallery poll less while a batch runs (13.1j).
+   */
+  isRunning(): boolean;
   /** Large batches no tab is running any more, with what is left of them (13.1f). */
   interruptedBatches(): Promise<InterruptedBatch[]>;
   /** Forget an interrupted batch ("Dismiss"). */
@@ -78,9 +84,10 @@ export interface UploadQueueDeps {
   /**
    * After uploads: refresh what shows them (gallery, usage). Coalesced to at most one call per
    * `refreshEveryMs` (13.1-0); an upload stays on screen as uploading until the refresh after it
-   * is done, so its tile never blinks, without holding its upload slot meanwhile.
+   * is done, so its tile never blinks, without holding its upload slot meanwhile. `more`: other
+   * uploads are still going (`isRunning`), so this refresh can be a light one (13.1j).
    */
-  onUploaded?: () => unknown;
+  onUploaded?: (more: boolean) => unknown;
   /** Minimum time between two `onUploaded` calls; the first one runs at once. */
   refreshEveryMs?: number;
   /** Runs the change notification for the UI: once per animation frame (13.1-0). */
@@ -316,7 +323,7 @@ export function createUploadQueue({
       nextRefresh = undefined;
       lastRefresh = now();
       Promise.resolve()
-        .then(onUploaded)
+        .then(() => onUploaded(isRunning()))
         .catch((error: unknown) => console.warn("Refreshing after uploads failed", error))
         .finally(resolve);
     };
@@ -324,6 +331,17 @@ export function createUploadQueue({
     if (wait > 0) setTimeout(go, wait);
     else go();
     return pending;
+  }
+
+  function isRunning(): boolean {
+    if (active.size > 0 || otherTabsRemaining > 0) return true;
+    for (const [id, item] of items) {
+      if (item.paused) continue;
+      if (item.status === "queued") return true;
+      // Uploading in another tab, or here with the bytes sent and the refresh still to come (1).
+      if (item.status === "uploading" && (progress.get(id) ?? 0) < 1) return true;
+    }
+    return false;
   }
 
   function broadcast(message: UploadMessage) {
@@ -958,6 +976,8 @@ export function createUploadQueue({
     },
 
     getOtherTabsRemaining: () => otherTabsRemaining,
+
+    isRunning,
 
     async clear() {
       for (const controller of active.values()) controller.abort();

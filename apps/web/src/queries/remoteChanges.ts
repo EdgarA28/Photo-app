@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import type { Api } from "@/api/api";
 import { meQuery } from "./me";
+import { areUploadsRunning } from "./photos";
 
 /** How often a page on screen checks for changes made on another device. */
 export const REMOTE_CHANGES_POLL_MS = 30_000;
@@ -11,7 +12,8 @@ export const REMOTE_CHANGES_POLL_MS = 30_000;
  * returning to the app (`refetchOnWindowFocus`) never fires. Polls the small `GET /me` (paused
  * while the page is hidden) and refreshes the photo lists and albums only when the usage
  * (count, bytes) changed. Changes that leave usage alone, e.g. album edits, wait for the next
- * focus or `staleTime`.
+ * focus or `staleTime`. While uploads run (13.1j) usage changes with every photo, so nothing is
+ * refreshed here: the gallery polls on its own then, and the batch's last refresh catches up.
  */
 export function useRemoteChanges(api: Api) {
   const queryClient = useQueryClient();
@@ -22,7 +24,7 @@ export function useRemoteChanges(api: Api) {
   const seen = useRef(false);
   useEffect(() => {
     if (!usage) return;
-    if (seen.current) {
+    if (seen.current && !areUploadsRunning()) {
       void queryClient.invalidateQueries({ queryKey: ["photos"] });
       void queryClient.invalidateQueries({ queryKey: ["albums"] });
       // A processed photo may have brought a new place (13.2).

@@ -8,7 +8,7 @@ import { createAuth } from "./auth/auth";
 import { createMediaCookies } from "./auth/mediaCookie";
 import { loadConfig } from "./config";
 import { createPersistedQueryCache } from "./queries/persistedCache";
-import { refreshAfterUpload } from "./queries/photos";
+import { refreshAfterUpload, setUploadsRunning } from "./queries/photos";
 import { createAppRouter, createQueryClient } from "./router";
 import { createUploadQueue, SYNC_TAG, UPLOAD_CHANNEL_NAME } from "./upload/queue";
 import { createIdbShareInbox } from "./upload/shareInbox";
@@ -46,7 +46,7 @@ const uploads = createUploadQueue({
   store: createIdbStore(),
   // Large batches remembered, so they can be continued after the tab closed (13.1f).
   batches: createIdbBatchStore(),
-  onUploaded: () => refreshAfterUpload(queryClient),
+  onUploaded: (more) => refreshAfterUpload(queryClient, more),
   locks: navigator.locks,
   createChannel:
     typeof BroadcastChannel === "undefined"
@@ -64,6 +64,8 @@ const uploads = createUploadQueue({
       ),
   requestPersistence: () => navigator.storage?.persist?.(),
 });
+// The photo lists poll less while uploads run (13.1j).
+setUploadsRunning(() => uploads.isRunning());
 const persistedCache = createPersistedQueryCache(queryClient);
 const shareInbox = createIdbShareInbox();
 const router = createAppRouter({

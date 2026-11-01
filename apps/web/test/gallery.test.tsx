@@ -1,10 +1,14 @@
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "../src/api/errors";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import {
+  BATCH_POLL_MS,
   PROCESSING_POLL_MS,
   PROCESSING_WINDOW_MS,
   processingPollInterval,
+  refreshAfterUpload,
+  setUploadsRunning,
 } from "../src/queries/photos";
 import { fakeApi, testId, testMe, testPhoto, testPhotoPage } from "./fakes";
 import { REMOTE_CHANGES_POLL_MS } from "../src/queries/remoteChanges";
@@ -202,6 +206,92 @@ describe("processingPollInterval", () => {
     expect(processingPollInterval(pageOf(testPhoto(0, { status: "failed" })), now)).toBe(false);
     const stale = testPhoto(0, { status: "pending", uploadedAt: uploaded(PROCESSING_WINDOW_MS) });
     expect(processingPollInterval(pageOf(stale), now)).toBe(false);
+  });
+
+  it("polls slowly while uploads run, processing or not (13.1j)", () => {
+    const processing = pageOf(testPhoto(0, { status: "pending", uploadedAt: uploaded(5000) }));
+    expect(processingPollInterval(processing, now, true)).toBe(BATCH_POLL_MS);
+    expect(processingPollInterval(pageOf(testPhoto(0)), now, true)).toBe(BATCH_POLL_MS);
+    expect(processingPollInterval(undefined, now, true)).toBe(BATCH_POLL_MS);
+  });
+});
+
+describe("refreshAfterUpload (13.1j)", () => {
+  async function observed() {
+    const queryClient = new QueryClient();
+    const photos = vi.fn(async () => "photos");
+    const me = vi.fn(async () => "me");
+    const unsubscribe = [
+      new QueryObserver(queryClient, {
+        queryKey: ["photos", { sort: "taken-desc" }],
+        queryFn: photos,
+      }),
+      new QueryObserver(queryClient, { queryKey: ["me"], queryFn: me }),
+    ].map((observer) => observer.subscribe(() => {}));
+    await waitFor(() => expect(photos).toHaveBeenCalledOnce());
+    await waitFor(() => expect(me).toHaveBeenCalledOnce());
+    return { queryClient, photos, me, unsubscribe };
+  }
+
+  it("only marks the lists and usage stale while more uploads are going", async () => {
+    const { queryClient, photos, me, unsubscribe } = await observed();
+    await refreshAfterUpload(queryClient, true);
+    expect(photos).toHaveBeenCalledOnce();
+    expect(me).toHaveBeenCalledOnce();
+    expect(queryClient.getQueryState(["me"])?.isInvalidated).toBe(true);
+    unsubscribe.forEach((stop) => stop());
+  });
+
+  it("refetches what is on screen after the last upload", async () => {
+    const { queryClient, photos, me, unsubscribe } = await observed();
+    await refreshAfterUpload(queryClient, false);
+    expect(photos).toHaveBeenCalledTimes(2);
+    expect(me).toHaveBeenCalledTimes(2);
+    unsubscribe.forEach((stop) => stop());
+  });
+});
+
+describe("gallery while uploads run (13.1j)", () => {
+  afterEach(() => {
+    setUploadsRunning(() => false);
+    vi.useRealTimers();
+  });
+
+  it("refetches every BATCH_POLL_MS instead of every few seconds", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    setUploadsRunning(() => true);
+    const { api, request } = setup({
+      "GET /photos": () => ({
+        items: [
+          testPhoto(1),
+          testPhoto(0, { status: "pending", uploadedAt: new Date().toISOString() }),
+        ],
+        nextCursor: null,
+      }),
+    });
+    await renderAt("/gallery", { api });
+    await screen.findByRole("link", { name: "IMG_1.jpg" });
+    const before = queriesTo(request, "/photos").length;
+    await vi.advanceTimersByTimeAsync(BATCH_POLL_MS - PROCESSING_POLL_MS);
+    expect(queriesTo(request, "/photos")).toHaveLength(before);
+    await vi.advanceTimersByTimeAsync(PROCESSING_POLL_MS);
+    await waitFor(() => expect(queriesTo(request, "/photos")).toHaveLength(before + 1));
+  });
+
+  it("doesn't reload places on every usage change while uploads run", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    setUploadsRunning(() => true);
+    let count = 1;
+    const { api, request } = setup({
+      "GET /photos": testPhotoPage(0, 1),
+      "GET /me": () => ({ ...testMe, usage: { ...testMe.usage, photoCount: count++ } }),
+    });
+    await renderAt("/gallery", { api });
+    await screen.findByRole("link", { name: "IMG_0.jpg" });
+    const places = () => queriesTo(request, "/places").length;
+    const before = places();
+    await vi.advanceTimersByTimeAsync(REMOTE_CHANGES_POLL_MS * 2);
+    expect(places()).toBe(before);
   });
 });
 

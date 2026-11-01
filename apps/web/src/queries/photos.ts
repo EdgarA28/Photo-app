@@ -27,6 +27,24 @@ export const PROCESSING_POLL_MS = 3000;
  */
 export const PROCESSING_WINDOW_MS = 10 * 60 * 1000;
 
+/**
+ * While uploads are running (13.1j): how often the loaded pages are refetched instead, whether or
+ * not they hold a photo still processing. The refreshes after each upload only mark the lists
+ * stale then, so an hours-long batch makes a few calls a minute instead of one per page every
+ * few seconds; the batch's last refresh refetches at once.
+ */
+export const BATCH_POLL_MS = 15_000;
+
+let uploadsRunning: () => boolean = () => false;
+
+/** Tells the photo lists whether uploads are running (13.1j); set once by the app. */
+export function setUploadsRunning(check: () => boolean) {
+  uploadsRunning = check;
+}
+
+/** Whether uploads are running, here or in another tab (13.1j). */
+export const areUploadsRunning = () => uploadsRunning();
+
 const isProcessing = (photo: Photo, now: number) =>
   photo.status === "pending" && now - Date.parse(photo.uploadedAt) < PROCESSING_WINDOW_MS;
 
@@ -39,11 +57,16 @@ export function shownPhotos<T extends { status: string }>(pages: readonly { item
   return pages.flatMap((page) => page.items.filter((photo) => photo.status !== "pending"));
 }
 
-/** Poll interval for the loaded pages: on while a recent upload is still processing. */
+/**
+ * Poll interval for the loaded pages: every `BATCH_POLL_MS` while uploads are running (13.1j),
+ * else every `PROCESSING_POLL_MS` while a recent upload is still processing.
+ */
 export function processingPollInterval(
   data: InfiniteData<PhotoPage> | undefined,
   now = Date.now(),
+  running = areUploadsRunning(),
 ): number | false {
+  if (running) return BATCH_POLL_MS;
   const processing = data?.pages.some((page) => page.items.some((p) => isProcessing(p, now)));
   return processing ? PROCESSING_POLL_MS : false;
 }
@@ -100,14 +123,18 @@ export const needsOwnFetch = (photo: Photo | undefined) =>
   photo?.status === "ready" && !photo.previewUrl;
 
 /**
- * After an upload reached S3 (8.10): the photo now exists as `pending`, so the gallery shows it as
- * processing (and polls until ready), and usage counts it (5.6b).
+ * After an upload reached S3 (8.10): the photo now exists as `pending`, so the gallery polls
+ * until it is ready, and usage counts it (5.6b). With `more` uploads still going (13.1j) the
+ * lists and usage are only marked stale: the gallery's batch poll (`BATCH_POLL_MS`) and the next
+ * visit pick the changes up, and the last upload's refresh refetches what is on screen.
  */
-export const refreshAfterUpload = (queryClient: QueryClient) =>
-  Promise.all([
-    queryClient.invalidateQueries({ queryKey: ["photos"] }),
-    queryClient.invalidateQueries({ queryKey: ["me"] }),
+export const refreshAfterUpload = (queryClient: QueryClient, more = false) => {
+  const refetchType = more ? "none" : "active";
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: ["photos"], refetchType }),
+    queryClient.invalidateQueries({ queryKey: ["me"], refetchType }),
   ]);
+};
 
 /** Drops a deleted photo from every cached list and its own entry, before the refetch confirms. */
 export function removePhotoFromCache(queryClient: QueryClient, photoId: string) {
