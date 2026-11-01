@@ -16,6 +16,11 @@ export const albumSchema = z.object({
    * Missing (an API from before it) reads as false.
    */
   membersCanAdd: z.boolean().default(false),
+  /**
+   * Everyone in the album sees where its photos were taken (FR-SHR-12): place names, members'
+   * photos included. Missing (an API from before it) reads as false.
+   */
+  showLocations: z.boolean().default(false),
 });
 export type Album = z.infer<typeof albumSchema>;
 
@@ -28,22 +33,19 @@ export const createAlbumRequestSchema = z.object({ name: albumNameSchema });
 export type CreateAlbumRequest = z.infer<typeof createAlbumRequestSchema>;
 
 /**
- * PATCH /albums/{albumId}: rename, set the cover (null clears it) and/or let members add photos
- * (FR-SHR-11).
+ * PATCH /albums/{albumId}: rename, set the cover (null clears it), let members add photos
+ * (FR-SHR-11) and/or share the photos' locations (FR-SHR-12).
  */
 export const updateAlbumRequestSchema = z
   .object({
     name: albumNameSchema.optional(),
     coverPhotoId: idSchema.nullable().optional(),
     membersCanAdd: z.boolean().optional(),
+    showLocations: z.boolean().optional(),
   })
-  .refine(
-    (body) =>
-      body.name !== undefined ||
-      body.coverPhotoId !== undefined ||
-      body.membersCanAdd !== undefined,
-    { message: "Provide name, coverPhotoId and/or membersCanAdd" },
-  );
+  .refine((body) => Object.values(body).some((value) => value !== undefined), {
+    message: "Provide name, coverPhotoId, membersCanAdd and/or showLocations",
+  });
 export type UpdateAlbumRequest = z.infer<typeof updateAlbumRequestSchema>;
 
 /** POST /albums/{albumId}/photos (FR-ALB-2) */

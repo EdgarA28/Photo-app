@@ -64,7 +64,11 @@ export function useUpdateAlbum(albumId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (
-      changes: { name: string } | { coverPhotoId: string | null } | { membersCanAdd: boolean },
+      changes:
+        | { name: string }
+        | { coverPhotoId: string | null }
+        | { membersCanAdd: boolean }
+        | { showLocations: boolean },
     ) => api.albums.update(albumId, changes),
     // The answer is the updated album: show it at once, then confirm with the list.
     onSuccess: (album: Album) => {

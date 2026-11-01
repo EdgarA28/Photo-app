@@ -11,7 +11,16 @@ import {
   useRouter,
   type ErrorComponentProps,
 } from "@tanstack/react-router";
-import { ChevronLeft, Ellipsis, ImagePlus, LogOut, Pencil, Share2, Trash2 } from "lucide-react";
+import {
+  ChevronLeft,
+  Ellipsis,
+  ImagePlus,
+  LogOut,
+  MapPin,
+  Pencil,
+  Share2,
+  Trash2,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   DeleteAlbumDialog,
@@ -131,6 +140,7 @@ function AlbumView({ album }: { album: Album }) {
             <p className="text-sm text-muted-foreground tabular-nums">
               {album.photoCount === 1 ? "1 photo" : `${album.photoCount} photos`}
             </p>
+            {album.showLocations && <LocationsNotice />}
           </div>
           <div className="flex items-center gap-2">
             {(photos.length > 0 || selection.active) && (
@@ -329,6 +339,7 @@ function SharedAlbumView({ albumId }: { albumId: string }) {
               {album ? sharedBy(album) : "Shared with you"} ·{" "}
               {canAdd ? "everyone can add photos" : "view only"}
             </p>
+            {album?.showLocations && <LocationsNotice />}
           </div>
           <div className="flex items-center gap-2">
             {(items.length > 0 || selection.active) && (
@@ -434,6 +445,16 @@ function SharedAlbumView({ albumId }: { albumId: string }) {
         onLeft={() => navigate({ to: "/albums", replace: true })}
       />
     </main>
+  );
+}
+
+/** FR-SHR-12: everyone in the album sees where its photos were taken, so members know. */
+function LocationsNotice() {
+  return (
+    <p className="flex items-center gap-1 text-sm text-muted-foreground">
+      <MapPin aria-hidden className="size-3.5 shrink-0" />
+      Locations are shown in this album
+    </p>
   );
 }
 

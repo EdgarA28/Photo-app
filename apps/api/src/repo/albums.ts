@@ -43,6 +43,8 @@ export interface AlbumRecord {
   coverOwnerId?: string;
   /** Members who accepted the share may add their own photos (FR-SHR-11). */
   membersCanAdd?: boolean;
+  /** Everyone in the album sees its photos' place names (FR-SHR-12). */
+  showLocations?: boolean;
 }
 
 export interface AlbumUpdate {
@@ -50,6 +52,7 @@ export interface AlbumUpdate {
   /** null clears the cover. */
   coverPhotoId?: string | null | undefined;
   membersCanAdd?: boolean | undefined;
+  showLocations?: boolean | undefined;
 }
 
 export function albumsRepo(db: Db) {
@@ -121,6 +124,10 @@ export function albumsRepo(db: Db) {
       if (changes.membersCanAdd !== undefined) {
         set.push("membersCanAdd = :membersCanAdd");
         values[":membersCanAdd"] = changes.membersCanAdd;
+      }
+      if (changes.showLocations !== undefined) {
+        set.push("showLocations = :showLocations");
+        values[":showLocations"] = changes.showLocations;
       }
       if (changes.name !== undefined) {
         set.push("#name = :name");

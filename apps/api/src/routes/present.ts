@@ -72,6 +72,7 @@ export function toAlbum(record: AlbumRecord, coverThumbUrl: string | null): Albu
     coverThumbUrl,
     photoCount: Math.max(0, record.photoCount),
     membersCanAdd: record.membersCanAdd === true,
+    showLocations: record.showLocations === true,
   };
 }
 
@@ -106,15 +107,25 @@ export async function toSharedPhoto(
   record: PhotoRecord,
   media: MediaSigner,
   now: Date,
-  { preview, ownerUsername = null }: { preview: boolean; ownerUsername?: string | null },
+  {
+    preview,
+    ownerUsername = null,
+    withPlace = false,
+  }: {
+    preview: boolean;
+    ownerUsername?: string | null;
+    /** The album shares its photos' locations (FR-SHR-12): keep the place names. */
+    withPlace?: boolean;
+  },
 ): Promise<Photo> {
   const photo = toPhoto(record);
   const [thumbUrl, previewUrl] = await Promise.all([
     photo.thumbUrl ? media.signUrl(photo.thumbUrl, now) : null,
     preview && photo.previewUrl ? media.signUrl(photo.previewUrl, now) : null,
   ]);
-  // Places are the owner's (13.2g): recipients don't learn where a photo was taken.
-  return { ...photo, place: null, thumbUrl, previewUrl, ownerUsername };
+  // Places are the owner's (13.2g): others don't learn where a photo was taken...
+  // ...unless the album shares locations (FR-SHR-12). Names only: `Photo` has no coordinates.
+  return { ...photo, place: withPlace ? photo.place : null, thumbUrl, previewUrl, ownerUsername };
 }
 
 /**

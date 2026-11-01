@@ -14,6 +14,8 @@ import {
 import { beforeAll, describe, expect, test } from "vitest";
 import type { Db, PhotoRecord, Repositories } from "../src/repo";
 import {
+  addPlaces,
+  BERLIN,
   createPending,
   createTestApi,
   markReady,
@@ -359,5 +361,81 @@ describe("viewer, download, cover and save for the owner", () => {
       photoIds: [bobPhoto.photoId],
     });
     expect(saveSharedPhotosResponseSchema.parse(res.body).items[0]?.result).toBe("saved");
+  });
+});
+
+describe("Share photo locations (FR-SHR-12)", () => {
+  const berlin = { city: "Berlin", region: "State of Berlin", country: "Germany" };
+
+  /** Alice's and Bob's photos, both taken in Berlin, in Alice's collaborative album. */
+  async function withPlaces() {
+    const world = await setup();
+    await addPlaces(db, world.alice, world.alicePhoto.photoId, BERLIN);
+    await addPlaces(db, world.bob, world.bobPhoto.photoId, BERLIN);
+    await add(world.bob, world.albumId, [world.bobPhoto.photoId]);
+    return world;
+  }
+
+  const placesOf = async (userId: string, albumId: string) =>
+    Object.fromEntries((await listPhotos(userId, albumId)).map((p) => [p.photoId, p.place]));
+
+  test("off by default: only the caller's own photos carry their place", async () => {
+    const { alice, bob, albumId, alicePhoto, bobPhoto } = await withPlaces();
+    expect(await placesOf(alice, albumId)).toEqual({
+      [alicePhoto.photoId]: berlin,
+      [bobPhoto.photoId]: null,
+    });
+    expect(await placesOf(bob, albumId)).toEqual({
+      [alicePhoto.photoId]: null,
+      [bobPhoto.photoId]: berlin,
+    });
+  });
+
+  test("on: everyone sees every photo's place names, members' too; never coordinates", async () => {
+    const { alice, bob, albumId, alicePhoto, bobPhoto } = await withPlaces();
+    const res = await api(alice, "PATCH", `/albums/${albumId}`, { showLocations: true });
+    expect(albumSchema.parse(res.body).showLocations).toBe(true);
+    const shared = sharedAlbumPageSchema.parse((await api(bob, "GET", "/shared-albums")).body);
+    expect(shared.items.find((a) => a.albumId === albumId)?.showLocations).toBe(true);
+
+    const both = { [alicePhoto.photoId]: berlin, [bobPhoto.photoId]: berlin };
+    expect(await placesOf(alice, albumId)).toEqual(both);
+    expect(await placesOf(bob, albumId)).toEqual(both);
+
+    const one = await api(bob, "GET", `/photos/${alicePhoto.photoId}?albumId=${albumId}`);
+    expect(photoSchema.parse(one.body).place).toEqual(berlin);
+    expect(JSON.stringify(one.body)).not.toMatch(/latitude|longitude|52\.52/);
+  });
+
+  test("turning it off hides them again; only the owner can change it", async () => {
+    const { alice, bob, albumId, alicePhoto } = await withPlaces();
+    await api(alice, "PATCH", `/albums/${albumId}`, { showLocations: true });
+    expect((await api(bob, "PATCH", `/albums/${albumId}`, { showLocations: false })).status).toBe(
+      404,
+    );
+    await api(alice, "PATCH", `/albums/${albumId}`, { showLocations: false });
+    expect((await placesOf(bob, albumId))[alicePhoto.photoId]).toBeNull();
+  });
+
+  test("other albums of the same owner keep hiding places", async () => {
+    const { alice, bob, albumId, alicePhoto } = await withPlaces();
+    await api(alice, "PATCH", `/albums/${albumId}`, { showLocations: true });
+    const other = await repos.albums.create({
+      ownerId: alice,
+      albumId: newId(),
+      name: "Other",
+      createdAt: nextIso(),
+    });
+    await repos.albums.addPhotos(alice, other.albumId, [alicePhoto.photoId], nextIso());
+    await repos.shares.create({
+      albumId: other.albumId,
+      ownerId: alice,
+      userId: bob,
+      status: "accepted",
+      sharedAt: nextIso(),
+    });
+    expect((await placesOf(bob, other.albumId))[alicePhoto.photoId]).toBeNull();
+    const one = await api(bob, "GET", `/photos/${alicePhoto.photoId}?albumId=${other.albumId}`);
+    expect(photoSchema.parse(one.body).place).toBeNull();
   });
 });

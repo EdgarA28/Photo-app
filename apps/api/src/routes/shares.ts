@@ -206,7 +206,7 @@ export function shareRoutes(
             const photo =
               membership?.ownerId === userId
                 ? await repos.photos.get(userId, photoId)
-                : await albumPhoto(repos, userId, albumId, photoId);
+                : ((await albumPhoto(repos, userId, albumId, photoId))?.photo ?? null);
             return { photoId, photo };
           }),
         );

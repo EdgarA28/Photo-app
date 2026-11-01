@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.28 |
+| **Version** | 0.29 |
 | **Date** | 2026-10-31 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -293,6 +293,7 @@ IDs are stable — reference them in issues, PRs and tests.
 | FR-SHR-7 | Recipients can decline an invitation, or remove an accepted shared album from their albums; access ends at once. The owner's album is unchanged; the person simply drops off the owner's share list (no "declined" state), and the owner can share again, which sends a new invitation. |
 | FR-SHR-10 | Recipients can **save photos of an album shared with them to their own gallery**: "Save to my gallery" next to Download in the viewer, and for several photos in the shared album's select mode. The backend copies the original (bytes never pass through the device); the copy is processed like an upload (date taken, place), becomes the recipient's own photo, independent of the owner's (it stays when the owner deletes theirs or stops sharing) and counts against the recipient's quota (FR-UP-7: photos that don't fit are not saved). Only processed photos can be saved. Saving the same photo again saves nothing new and says "already in your gallery" (or "in your trash"); once the copy is deleted for good it can be saved anew. The app sums up the result (e.g. "Saved 8 photos · 1 already saved · 1 didn't fit in your storage"). |
 | FR-SHR-11 | **Collaborative albums:** the owner can turn on "Members can add photos" for an album (off by default, can be turned off at any time). While it is on, everyone who accepted the share can add photos from their own gallery to the album. The photos stay theirs: in their gallery, under their storage and quota, and the album only links to them. Everyone in the album (owner and members) sees all its processed photos and who added each one; places are not shown for other people's photos. The owner can remove any photo from the album; a member can remove only the photos they added. Removing never deletes the photo. When a member leaves the album or the owner removes them, the photos they added leave the album. When they delete or trash a photo, it leaves the album too, and a restore from the trash puts it back only while they may still add. Turning the switch off keeps the photos already added. The owner can save members' photos to their own gallery like a recipient can (FR-SHR-10). |
+| FR-SHR-12 | **Shared photo locations:** the owner of an album can turn on "Share photo locations" (off by default, any shared album, independent of FR-SHR-11). While it is on, everyone in the album sees where each of its photos was taken (town, region, country, as in their own gallery), members' photos included; never the exact coordinates, and place search and the map stay the owner's own (FR-SRCH-2/5). Members see "Locations are shown in this album" on the album page and when picking photos to add, so they know before adding. Turning it off hides the locations again. |
 
 ### 6.6 Account & quota
 
@@ -400,7 +401,7 @@ Initial design; refine during implementation.
 | Entity | PK | SK | GSI1PK | GSI1SK | Attributes |
 |---|---|---|---|---|---|
 | Photo | `USER#{userId}` | `PHOTO#{photoId}` | `USER#{userId}`; `TRASH` while in the trash | `TAKEN#{takenAt}#{photoId}`; `PURGE#{purgeAt}#{userId}#{photoId}` while in the trash | status (`pending`/`ready`/`failed`), fileName, contentType, sizeBytes, width, height, takenAt, uploadedAt, originalKey, originalETag, latitude, longitude, place `{city, region, country, countryCode}`, placeIds; in the trash: trashedAt, purgeAt, trashedAlbumIds |
-| Album | `USER#{ownerId}` | `ALBUM#{albumId}` | — | — | name, createdAt, coverPhotoId, coverOwnerId (when the cover is a member's photo, FR-SHR-11), photoCount, membersCanAdd (FR-SHR-11) |
+| Album | `USER#{ownerId}` | `ALBUM#{albumId}` | — | — | name, createdAt, coverPhotoId, coverOwnerId (when the cover is a member's photo, FR-SHR-11), photoCount, membersCanAdd (FR-SHR-11), showLocations (FR-SHR-12) |
 | Album membership | `ALBUM#{albumId}` | `PHOTO#{photoId}` | `ALBUM#{albumId}` | `TAKEN#{takenAt}#{photoId}` (the photo's) | ownerId (the **photo's** owner), albumOwnerId (only when a member added it, FR-SHR-11; absent = ownerId), addedAt |
 | Photo link | `LINK#{token}` | `LINK` | — | — | ownerId, photoIds (≤ 100, newest first), createdAt, expiresAt, ttl (epoch seconds, DynamoDB TTL) |
 | Album share | `ALBUM#{albumId}` | `SHARE#{userId}` | `INVITED#{userId}` while pending, `SHAREDWITH#{userId}` once accepted | `ALBUM#{albumId}` | ownerId, email (shares by email only), status (`pending`/`accepted`; absent = accepted, shares from before v0.17), sharedAt, acceptedAt |
@@ -473,9 +474,9 @@ Access patterns:
 | `GET` | `/places/{placeId}/photos` | Photos at an own place by date taken `?sort&cursor&limit`; 404 for a place the caller doesn't have |
 | `GET` | `/albums` | List own albums |
 | `POST` | `/albums` | Create album `{name}` |
-| `PATCH` | `/albums/{albumId}` | Rename / set cover (any photo in the album) / `membersCanAdd` (FR-SHR-11) |
+| `PATCH` | `/albums/{albumId}` | Rename / set cover (any photo in the album) / `membersCanAdd` (FR-SHR-11) / `showLocations` (FR-SHR-12) |
 | `DELETE` | `/albums/{albumId}` | Delete album (not photos) |
-| `GET` | `/albums/{albumId}/photos` | Photos in album by date taken (owner or share recipient) `?sort&cursor&limit`, like `/photos`; each with `ownerId` and `ownerUsername` (who added it). Other people's photos only when processed, with signed URLs and no place |
+| `GET` | `/albums/{albumId}/photos` | Photos in album by date taken (owner or share recipient) `?sort&cursor&limit`, like `/photos`; each with `ownerId` and `ownerUsername` (who added it). Other people's photos only when processed, with signed URLs; their place only while the album's `showLocations` is on (FR-SHR-12) |
 | `POST` | `/albums/{albumId}/photos` | Add own photos `{photoIds: []}`: the owner, or a member with an accepted share while `membersCanAdd` is on (FR-SHR-11) |
 | `DELETE` | `/albums/{albumId}/photos/{photoId}` | Remove photo from album: the owner any photo, a member only their own (FR-SHR-11) |
 | `GET` | `/albums/{albumId}/shares` | List shares (owner only) |
@@ -604,7 +605,7 @@ TypeScript Lambda, arm64, in `apps/api` (same bundle as the API, own handler and
 | `/gallery` | Main gallery; search params `album`, `place` (not both), `sort` (Zod-validated); place search box at the top (FR-SRCH-2) |
 | `/photos/$photoId` | Full-screen viewer |
 | `/albums` | Invitations (accept / decline) + my albums + shared with me |
-| `/albums/$albumId` | Album view. Owner: "Members can add photos" switch in the share dialog (FR-SHR-11). Member of a collaborative album: Add photos (picked in the gallery), remove own photos; "Added by @name" in the viewer |
+| `/albums/$albumId` | Album view. Owner: "Members can add photos" (FR-SHR-11) and "Share photo locations" (FR-SHR-12) switches in the share dialog; members see "Locations are shown in this album". Member of a collaborative album: Add photos (picked in the gallery), remove own photos; "Added by @name" in the viewer |
 | `/map` | Map of own photos with GPS (FR-SRCH-5); MapLibre, loaded only with this page |
 | `/upload` | Upload page / queue status |
 | `/import/google/callback` | Return from Google's consent (§11.5): checks `state`, starts the import, shows "Choose photos in Google Photos", then progress and the summary (FR-IMP-1/5). Started from Settings |
@@ -842,6 +843,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.29 | 2026-11-01 | Shared photo locations: FR-SHR-12, `showLocations` on Album (§8.2), `PATCH /albums/{id}` and album photo lists (§9), album page (§12.1) |
 | 0.28 | 2026-10-31 | Collaborative albums: FR-SHR-11 (FR-SHR-4 note), `membersCanAdd` + `coverOwnerId` on Album, membership `ownerId` = photo owner + `albumOwnerId` (§8.2); album routes for members, `POST /albums/{albumId}/save` (§9); album page (§12.1) |
 | 0.27 | 2026-10-31 | Stale-pending sweep (6.11): Pending marker item and the "abandoned uploads" access pattern (§8.2); run by the daily purge |
 | 0.26 | 2026-10-31 | Save shared photos to my gallery: FR-SHR-10 (FR-SHR-4 note), `POST /shared-albums/{albumId}/save` (§9), permanent upload claim `shared-{photoId}` (§8.2) |

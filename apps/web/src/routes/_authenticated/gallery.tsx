@@ -335,15 +335,22 @@ function AddToHeader({ albumId }: { albumId: string }) {
     ...sharedAlbumsQuery(api),
     enabled: !!albums && !own,
   });
-  const name =
-    own?.name ??
-    shared?.pages.flatMap((page) => page.items).find((a) => a.albumId === albumId)?.name;
+  const target =
+    own ?? shared?.pages.flatMap((page) => page.items).find((a) => a.albumId === albumId);
+  const name = target?.name;
   return (
     <header className="space-y-1">
       <h1 className="text-2xl font-semibold tracking-tight">
         {name ? `Add to ${name}` : "Add to album"}
       </h1>
       <p className="text-sm text-muted-foreground">Select the photos to add.</p>
+      {/* Before adding, so members know where their photos will be shown (FR-SHR-12). */}
+      {target?.showLocations && (
+        <p className="flex items-center gap-1 text-sm text-muted-foreground">
+          <MapPin aria-hidden className="size-3.5 shrink-0" />
+          Locations are shown in this album: everyone in it will see where these photos were taken.
+        </p>
+      )}
     </header>
   );
 }
