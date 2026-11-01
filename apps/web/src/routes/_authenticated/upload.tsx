@@ -8,13 +8,14 @@ import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/format";
 import { MAX_SHARED_BYTES, MAX_SHARED_FILES } from "@/pwa/shareTarget";
 import { meQuery } from "@/queries/me";
-import { SpaceWarning, StorageFullBanner } from "@/upload/QuotaNotices";
+import { SpaceConfirm, StorageFullBanner } from "@/upload/QuotaNotices";
 import type { AddOptions, AddResult } from "@/upload/queue";
 import { UploadList } from "@/upload/UploadList";
 import type { WaitingPhoto } from "@/upload/shareInbox";
 import { SharedPhotos } from "@/upload/SharedPhotos";
 import { SkippedFiles } from "@/upload/SkippedFiles";
 import { UploadPicker } from "@/upload/UploadPicker";
+import { checkFile } from "@/upload/validate";
 import { isActive, isInTabOnly, useOnline, useUploadQueue, useUploads } from "@/upload/useUploads";
 
 /**
@@ -45,7 +46,13 @@ function Upload() {
   const { data: me } = useQuery(meQuery(api));
   /** The last pick's outcome, while it skipped files (13.1b). */
   const [picked, setPicked] = useState<Pick<AddResult, "added" | "rejected"> | null>(null);
-  const [space, setSpace] = useState<{ needed: number; left: number } | null>(null);
+  /** A pick that needs more space than is left, waiting for the user's go-ahead (13.1e). */
+  const [tooBig, setTooBig] = useState<{
+    files: File[];
+    options: AddOptions | undefined;
+    needed: number;
+    left: number;
+  } | null>(null);
   const [shareFailed, setShareFailed] = useState(shared === "failed");
   const [shareSkipped, setShareSkipped] = useState(skipped ?? 0);
   const [sharedPhotos, setSharedPhotos] = useState<WaitingPhoto[]>([]);
@@ -56,13 +63,25 @@ function Upload() {
     (entry) => entry.status === "failed" && entry.errorCode === "QUOTA_EXCEEDED",
   ).length;
 
+  /**
+   * Queues a pick, after asking if it needs more space than is left (13.1e): what is stored plus
+   * what is already waiting to upload. Without usage (offline, not loaded yet) it just queues.
+   */
   async function add(files: File[], options?: AddOptions) {
-    // Space left after what is stored and what is already waiting to upload.
     const waiting = entries.filter(isActive).reduce((sum, entry) => sum + entry.sizeBytes, 0);
+    const left = me ? Math.max(me.usage.quotaBytes - me.usage.bytesUsed - waiting, 0) : Infinity;
+    // Only what would be queued counts: no videos or other skipped files.
+    const needed = files.reduce((sum, file) => sum + (checkFile(file).ok ? file.size : 0), 0);
+    if (needed > left) {
+      setTooBig({ files, options, needed, left });
+      return;
+    }
+    await queueFiles(files, options);
+  }
+
+  async function queueFiles(files: File[], options?: AddOptions) {
     const result = await queue.add(files, options);
     setPicked(result.rejected.length ? result : null);
-    const left = me ? Math.max(me.usage.quotaBytes - me.usage.bytesUsed - waiting, 0) : Infinity;
-    setSpace(result.addedBytes > left ? { needed: result.addedBytes, left } : null);
   }
 
   // Shared photos (9.6) wait in the inbox, through a login if needed, until the user uploads or
@@ -98,7 +117,6 @@ function Upload() {
   }
 
   function retryAll() {
-    setSpace(null);
     void queue.retryAll();
     void queryClient.invalidateQueries({ queryKey: ["me"] });
   }
@@ -118,8 +136,16 @@ function Upload() {
       {storageFull > 0 && (
         <StorageFullBanner count={storageFull} usage={me?.usage} onRetry={retryAll} />
       )}
-      {space && storageFull === 0 && (
-        <SpaceWarning needed={space.needed} left={space.left} onDismiss={() => setSpace(null)} />
+      {tooBig && (
+        <SpaceConfirm
+          needed={tooBig.needed}
+          left={tooBig.left}
+          onCancel={() => setTooBig(null)}
+          onUpload={() => {
+            setTooBig(null);
+            void queueFiles(tooBig.files, tooBig.options);
+          }}
+        />
       )}
       {shareFailed && (
         <div

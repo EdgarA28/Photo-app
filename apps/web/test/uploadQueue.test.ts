@@ -602,6 +602,46 @@ describe("large batches stay in the tab that picked them (13.1c)", () => {
   });
 });
 
+describe("storage full (13.1e, FR-UP-7)", () => {
+  const full = () => new ApiRequestError("QUOTA_EXCEEDED", "Not enough storage", 413);
+
+  it("stops every waiting file at the first refusal, without asking the server for each", async () => {
+    let refuse = false;
+    const { api, uploadUrl } = uploadApi(() => (refuse ? full() : undefined));
+    const { post, calls } = controlledPost();
+    const { queue } = testUploadQueue(api, { post });
+    await queue.start(USER);
+    await queue.add([1, 2, 3, 4, 5, 6].map((n) => testFile(`IMG_${n}.jpg`)));
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
+
+    // Storage runs out: the next file is refused…
+    refuse = true;
+    calls[0]!.resolve();
+    await vi.waitFor(() => expect(statuses(queue)[3]).toBe("failed"));
+    // …and the ones behind it stop as well, untried; running uploads carry on.
+    expect(statuses(queue)).toEqual([
+      "done",
+      "uploading",
+      "uploading",
+      "failed",
+      "failed",
+      "failed",
+    ]);
+    expect(uploadUrl).toHaveBeenCalledTimes(4);
+    expect(
+      queue
+        .getSnapshot()
+        .slice(3)
+        .map((e) => e.errorCode),
+    ).toEqual(["QUOTA_EXCEEDED", "QUOTA_EXCEEDED", "QUOTA_EXCEEDED"]);
+
+    // Space freed: Retry all sends them again.
+    refuse = false;
+    await queue.retryAll();
+    await vi.waitFor(() => expect(uploadUrl).toHaveBeenCalledTimes(5));
+  });
+});
+
 describe("upload queue: files from the device (Android, 2026-10-26)", () => {
   it("keeps its own copy of the bytes, read when the file is added", async () => {
     const store = new MemoryUploadStore();

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.33 |
+| **Version** | 0.34 |
 | **Date** | 2026-10-31 |
 | **Owner** | Edgar |
 | **Status** | Draft — architecture agreed, implementation not started |
@@ -634,6 +634,7 @@ TypeScript Lambda, arm64, in `apps/api` (same bundle as the API, own handler and
 - Selected files stored in IndexedDB with status (`queued`/`uploading`/`done`/`failed`).
 - Large batches (FR-UP-5: a folder or > 500 MB picked at once, computers only): the picked files are not copied or stored; they are read when uploaded and kept only in the tab that picked it, which uploads them whether or not it holds the upload lock, and is not interrupted by another tab or the service worker (its progress counts as activity). Background Sync doesn't cover them. While one runs: "keep this tab open" note, a warning before the tab is closed or reloaded, and Screen Wake Lock where supported. A file moved or deleted since it was picked fails with a message instead of retrying.
 - Phones copy every pick (picked files can lose their read permission on Android), at most 1 GB per pick; the rest is listed as not added.
+- Storage (FR-UP-7): a pick that needs more than the space left (quota − used − already waiting) asks first ("Upload anyway" / "Cancel"). At the first upload refused for storage, every file still waiting stops as "storage full" without asking the server for each; "Retry all" sends them again after space is freed.
 - Worker loop: request upload URL → POST to S3 with progress → mark done → invalidate gallery. The gallery refresh is coalesced (at most one per 5 s while uploads finish), so a batch of thousands of files doesn't refetch the gallery after each one.
 - Large queues: the bytes are stored once (status changes rewrite only the item), the UI updates at most once per frame, the upload list is virtualized and the gallery shows at most 20 upload tiles plus "+N more".
 - Retries on `online` event and on app start; Background Sync where supported (Chromium only): the service worker uploads the stored queue once online, even with the app closed, using the stored refresh token (§11.4).
@@ -846,6 +847,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
+| 0.34 | 2026-11-01 | Storage before and during a batch (13.1e): ask before queuing a pick bigger than the space left, stop all waiting files at the first refusal (§12.4) |
 | 0.33 | 2026-11-01 | FR-GAL-5: no placeholder for photos still processing; they appear once ready (user request) |
 | 0.32 | 2026-11-01 | `DELETE /trash` in steps (`{deleted, remaining}`, client repeats), since a big trash took longer than one request may run (§9) |
 | 0.31 | 2026-11-01 | Folders (13.1a): FR-UP-1. Large batches (13.1c): FR-UP-5 exception (in the picking tab only, survives connection loss, not a tab close), phone limit 1 GB per pick (§12.4) |

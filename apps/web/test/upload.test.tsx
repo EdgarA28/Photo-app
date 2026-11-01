@@ -282,26 +282,42 @@ describe("storage full (FR-UP-7, 8.14)", () => {
     expect(screen.queryAllByText(/Not enough storage/)).toHaveLength(0);
   });
 
-  it("warns when the picked files need more space than is left, but still queues them", async () => {
+  it("asks before queuing photos that need more space than is left (13.1e)", async () => {
     const { api, queue } = setup({ "GET /me": usage(2 * GiB - 1500) });
     const { router } = await renderAt("/upload", { api, uploads: queue });
     await usageLoaded(router);
 
-    pick([testFile("IMG_1.jpg", 1000), testFile("IMG_2.jpg", 1000)]);
-    const warning = await screen.findByText(/These photos need/);
-    expect(warning.textContent).toBe(
-      "These photos need 2.0 KB, but only 1.5 KB is left. Some won't upload until you free up space.",
-    );
+    // A video doesn't count: it would be skipped anyway.
+    const files = [
+      testFile("IMG_1.jpg", 1000),
+      testFile("IMG_2.jpg", 1000),
+      testFile("clip.mp4", 5000, "video/mp4"),
+    ];
+    pick(files);
+    let dialog = await screen.findByRole("alertdialog", {
+      name: "Not enough storage for all of these",
+    });
+    expect(dialog.textContent).toContain("These photos need 2.0 KB, but only 1.5 KB is left.");
+    expect(queue.getSnapshot()).toHaveLength(0);
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(queue.getSnapshot()).toHaveLength(0);
+
+    pick(files);
+    dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Upload anyway" }));
     await waitFor(() => expect(queue.getSnapshot()).toHaveLength(2));
+    expect(await screen.findByText("2 added · 1 file skipped")).toBeTruthy();
   });
 
-  it("doesn't warn when the files fit", async () => {
+  it("doesn't ask when the photos fit", async () => {
     const { api, queue } = setup({ "GET /me": usage(GiB) });
     const { router } = await renderAt("/upload", { api, uploads: queue });
     await usageLoaded(router);
     pick([testFile("IMG_1.jpg", 1000)]);
     await waitFor(() => expect(queue.getSnapshot()).toHaveLength(1));
-    expect(screen.queryByText(/These photos need/)).toBeNull();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   it("retries every failed upload from the list", async () => {

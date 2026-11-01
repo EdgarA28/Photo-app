@@ -446,7 +446,10 @@ export function createUploadQueue({
       );
       if (!result || signal.aborted) return;
       if (result.uploaded) finished = result.patch;
-      else await update(id, result.patch);
+      else {
+        await update(id, result.patch);
+        if (result.patch.errorCode === "QUOTA_EXCEEDED") await stopForSpace(result.patch.error);
+      }
     } finally {
       if (active.get(id) === controller) active.delete(id);
       if (finished) progress.set(id, 1);
@@ -460,6 +463,24 @@ export function createUploadQueue({
     await refresh();
     progress.delete(id);
     await update(id, finished);
+  }
+
+  /**
+   * Storage is full (FR-UP-7, 13.1e): every file still waiting would be refused too, so they all
+   * stop here as "storage full" at once, without asking the server for each (a big folder would
+   * otherwise send thousands of requests that fail). Uploads already running finish or fail on
+   * their own; "Retry all" (8.14) sends the rest again once space is freed.
+   */
+  async function stopForSpace(error: string | null | undefined) {
+    for (const item of [...items.values()]) {
+      if (item.status !== "queued" || active.has(item.id)) continue;
+      await update(item.id, {
+        status: "failed",
+        error: error ?? null,
+        errorCode: "QUOTA_EXCEEDED",
+        retryAt: 0,
+      });
+    }
   }
 
   async function forget(id: string) {
