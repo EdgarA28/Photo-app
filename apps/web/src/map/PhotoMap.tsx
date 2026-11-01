@@ -74,6 +74,21 @@ export function PhotoMap({
     mapRef.current = map;
     map.addControl(new NavigationControl({ showCompass: false }), "top-right");
 
+    // On narrow maps (≤ 640 px, phones) MapLibre shows the attribution expanded until the first
+    // drag, and it covers a good part of the map (user request 2026-11-01). Collapse it to its ⓘ
+    // button as soon as it has its text; a tap opens it. Once only, so a style switch (dark mode)
+    // doesn't close it again after the user opened it. Runs after the control's own listeners
+    // (it was added in the constructor), so the class is already set.
+    const collapseAttribution = () => {
+      const attribution = container.current?.querySelector(".maplibregl-compact-show");
+      if (!attribution) return;
+      attribution.classList.remove("maplibregl-compact-show");
+      map.off("styledata", collapseAttribution);
+      map.off("sourcedata", collapseAttribution);
+    };
+    map.on("styledata", collapseAttribution);
+    map.on("sourcedata", collapseAttribution);
+
     // A new style (dark mode switched) drops the source, so it's added on every style load.
     map.on("style.load", () => {
       map.addSource(SOURCE, {
