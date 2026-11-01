@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Version** | 0.36 |
-| **Date** | 2026-10-31 |
+| **Version** | 0.37 |
+| **Date** | 2026-11-01 |
 | **Owner** | Edgar |
-| **Status** | Draft — architecture agreed, implementation not started |
+| **Status** | Draft — implemented and running in dev except the planned features (13.5 Google Photos import, 13.6 thumbnail queue) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
 
 > Living document. New features go into [§17 Feature backlog](#17-feature-backlog) first, then get a full spec section once they are planned. Record every change in [§19 Changelog](#19-changelog).
 
@@ -850,6 +850,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
 | 0.36 | 2026-11-01 | Continue an interrupted large batch by picking it again (13.1f, §12.4) |
+| 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.35 | 2026-11-01 | Whole-queue progress, time left, pause/resume, cancel all, other tabs' large batch (13.1d, §12.4) |
 | 0.34 | 2026-11-01 | Storage before and during a batch (13.1e): ask before queuing a pick bigger than the space left, stop all waiting files at the first refusal (§12.4) |
 | 0.33 | 2026-11-01 | FR-GAL-5: no placeholder for photos still processing; they appear once ready (user request) |

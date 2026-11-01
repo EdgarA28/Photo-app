@@ -21,7 +21,7 @@ services/auth-triggers   Cognito pre-sign-up Lambda (TypeScript)
 infra/bootstrap          OpenTofu state bucket (run once)
 infra/modules            OpenTofu modules
 infra/envs/{dev,prod}    Environment roots
-docs/                    Specification
+docs/                    Specification, scaling analysis
 ```
 
 ## Prerequisites
@@ -85,7 +85,7 @@ AWS_PROFILE=dev tofu init
 AWS_PROFILE=dev tofu plan -var-file=env.tfvars
 ```
 
-Deployment via GitHub Actions comes in Phase 10 (see `PROGRESS.md`).
+Deployment runs in GitHub Actions: `ci.yml` checks every pull request and push to `main` (with a dev `tofu plan`), and `deploy.yml` deploys dev after CI passes on `main`. Prod deploys come with Phase 11 (see `PROGRESS.md`).
 
 ## Third-party data
 
