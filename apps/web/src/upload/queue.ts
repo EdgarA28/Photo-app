@@ -29,8 +29,6 @@ export interface UploadQueue {
   retryAll(): Promise<void>;
   /** Cancel and forget an upload (a running one is aborted). */
   remove(id: string): Promise<void>;
-  /** Forget the finished uploads. */
-  clearFinished(): Promise<void>;
   /** Forget everything, for every user on the device (logout, 8.13). */
   clear(): Promise<void>;
   subscribe(listener: () => void): () => void;
@@ -639,10 +637,6 @@ export function createUploadQueue({
     },
 
     remove: forget,
-
-    async clearFinished() {
-      for (const item of [...items.values()]) if (item.status === "done") await forget(item.id);
-    },
 
     async clear() {
       for (const controller of active.values()) controller.abort();

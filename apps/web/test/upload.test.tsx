@@ -58,8 +58,10 @@ describe("upload page (FR-UP-1/5/6)", () => {
 
     calls[0]!.resolve();
     expect(await screen.findByRole("heading", { name: "1 of 2 uploaded" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Clear finished" }));
-    expect(await screen.findByRole("heading", { name: "0 of 1 uploaded" })).toBeTruthy();
+    // A finished upload leaves the list at once (user request 2026-11-01); the count stays.
+    expect(screen.queryByText("IMG_1.jpg")).toBeNull();
+    expect(screen.getByText("IMG_2.jpg")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Clear finished" })).toBeNull();
   });
 
   it("accepts dropped files and the camera", async () => {

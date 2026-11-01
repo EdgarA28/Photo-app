@@ -1,6 +1,6 @@
 import { useWindowVirtualizer } from "@tanstack/react-virtual";
-import { CircleAlert, CircleCheck, ImageIcon, RotateCw, X } from "lucide-react";
-import { memo, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { CircleAlert, ImageIcon, RotateCw, X } from "lucide-react";
+import { memo, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Button } from "@/components/ui/button";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -12,23 +12,26 @@ import { canPreview, useUploadQueue } from "./useUploads";
 const ROW_ESTIMATE = 73;
 
 /**
- * The queue on /upload (FR-UP-5/6): every file with its status, progress and actions. Virtualized
+ * The queue on /upload (FR-UP-5/6): the files still to upload or failed, with status, progress and
+ * actions; a finished upload leaves the list at once (user request 2026-11-01), the heading keeps
+ * counting it until the next app start. Virtualized
  * with the page's scroll (like the gallery grid), so a batch of thousands of files keeps only the
  * rows near the viewport, and their previews, in the DOM (13.1-0).
  */
 export function UploadList({ entries }: { entries: readonly QueueEntry[] }) {
   const queue = useUploadQueue();
+  const done = entries.filter((entry) => entry.status === "done").length;
+  const failed = entries.filter((entry) => entry.status === "failed").length;
+  const rows = useMemo(() => entries.filter((entry) => entry.status !== "done"), [entries]);
   const listRef = useRef<HTMLUListElement>(null);
   const top = useDocumentTop(listRef);
   const virtualizer = useWindowVirtualizer({
-    count: entries.length,
+    count: rows.length,
     estimateSize: () => ROW_ESTIMATE,
-    getItemKey: (index) => entries[index]!.id,
+    getItemKey: (index) => rows[index]!.id,
     overscan: 6,
     scrollMargin: top,
   });
-  const done = entries.filter((entry) => entry.status === "done").length;
-  const failed = entries.filter((entry) => entry.status === "failed").length;
 
   return (
     <section aria-labelledby="upload-queue" className="space-y-3">
@@ -36,29 +39,22 @@ export function UploadList({ entries }: { entries: readonly QueueEntry[] }) {
         <h2 id="upload-queue" className="font-medium">
           {done} of {entries.length} uploaded
         </h2>
-        <div className="flex gap-1">
-          {failed > 0 && (
-            <Button variant="ghost" size="sm" onClick={() => void queue.retryAll()}>
-              <RotateCw aria-hidden />
-              Retry all failed
-            </Button>
-          )}
-          {done > 0 && (
-            <Button variant="ghost" size="sm" onClick={() => void queue.clearFinished()}>
-              Clear finished
-            </Button>
-          )}
-        </div>
+        {failed > 0 && (
+          <Button variant="ghost" size="sm" onClick={() => void queue.retryAll()}>
+            <RotateCw aria-hidden />
+            Retry all failed
+          </Button>
+        )}
       </header>
       <ul
         ref={listRef}
-        className="relative rounded-xl border"
+        className={cn("relative rounded-xl", rows.length > 0 && "border")}
         style={{ height: virtualizer.getTotalSize() }}
       >
         {virtualizer.getVirtualItems().map((row) => (
           <UploadRow
             key={row.key}
-            entry={entries[row.index]!}
+            entry={rows[row.index]!}
             index={row.index}
             measure={virtualizer.measureElement}
             offset={row.start - virtualizer.options.scrollMargin}
@@ -146,9 +142,6 @@ const UploadRow = memo(function UploadRow({
         )}
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        {entry.status === "done" && (
-          <CircleCheck aria-label="Uploaded" className="size-5 text-primary" />
-        )}
         {failed && (
           <>
             <CircleAlert aria-hidden className="size-5 text-destructive" />
@@ -162,16 +155,14 @@ const UploadRow = memo(function UploadRow({
             </Button>
           </>
         )}
-        {entry.status !== "done" && (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label={`${failed ? "Remove" : "Cancel"} ${entry.fileName}`}
-            onClick={() => void queue.remove(entry.id)}
-          >
-            <X aria-hidden />
-          </Button>
-        )}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`${failed ? "Remove" : "Cancel"} ${entry.fileName}`}
+          onClick={() => void queue.remove(entry.id)}
+        >
+          <X aria-hidden />
+        </Button>
       </div>
     </li>
   );
