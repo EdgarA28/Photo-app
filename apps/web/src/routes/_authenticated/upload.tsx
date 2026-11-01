@@ -5,11 +5,18 @@ import { CircleAlert, MonitorUp, WifiOff, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
+import { useMeteredConnection } from "@/lib/connection";
 import { formatBytes } from "@/lib/format";
 import { MAX_SHARED_BYTES, MAX_SHARED_FILES } from "@/pwa/shareTarget";
 import { meQuery } from "@/queries/me";
 import { SpaceConfirm, StorageFullBanner } from "@/upload/QuotaNotices";
-import type { AddOptions, AddResult } from "@/upload/queue";
+import {
+  MOBILE_DATA_WARN_BYTES,
+  MobileDataConfirm,
+  MobileDataNote,
+  PhoneHint,
+} from "@/upload/MobileData";
+import { looksLikePhone, PHONE_PICK_BYTES, type AddOptions, type AddResult } from "@/upload/queue";
 import { UploadList } from "@/upload/UploadList";
 import type { WaitingPhoto } from "@/upload/shareInbox";
 import { SharedPhotos } from "@/upload/SharedPhotos";
@@ -58,13 +65,19 @@ function Upload() {
   /** Files of an interrupted batch picked again that were uploaded already (13.1f). */
   const [alreadyUploaded, setAlreadyUploaded] = useState(0);
   const [interrupted, setInterrupted] = useState<InterruptedBatch[]>([]);
-  /** A pick that needs more space than is left, waiting for the user's go-ahead (13.1e). */
-  const [tooBig, setTooBig] = useState<{
+  /**
+   * A pick waiting for the user's go-ahead: it needs more space than is left (13.1e), or is big
+   * and the connection is mobile data (13.1l). Both can apply, asked in that order.
+   */
+  const [confirm, setConfirm] = useState<{
     files: File[];
     options: AddOptions | undefined;
     needed: number;
     left: number;
+    step: "space" | "mobileData";
   } | null>(null);
+  const metered = useMeteredConnection();
+  const phone = looksLikePhone();
   const [shareFailed, setShareFailed] = useState(shared === "failed");
   const [shareSkipped, setShareSkipped] = useState(skipped ?? 0);
   const [sharedPhotos, setSharedPhotos] = useState<WaitingPhoto[]>([]);
@@ -76,20 +89,36 @@ function Upload() {
     (entry) => entry.status === "failed" && entry.errorCode === "QUOTA_EXCEEDED",
   ).length;
 
+  /** Whether a pick of this size asks first because of mobile data (13.1l). */
+  const asksForData = (needed: number) => metered !== null && needed >= MOBILE_DATA_WARN_BYTES;
+
   /**
    * Queues a pick, after asking if it needs more space than is left (13.1e): what is stored plus
-   * what is already waiting to upload. Without usage (offline, not loaded yet) it just queues.
+   * what is already waiting to upload. Without usage (offline, not loaded yet) that check is
+   * skipped. Then, on mobile data, if the pick is big (13.1l).
    */
   async function add(files: File[], options?: AddOptions) {
     const waiting = entries.filter(isActive).reduce((sum, entry) => sum + entry.sizeBytes, 0);
     const left = me ? Math.max(me.usage.quotaBytes - me.usage.bytesUsed - waiting, 0) : Infinity;
-    // Only what would be queued counts: no videos or other skipped files.
-    const needed = files.reduce((sum, file) => sum + (checkFile(file).ok ? file.size : 0), 0);
-    if (needed > left) {
-      setTooBig({ files, options, needed, left });
+    // Only what would be queued counts: no videos or other skipped files, and on a phone at most
+    // what one pick takes.
+    const valid = files.reduce((sum, file) => sum + (checkFile(file).ok ? file.size : 0), 0);
+    const needed = phone ? Math.min(valid, PHONE_PICK_BYTES) : valid;
+    if (needed > left) return setConfirm({ files, options, needed, left, step: "space" });
+    if (asksForData(needed))
+      return setConfirm({ files, options, needed, left, step: "mobileData" });
+    await queueFiles(files, options);
+  }
+
+  /** "Upload anyway": the next question, if any, else queue the pick. */
+  function confirmed() {
+    if (!confirm) return;
+    if (confirm.step === "space" && asksForData(confirm.needed)) {
+      setConfirm({ ...confirm, step: "mobileData" });
       return;
     }
-    await queueFiles(files, options);
+    setConfirm(null);
+    void queueFiles(confirm.files, confirm.options);
   }
 
   async function queueFiles(files: File[], options?: AddOptions) {
@@ -172,6 +201,7 @@ function Upload() {
         <InterruptedBatches batches={interrupted} onDismiss={(id) => void dismissBatch(id)} />
       )}
       <UploadPicker onFiles={(files, options) => void add(files, options)} />
+      {phone && <PhoneHint />}
       {alreadyUploaded > 0 && (
         <p role="status" className="text-sm text-muted-foreground">
           {alreadyUploaded === 1
@@ -182,15 +212,21 @@ function Upload() {
       {storageFull > 0 && (
         <StorageFullBanner count={storageFull} usage={me?.usage} onRetry={retryAll} />
       )}
-      {tooBig && (
+      {confirm?.step === "space" && (
         <SpaceConfirm
-          needed={tooBig.needed}
-          left={tooBig.left}
-          onCancel={() => setTooBig(null)}
-          onUpload={() => {
-            setTooBig(null);
-            void queueFiles(tooBig.files, tooBig.options);
-          }}
+          needed={confirm.needed}
+          left={confirm.left}
+          // Closing also follows "Upload anyway", which may have moved on to the next question.
+          onCancel={() => setConfirm((open) => (open?.step === "space" ? null : open))}
+          onUpload={confirmed}
+        />
+      )}
+      {confirm?.step === "mobileData" && metered && (
+        <MobileDataConfirm
+          reason={metered}
+          bytes={confirm.needed}
+          onCancel={() => setConfirm((open) => (open?.step === "mobileData" ? null : open))}
+          onUpload={confirmed}
         />
       )}
       {shareFailed && (
@@ -259,6 +295,7 @@ function Upload() {
           </span>
         </p>
       )}
+      {online && metered === "cellular" && entries.some(isActive) && <MobileDataNote />}
       {!online && pending && (
         <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
           <WifiOff aria-hidden className="size-4" />

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "../src/api/errors";
 import { refreshAfterUpload } from "../src/queries/photos";
@@ -640,5 +640,117 @@ describe("big batches on screen (13.1-0)", () => {
     fireEvent.click(within(notice).getByRole("button", { name: "Dismiss" }));
     await waitFor(() => expect(screen.queryByText(/weren't uploaded/)).toBeNull());
     expect(batches.records.size).toBe(0);
+  });
+});
+
+describe("mobile data (13.1l)", () => {
+  const MiB = 1024 ** 2;
+  /** Photos that claim `mb` MB each, without allocating them. */
+  const bigPhotos = (count: number, mb = 45) =>
+    Array.from({ length: count }, (_, n) => {
+      const file = testFile(`IMG_${n}.jpg`);
+      Object.defineProperty(file, "size", { value: mb * MiB });
+      return file;
+    });
+
+  function connect(info: { type?: string; saveData?: boolean } | undefined) {
+    const connection = info && Object.assign(new EventTarget(), info);
+    Object.defineProperty(navigator, "connection", { value: connection, configurable: true });
+    return connection;
+  }
+
+  afterEach(() => {
+    connect(undefined);
+    vi.restoreAllMocks();
+  });
+
+  it("asks before a big pick on mobile data; Not now queues nothing", async () => {
+    connect({ type: "cellular" });
+    const { api, queue } = setup();
+    const { router } = await renderAt("/upload", { api, uploads: queue });
+    await usageLoaded(router);
+
+    pick(bigPhotos(5)); // 225 MB
+    let dialog = await screen.findByRole("alertdialog", { name: "Upload over mobile data?" });
+    expect(dialog.textContent).toContain("You're on mobile data. These photos are 225 MB");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Not now" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(queue.getSnapshot()).toHaveLength(0);
+
+    pick(bigPhotos(5));
+    dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Upload anyway" }));
+    await waitFor(() => expect(queue.getSnapshot()).toHaveLength(5));
+    expect(await screen.findByText("Uploading over mobile data.")).toBeTruthy();
+  });
+
+  it("doesn't ask for small picks or on Wi-Fi, and follows connection changes", async () => {
+    const connection = connect({ type: "cellular" })!;
+    const { api, queue } = setup();
+    const { router } = await renderAt("/upload", { api, uploads: queue });
+    await usageLoaded(router);
+    pick(bigPhotos(4)); // 180 MB
+    await waitFor(() => expect(queue.getSnapshot()).toHaveLength(4));
+    expect(screen.getByText("Uploading over mobile data.")).toBeTruthy();
+
+    Object.assign(connection, { type: "wifi" });
+    act(() => void connection.dispatchEvent(new Event("change")));
+    expect(screen.queryByText("Uploading over mobile data.")).toBeNull();
+    pick(bigPhotos(5));
+    await waitFor(() => expect(queue.getSnapshot()).toHaveLength(9));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("doesn't ask when the browser doesn't tell the connection type", async () => {
+    const { api, queue } = setup();
+    const { router } = await renderAt("/upload", { api, uploads: queue });
+    await usageLoaded(router);
+    pick(bigPhotos(5));
+    await waitFor(() => expect(queue.getSnapshot()).toHaveLength(5));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("says so when Data Saver is on", async () => {
+    connect({ type: "wifi", saveData: true });
+    const { api, queue } = setup();
+    const { router } = await renderAt("/upload", { api, uploads: queue });
+    await usageLoaded(router);
+    pick(bigPhotos(5));
+    const dialog = await screen.findByRole("alertdialog", { name: "Upload over mobile data?" });
+    expect(dialog.textContent).toContain("Data Saver is on. These photos are 225 MB.");
+  });
+
+  it("asks about storage first, then about mobile data", async () => {
+    connect({ type: "cellular" });
+    const { api, queue } = setup({
+      "GET /me": { ...testMe, usage: { bytesUsed: 0, photoCount: 0, quotaBytes: 100 * MiB } },
+    });
+    const { router } = await renderAt("/upload", { api, uploads: queue });
+    await usageLoaded(router);
+    pick(bigPhotos(5));
+    let dialog = await screen.findByRole("alertdialog", {
+      name: "Not enough storage for all of these",
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Upload anyway" }));
+    dialog = await screen.findByRole("alertdialog", { name: "Upload over mobile data?" });
+    expect(queue.getSnapshot()).toHaveLength(0);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Upload anyway" }));
+    await waitFor(() => expect(queue.getSnapshot()).toHaveLength(5));
+  });
+
+  it("tells phone users that big imports are a computer's job", async () => {
+    const { api, queue } = setup();
+    await renderAt("/upload", { api, uploads: queue });
+    expect(screen.queryByText(/Moving a whole photo library/)).toBeNull();
+    cleanup();
+
+    vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+      "Mozilla/5.0 (Linux; Android 15; Pixel 9) Mobile",
+    );
+    const phone = setup();
+    await renderAt("/upload", { api: phone.api, uploads: phone.queue });
+    expect(
+      await screen.findByText(/Moving a whole photo library\? It's easier on a computer/),
+    ).toBeTruthy();
   });
 });
