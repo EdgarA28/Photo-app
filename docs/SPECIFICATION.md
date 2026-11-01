@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Version** | 0.40 |
+| **Version** | 0.41 |
 | **Date** | 2026-11-01 |
 | **Owner** | Edgar |
-| **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
+| **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5), videos (Phase 14) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
 
 > Living document. New features go into [§17 Feature backlog](#17-feature-backlog) first, then get a full spec section once they are planned. Record every change in [§19 Changelog](#19-changelog).
 
@@ -63,11 +63,12 @@ A private photo storage and gallery app, similar in spirit to Google Photos, bui
 - PWA: installable, cached app shell, cached thumbnails, resilient upload queue
 - Search photos by place (town, region, country from EXIF GPS; owner only) and a map of own photos
 - Import photos picked in Google Photos (Google Photos Picker API; photos only, §6.9)
+- Videos (planned, Phase 14): MP4/MOV up to 2 GB — upload, poster + duration in the gallery, play, download, albums, sharing, trash (§6.10)
 
 ### 2.2 Out of scope for v1
 
 - Automatic camera-roll backup (not possible in a PWA, see §12.6)
-- Video files
+- Video transcoding / a playback copy for browsers that can't play the original (later, B-7 V2), video streaming (HLS), video editing, Live Photos, videos in the Google Photos import
 - Public share links for people without an account
 - Album download as ZIP
 - Search other than by place (dates, tags), face/object recognition
@@ -248,8 +249,8 @@ IDs are stable — reference them in issues, PRs and tests.
 | ID | Requirement |
 |---|---|
 | FR-UP-1 | Users can select one or many photos (file picker, drag & drop, or camera on mobile), and on computers a whole folder with its subfolders (folder picker or dropping a folder). |
-| FR-UP-2 | Supported formats: JPEG, PNG, HEIC/HEIF, WebP. |
-| FR-UP-3 | Maximum file size: 50 MB per photo. |
+| FR-UP-2 | Supported formats: JPEG, PNG, HEIC/HEIF, WebP. Videos: FR-VID-1. |
+| FR-UP-3 | Maximum file size: 50 MB per photo (videos: FR-VID-1). |
 | FR-UP-4 | Uploads go directly from the client to S3; photo bytes never pass through the API. |
 | FR-UP-5 | Uploads are queued locally and survive page reloads, app restarts and connection loss; failed uploads retry automatically. Exception: a **large batch** (a folder, or more than 500 MB picked at once on a computer) is uploaded by the tab that picked it and survives connection loss, but not closing or reloading that tab; the app asks before the tab is closed. On phones a pick is limited to 1 GB. |
 | FR-UP-6 | The gallery shows queued/uploading photos immediately with progress. |
@@ -333,6 +334,23 @@ IDs are stable — reference them in issues, PRs and tests.
 | FR-IMP-5 | The app shows the import's progress and a summary (e.g. "Imported 48 photos · 2 videos skipped · 1 not imported: storage full"). The user can cancel an import; photos already copied stay. |
 | FR-IMP-6 | A retried copy never creates a second photo or counts its bytes twice. Photos imported again in a later import are new photos (no dedupe in v1). |
 
+### 6.10 Videos (planned, Phase 14)
+
+Decided 2026-11-01 (user, the proposed defaults of task 14.0). V1 plays the original; a playback copy for every browser is B-7 V2.
+
+| ID | Requirement |
+|---|---|
+| FR-VID-1 | Users can upload videos in **MP4** (`video/mp4`) and **MOV** (`video/quicktime`) up to **2 GB** each (`MAX_VIDEO_BYTES`), with no duration limit. Other video formats are skipped like other unsupported files (FR-UP-2). |
+| FR-VID-2 | Video uploads go directly to S3 as a **multipart upload** (parts of 16 MB, several in parallel); a dropped connection repeats only the failed part. Videos are uploaded by the tab that picked them (like a large batch, FR-UP-5): they survive connection loss, not closing or reloading the tab, and the app asks before the tab is closed. On phones videos count towards the 1 GB per pick. |
+| FR-VID-3 | Videos count against the same storage quota as photos (FR-UP-7, FR-ACC-2); the quota is reserved when the upload starts. |
+| FR-VID-4 | Videos appear in the gallery, albums, places and the map like photos, sorted by their recording date (video metadata `creation_time`, else the upload time), with a **poster frame** and a play icon with the **duration**. A video with GPS in its metadata gets a place (FR-SRCH-1). |
+| FR-VID-5 | The viewer **plays the original** with the browser's player (play/pause, seek, full screen, sound). When the browser can't play it (e.g. HEVC outside Safari), the viewer says so and offers the download. |
+| FR-VID-6 | Download, delete, trash and restore work as for photos (FR-DL-*, FR-DEL-*). |
+| FR-VID-7 | Albums and sharing work as for photos: recipients see and play videos of shared albums, can download them and save them to their gallery (FR-SHR-10). |
+| FR-VID-8 | Public links (FR-SHR-8) can contain videos: people with the link can play and download them until the link expires. |
+| FR-VID-9 | Videos shared to the app from other apps (share target, §12.5) are accepted up to **200 MB** each; bigger ones are left out with a note ("open the app and pick it there"). |
+| FR-VID-10 | Imports from Google Photos still skip videos (FR-IMP-3). |
+
 ---
 
 ## 7. Non-functional requirements
@@ -393,6 +411,7 @@ users/{userId}/previews/{photoId}.jpg      ← max 1600 px, STANDARD
 - `photoId` = ULID (unique, time-sortable, URL-safe). Using the ID instead of the original file name avoids encoding issues and collisions; the original name is kept in DynamoDB.
 - The key format is defined **once** in `packages/shared/src/s3Keys.ts` and mirrored (with tests) in the Python service.
 - Derived images: `Cache-Control: public, max-age=31536000, immutable`.
+- Videos (§6.10): the original is `originals/{photoId}.mp4` or `.mov`; its poster frame uses the same `thumbs/` and `previews/` JPEGs, so the gallery treats it like a photo. A later playback copy (B-7 V2) would be `playback/{photoId}.mp4`.
 
 ### 8.2 DynamoDB — single table `photo-app-{env}`
 
@@ -413,6 +432,9 @@ Initial design; refine during implementation.
 | Place (list entry) | `USER#{userId}` | `PLACE#{placeId}` | — | — | kind (`city`/`region`/`country`), name, context, photoCount, trashedCount (its photos in the trash, so the entry survives for a restore) |
 | Place photo | `PLACE#{userId}#{placeId}` | `PHOTO#{photoId}` | `PLACE#{userId}#{placeId}` (removed while the photo is in the trash) | `TAKEN#{takenAt}#{photoId}` | ownerId, placeId |
 | Username claim | `USERNAME#{username}` | `USERNAME` | — | — | userId, claimedAt; when released: releasedAt, heldUntil |
+
+
+Videos (§6.10) are Photo items with `mediaType = video` (absent = photo, so existing items need no backfill) and, once processed, `durationMs`, `videoCodec` and `playable` (the codec is one every browser plays: H.264/AAC MP4). While uploading, the item holds the multipart `uploadId`. `contentType` is `video/mp4` or `video/quicktime`. Usage keeps one `photoCount` for both media types.
 
 Access patterns:
 
@@ -455,6 +477,9 @@ Access patterns:
 | `GET` | `/me` | Profile (incl. `username`), usage and quota |
 | `PUT` | `/me/username` | Set or change own username `{username}`; `409 USERNAME_TAKEN` if someone else has it |
 | `POST` | `/photos/upload-url` | Body `{fileName, contentType, sizeBytes}` → `{photoId, upload: {url, fields}}`; creates `pending` item, checks quota |
+| `POST` | `/videos/uploads` | Start a video upload (FR-VID-1–3): body `{fileName, contentType, sizeBytes}` → `201 {photoId, uploadId, partBytes, partCount}`; same quota check and `pending` item as `upload-url`, plus `CreateMultipartUpload` |
+| `POST` | `/videos/{photoId}/parts` | Body `{partNumbers}` (≤ 100) → pre-signed `UploadPart` URLs, 15 min; only for the caller's `pending` video (else 404 / 409) |
+| `POST` | `/videos/{photoId}/complete` | Body `{parts: [{partNumber, etag}]}` → `CompleteMultipartUpload`, then the stored size must equal `sizeBytes`, else the object is deleted, the photo `failed` and `400` (replaces the POST policy's size condition). `DELETE /photos/{id}` of a pending video aborts the multipart upload |
 | `GET` | `/photos` | List own photos `?cursor&limit&sort` |
 | `GET` | `/photos/{photoId}` | Photo metadata; with `?albumId=` a photo of an album shared with the caller, with signed image URLs |
 | `GET` | `/photos/{photoId}/download-url` | 5-min pre-signed GET with `attachment` disposition |
@@ -463,7 +488,7 @@ Access patterns:
 | `GET` | `/imports/{importId}` | `{status, total, done, failed, skipped, failedReasons}`; while `picking` it checks the Picker session (at most once per `pollInterval`) and starts the copy when the user is done (FR-IMP-5) |
 | `DELETE` | `/imports/{importId}` | Cancel (FR-IMP-5): queued copies are dropped, the Picker session and the token deleted, photos already copied stay; `204` |
 | `POST` | `/links` | Public link `{photoIds}` (1–100 own photos; not ready / trashed / foreign left out), 15 min → `{token, path: /s/{token}, expiresAt, photoCount}`; none of the caller's → 404, none shareable → 409 (FR-SHR-8) |
-| `GET` | `/links/{token}` | **No login.** `{photos: [{photoId, thumbUrl, previewUrl, width, height}], expiresAt}`, newest first, images as CloudFront signed URLs valid until the link expires; 404 when unknown, expired or no photo left (FR-SHR-8) |
+| `GET` | `/links/{token}` | **No login.** `{photos: [{photoId, thumbUrl, previewUrl, width, height}], expiresAt}`, newest first, images as CloudFront signed URLs valid until the link expires; videos (planned, FR-VID-8) also get `mediaType`, `durationMs` and `videoUrl` (signed URL of the original, same expiry); 404 when unknown, expired or no photo left (FR-SHR-8) |
 | `GET` | `/links/{token}/photos/{photoId}/download-url` | **No login.** 5-min pre-signed GET of that original (only photos of the link), `attachment` with its file name; same 404 rule (FR-SHR-8) |
 | `GET` | `/trash` | Own photos in the trash (with `trashedAt`, `purgeAt`), most recently deleted first, one response (FR-DEL-3) |
 | `POST` | `/trash/{photoId}/restore` | Restore a photo from the trash; returns the photo (FR-DEL-3) |
@@ -546,6 +571,22 @@ TypeScript Lambda, arm64, in `apps/api` (same bundle as the API, own handler and
 | Cancel | `DELETE /imports/{id}` sets `cancelled`; queued `copy` messages see it and are dropped |
 | Limits | Timeout 120 s, memory 512 MB (everything streamed), visibility timeout 720 s; 500 photos ≈ 3 min with 3 workers, well within the token's hour |
 | Logs | Structured JSON; 30-day retention; never the token or `baseUrl` |
+
+### 10.2 Video service (planned, Phase 14)
+
+Second handler in `services/thumbnails` (`thumbnails.video_handler.handler`), so S3 keys, places, conflict retries and the `ready` transaction are shared with photos.
+
+| Aspect | Specification |
+|---|---|
+| Trigger | S3 `ObjectCreated:*` on `users/` with suffix `.mp4` / `.mov` → SQS `photo-app-{env}-videos` → event source mapping, batch 1, **maximum concurrency 2**. The photo extensions go to the thumbnail queue (§10); S3 routes by suffix, one notification entry per extension |
+| Tools | ffprobe + ffmpeg (static arm64 build, LGPL preferred) in the package |
+| Reading | Through a short pre-signed GET URL, so ffprobe/ffmpeg read only what they need with range requests (a 2 GB file isn't downloaded); fallback: download to `/tmp` |
+| Metadata | Duration, width/height (rotation applied), codec, `creation_time` → takenAt (same fallback as photos), GPS (`com.apple.quicktime.location.ISO6709` / `location`) → place (FR-SRCH-1) |
+| Poster | Frame at ~1 s (the first frame for shorter clips) → the same thumb (400 px, q75) and preview (1600 px, q82) JPEGs as photos |
+| Done | The photos' `ready` transaction (§10) plus `mediaType`, `durationMs`, `videoCodec`, `playable` |
+| Errors | Not a video / unreadable / no video stream → `failed`, no retry; transient → batch item failure → DLQ after 3 receives (14 days) |
+| Limits | Memory ~3008 MB, timeout ~5 min, visibility timeout 6 × the timeout; skip sources over `MAX_VIDEO_BYTES` |
+| Logs | Structured JSON; 30-day retention |
 
 ---
 
@@ -633,6 +674,7 @@ TypeScript Lambda, arm64, in `apps/api` (same bundle as the API, own handler and
 
 - Selected files stored in IndexedDB with status (`queued`/`uploading`/`done`/`failed`).
 - Large batches (FR-UP-5: a folder or > 500 MB picked at once, computers only): the picked files are not copied or stored; they are read when uploaded and kept only in the tab that picked it, which uploads them whether or not it holds the upload lock, and is not interrupted by another tab or the service worker (its progress counts as activity). Background Sync doesn't cover them. While one runs: "keep this tab open" note, a warning before the tab is closed or reloaded, and Screen Wake Lock where supported. A file moved or deleted since it was picked fails with a message instead of retrying.
+- Videos (planned, §6.10): always in the picking tab's memory like a large batch (never IndexedDB), uploaded in 16 MB parts, 3 at a time, each retried on its own; progress from the bytes sent; expired part URLs are signed again; `complete` at the end. The viewer uses `<video controls playsinline preload="metadata">` with the preview as poster and the original from CloudFront; the service worker never caches videos or range responses.
 - Phones copy every pick (picked files can lose their read permission on Android), at most 1 GB per pick; the rest is listed as not added.
 - Interrupted large batches (FR-UP-5): a large batch is remembered (folder name, each file's name + size + last change, which are uploaded; no bytes). If its tab closes first, `/upload` says how many photos weren't uploaded; picking the same folder (or files) again uploads only the rest. Forgotten when done, on *Cancel all*, on *Dismiss* and at logout.
 - The whole queue (FR-UP-6): "312 of 1,040 uploaded", uploaded of total size, time left at the speed of the last 30 s, an overall progress bar; *Pause* / *Resume* (stored with the items, so no other tab or the service worker uploads paused files) and *Cancel all* (finished photos stay). Other tabs show "Uploading N photos in another tab" while one tab runs a large batch.
@@ -676,12 +718,12 @@ OpenTofu, region `us-east-1`. AWS Organization with separate accounts: **dev**, 
 
 | Module | Resources |
 |---|---|
-| `storage` | Photo bucket: public access block, SSE-S3, CORS (app origins only), lifecycle (abort incomplete multipart uploads after 2 days), optional versioning |
-| `thumbnails` | Python Lambda, IAM role (least privilege), S3 notification + Lambda permission, SQS DLQ, log group (30 days) |
+| `storage` | Photo bucket: public access block, SSE-S3, CORS (app origins only), lifecycle (abort incomplete multipart uploads after 2 days), optional versioning. Planned (Phase 14): CORS also allows `PUT` and exposes `ETag` (multipart parts) |
+| `thumbnails` | Python Lambda, IAM role (least privilege), S3 notification → SQS thumbnail queue → event source mapping (13.6), SQS DLQ, log group (30 days). Planned (Phase 14): video queue + DLQ, video Lambda, S3 routing by suffix |
 | `api` | API Gateway HTTP API, JWT authorizer, API Lambda, IAM, throttling, log group; trash purge Lambda (same bundle, own role) run daily by an EventBridge rule (FR-DEL-3); import worker Lambda (same bundle, own role) + SQS import queue and DLQ + Google client secret in SSM (§10.1) |
 | `auth` | Cognito user pool, domain, Google IdP, app client, pre-sign-up trigger |
 | `database` | DynamoDB table (on-demand, PITR in prod), GSI1, TTL on `ttl` (photo links) |
-| `frontend` | Site bucket, CloudFront distribution (OAC; behaviors for `/`, `/api/*`, `/users/*`), security headers with a strict Content-Security-Policy on the site (self only, plus Cognito, the photo bucket and the OpenFreeMap tiles for `connect-src`), SPA fallback (CloudFront Function on the default behavior: extension-less paths → `/index.html`; no distribution-wide error responses, so API/image 403/404 stay real), CloudFront key group for signed cookies/URLs, ACM cert, optional WAF |
+| `frontend` | Site bucket, CloudFront distribution (OAC; behaviors for `/`, `/api/*`, `/users/*`), security headers with a strict Content-Security-Policy on the site (self only, plus Cognito, the photo bucket and the OpenFreeMap tiles for `connect-src`), SPA fallback (CloudFront Function on the default behavior: extension-less paths → `/index.html`; no distribution-wide error responses, so API/image 403/404 stay real), CloudFront key group for signed cookies/URLs, ACM cert, optional WAF Planned (Phase 14): `media-src 'self' blob:` for the video player |
 
 All resources tagged `Project=photo-app`, `Environment={env}`, `ManagedBy=opentofu`.
 
@@ -690,7 +732,7 @@ All resources tagged `Project=photo-app`, `Environment={env}`, `ManagedBy=opento
 | | dev | prod |
 |---|---|---|
 | Domain | CloudFront default domain or `dev.photos.<domain>` | `photos.<domain>` |
-| Quota default | 2 GB | 10 GB |
+| Quota default | 2 GB (5 GB with Phase 14) | 10 GB (25 GB with Phase 14, confirmed in Phase 11) |
 | DynamoDB PITR | off | on |
 | Photo bucket versioning | off | on (with noncurrent-version expiry) |
 | WAF | off | on |
@@ -804,7 +846,7 @@ Indicative AWS list prices (us-east-1, 2026). Small scale (≈ 10 users, ≈ 100
 | Route 53 hosted zone (if used) | $0.50 |
 | **Total** | **≈ $2–4** |
 
-Main cost driver: storage, growing roughly linearly with photos. Risks: egress of originals beyond free tiers, WAF (≈ $5+/month when enabled), CloudWatch log volume.
+Main cost driver: storage, growing roughly linearly with photos. Videos (Phase 14) grow it much faster (1080p ≈ 100 MB/min, 4K ≈ 400 MB/min): the same ~$0.0125–0.023 per GB-month; playing them uses CloudFront traffic (free up to 1 TB/month); the video Lambda needs seconds per video (within the free tier at this scale). Risks: egress of originals beyond free tiers, WAF (≈ $5+/month when enabled), CloudWatch log volume.
 
 ---
 
@@ -820,7 +862,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | B-4 | More login providers | Apple, Microsoft — no backend changes needed | Idea |
 | B-5 | "Available offline" albums | Cache previews of selected albums in the service worker | Idea |
 | B-6 | Public share links | Time-limited CloudFront signed URLs for people without an account | Idea |
-| B-7 | Video support | Needs transcoding (e.g. MediaConvert) and different storage/egress planning. Planned as Phase 14 in `PROGRESS.md` (V1: multipart upload, ffmpeg poster + metadata, play the original; V2: playback copy); requirements `FR-VID-*` come with task 14.0 | Planned (Phase 14) |
+| B-7 | Video support | Needs transcoding (e.g. MediaConvert) and different storage/egress planning. V1 specified (§6.10 FR-VID-*, §9, §10.2, Phase 14 in `PROGRESS.md`): multipart upload, ffmpeg poster + metadata, play the original. V2 (a playback copy: H.264 MP4 ≤ 1080p, faststart, via MediaConvert or ffmpeg) is an idea | Planned (Phase 14) |
 | B-8 | Search & metadata | Date ranges, tags (places and map done: §6.8); location off switch | Idea |
 | B-9 | On-the-fly image resizing | Only if many sizes are needed; current fixed sizes are simpler | Idea |
 | B-11 | SQS queue in front of the thumbnail Lambda | S3 → SQS → thumbnail Lambda with an event source maximum concurrency (e.g. 5), so big upload bursts can't use up the account's Lambda capacity and throttle the API. Only if raising the concurrency quota (12.3a) and reserved concurrency on the thumbnail Lambda aren't enough. Costs: new queue (redrives to the existing DLQ), S3 notification target changes, handler reads SQS records | Done in dev (13.6, §10) |
@@ -853,6 +895,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.36 | 2026-11-01 | Continue an interrupted large batch by picking it again (13.1f, §12.4) |
 | 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.38 | 2026-11-01 | Less gallery polling while uploads run: 15 s instead of 3 s, refreshes during a batch only mark lists stale (13.1j, §12.4) |
+| 0.41 | 2026-11-01 | Videos specified (Phase 14, decisions of 14.0 = the proposed defaults): FR-VID-1–10 (§6.10), scope (§2), keys + Photo attributes (§8), `/videos/*` multipart routes (§9), video service (§10.2), upload queue + viewer (§12.4), modules + quota defaults (§13), cost (§16), B-7 (§17) |
 | 0.40 | 2026-11-01 | Thumbnail queue (13.6) built and in dev: §10 trigger/retries describe the current state, note that event filtering can't drop derived-object events; B-11 done (§17) |
 | 0.39 | 2026-11-01 | Mobile data warning for picks ≥ 200 MB, upload-page note while uploading over mobile data, phone hint that big imports are a computer's job (13.1l, §12.4) |
 | 0.35 | 2026-11-01 | Whole-queue progress, time left, pause/resume, cancel all, other tabs' large batch (13.1d, §12.4) |

@@ -15,7 +15,7 @@
 
 | | |
 |---|---|
-| **Phase** | Local `main` is 7 commits ahead of GitHub `origin/main` (`6b1ba67`, PR #9): the docs sweep, 13.1j and 13.1l (web, deployed to dev by hand) and 13.6 (thumbnail queue, applied to dev from local 2026-11-01, user's request: don't push yet); pushing `main` makes CI redeploy the same. Everything else on `main` was deployed to dev by CI. Done: Phases 0–10 for dev (prod parts and the iOS test of 9.7 moved to Phase 11), Phase 8 extras 8.16–8.32, Phase 13: 6.11 stale-pending sweep, 13.1-0/a–f/h/j/l bulk / folder upload, 13.2 search by place + map, 13.3 trash, 13.4 conflict retries. In progress: Phase 12 verification (12.2 CSP check, 12.3, 12.5/12.6/12.8/12.9), user checks of several features (see Next up). 13.6 SQS thumbnail queue on dev (photo upload + burst checks left); then 13.1i; then 13.5 (Google Photos import); Phase 14 (videos) planned, starts with the user's decisions in 14.0. Phase 11 (prod + iOS) last |
+| **Phase** | Local `main` is 7 commits ahead of GitHub `origin/main` (`6b1ba67`, PR #9): the docs sweep, 13.1j and 13.1l (web, deployed to dev by hand) and 13.6 (thumbnail queue, applied to dev from local 2026-11-01, user's request: don't push yet); pushing `main` makes CI redeploy the same. Everything else on `main` was deployed to dev by CI. Done: Phases 0–10 for dev (prod parts and the iOS test of 9.7 moved to Phase 11), Phase 8 extras 8.16–8.32, Phase 13: 6.11 stale-pending sweep, 13.1-0/a–f/h/j/l bulk / folder upload, 13.2 search by place + map, 13.3 trash, 13.4 conflict retries. In progress: Phase 12 verification (12.2 CSP check, 12.3, 12.5/12.6/12.8/12.9), user checks of several features (see Next up). 13.6 SQS thumbnail queue on dev (photo upload + burst checks left); then 13.1i; then 13.5 (Google Photos import); Phase 14 (videos) specified (14.0 done), building starts with 14.1. Phase 11 (prod + iOS) last |
 | **Last updated** | 2026-11-01 |
 | **Deployed envs** | dev (by CI from `main`; 13.6 applied from local): bootstrap + table `photo-app-dev` + bucket `photo-app-photos-dev-063359189013` + Cognito pool `us-east-1_vYJcHEj4G` (Google IdP, managed login branding) + trigger `photo-app-dev-pre-sign-up` + thumbnail queue `photo-app-dev-thumbnails` (SQS, max concurrency 5) → thumbnail Lambda `photo-app-dev-thumbnails` with DLQ + API `https://tnl6uhgwkg.execute-api.us-east-1.amazonaws.com` + daily purge Lambda `photo-app-dev-trash-purge` (trash purge + stale-pending sweep, 03:00 UTC) + site bucket `photo-app-site-dev-063359189013` + CloudFront `E1TPVGEAUNF8HT` (`https://dopqu53s0gzhf.cloudfront.net`) + media key group / public key `K3C9HRNJD7QAW6` / SSM key (test resources, destroy when done). Lambda concurrency quota 1,000 (12.3a). general: budget. prod: nothing |
 | **Blockers** | none |
@@ -36,7 +36,7 @@ Everything below is on dev: by CI up to `6b1ba67`, the newer local commits (13.1
 4. **Phase 12 (verification, against dev)**: 12.3 performance, 12.5 state encryption, 12.6 deploy role scope, 12.8 bootstrap state, 12.9 DLQ alarm (needs approval).
 5. **13.5 Import from Google Photos** (spec v0.24, docs only): first step 13.5a (Google Cloud setup, user).
 6. **13.2 follow-ups** (later): location off switch in Settings; hint about Google Photos shares losing the location.
-7. **Phase 14 Videos** (planned 2026-11-01, docs only): first step 14.0 (user decides size limit, formats, transcoding, quota, phones, public links/share target).
+7. **Phase 14 Videos** (planned 2026-11-01): 14.0 done (defaults decided, spec v0.41); next 14.1 shared package → 14.2 API → 14.3 video processing → 14.4 infra (approval).
 8. **Phase 11 last** (user, 2026-10-27): everything prod (prod bootstrap 1.3/1.4/1.5, domain 1.7, 10.3, 11.1–11.5, 12.3a prod quota, 12.4, 12.7) and the iOS test of 9.7.
 
 Notes: hand uploads of the site (only if CI can't): `apps/web/scripts/upload-site.sh <bucket> <distribution>` with the dev `VITE_*` vars (`set -a; source apps/web/.env.development.local; set +a`). Run locally: `pnpm --filter @photo-app/web env:dev` once (needs the dev SSO session), then `pnpm --filter @photo-app/web dev`. Open suggestion to the user: a "Recently added" sort or a hint after uploads (photos are placed by date taken, so older photos land far down). Known leftovers: leaving the page while selecting leaves the select-mode history entry behind (one extra Back); close old app tabs in Chrome on the phone (a frozen one stalls IndexedDB, 8.24).
@@ -433,19 +433,20 @@ Deferred by the user (2026-10-24): done once Phases 7–12 are finished. Until t
 
 **Phases inside Phase 14:** V1 = 14.0–14.8 (upload, poster + metadata, play the original with a download fallback). V2 = 14.9 (playback copy so every video plays everywhere and starts fast). Later = 14.10.
 
-**Open decisions (user, in 14.0)** — defaults proposed in brackets:
+**Decisions (14.0, user 2026-11-01: "go with your defaults")** — the values in brackets are now decided:
 1. Maximum video size [2 GB; S3 single CopyObject limit is 5 GB, which 8.26 "save to my gallery" relies on]
 2. Formats [MP4 `video/mp4` + MOV `video/quicktime`; nothing else (no AVI/MKV/WebM)]
 3. Transcoding in V1 or later [later (V2): V1 plays the original where the browser can, else "Download to play"]
-4. Quota [same quota for photos and videos; raise the defaults (e.g. dev 5 GB, prod 25 GB) or per-user overrides; decide before prod]
+4. Quota [same quota for photos and videos; defaults raised to dev 5 GB / prod 25 GB in 14.7 (prod confirmed in Phase 11); per-user overrides stay possible]
 5. Phones [videos allowed on phones up to the 1 GB per pick limit (13.1c); bigger → "use a computer"]
 6. Public links (8.22) and share target (9.8) for videos [public links: yes, the link points at the original; share target: videos ≤ 200 MB (stored in IndexedDB by the service worker), bigger ones refused with a note]
 7. Maximum duration [none in V1; the processing Lambda only reads the start of the file, so long videos are fine]
 
-- [ ] **14.0** Decisions + spec (docs only)
-  - [ ] User decides the open points above
-  - [ ] Spec: new §6.10 Videos with `FR-VID-1…` (upload MP4/MOV up to the limit, resumable; poster + duration in the gallery; play in the viewer, download fallback; download the original; albums/sharing/trash/places/quota like photos; recording date and GPS from the video's metadata); §2 scope (videos in), §8 data model, §9 routes, §10.2 new "Video service" section, §12 frontend, §13 infra, §16 cost; B-7 → planned (Phase 14); changelog version bump
-  - [ ] ARCHITECTURE: 📋 rows → filled in as tasks land
+- [x] **14.0** Decisions + spec (docs only) — done 2026-11-01, spec v0.41
+  - [x] User decides the open points above (the defaults)
+  - [x] Spec: new §6.10 Videos with `FR-VID-1…` (upload MP4/MOV up to the limit, resumable; poster + duration in the gallery; play in the viewer, download fallback; download the original; albums/sharing/trash/places/quota like photos; recording date and GPS from the video's metadata); §2 scope (videos in), §8 data model, §9 routes, §10.2 new "Video service" section, §12 frontend, §13 infra, §16 cost; B-7 → planned (Phase 14); changelog version bump
+  - [x] ARCHITECTURE: 📋 row (filled in as tasks land)
+  - Spec result: FR-VID-1–10 (§6.10; FR-VID-10: imports still skip videos), §2 scope, §8.1 keys + §8.2 Photo attributes (`mediaType`, `durationMs`, `videoCodec`, `playable`, `uploadId`), §9 `POST /videos/uploads`, `/videos/{id}/parts`, `/videos/{id}/complete` + `videoUrl` on public links, §10.2 video service (queue `photo-app-{env}-videos`, max concurrency 2), §12.4, §13.1/13.2 (CORS `PUT` + `ETag`, `media-src`, quota 5 / 25 GB), §16, B-7
 - [ ] **14.1** Shared package (`packages/shared`)
   - [ ] Content types `video/mp4` → `mp4`, `video/quicktime` → `mov` (separate `VIDEO_CONTENT_TYPES`, so photo-only places keep `PHOTO_CONTENT_TYPES`); `MAX_VIDEO_BYTES`; `MULTIPART_PART_BYTES` (e.g. 16 MB: 2 GB = 128 parts, S3 allows 10,000)
   - [ ] `mediaType: "photo" | "video"` on the photo schema (missing = photo, no backfill), `durationMs`, `videoCodec`, `playable` (V1: browser hint from the codec; H.264 → true), later `hasPlaybackCopy`
@@ -537,6 +538,7 @@ Moved to the end by the user (2026-10-27): everything about prod and iOS waits u
 
 | Date | Note |
 |---|---|
+| 2026-11-01 | **Video decisions (14.0)** (user: "go with your defaults"): 2 GB max, MP4 + MOV only, no transcoding in V1 (play the original, download fallback), one quota for photos and videos with defaults raised to dev 5 GB / prod 25 GB, videos count towards the phone's 1 GB per pick, public links include videos, share target takes videos ≤ 200 MB, no duration limit. Spec v0.41. |
 | 2026-11-01 | **Videos planned as Phase 14** (user): a second media type of the Photo item (albums, sharing, trash, places, quota unchanged); V1 = multipart upload + ffmpeg video Lambda (poster + metadata) + play the original with a download fallback; V2 = H.264 playback copy; later = import, Live Photos, HLS. Open decisions listed in 14.0 with proposed defaults (2 GB, MP4/MOV, transcoding later, quota to raise). |
 | 2026-11-01 | **Duplicate detection: not planned, deferred** (user: "forget that for now"). Today nothing detects a re-picked file (excluded from 13.1 on 2026-10-24, FR-IMP-6 "no dedupe in v1", SCALING S4 backlog only); 5.6a only stops duplicate *pending* items on retries. Sketch if it comes back (would be 13.7, no new AWS resources): browser SHA-256 per file → sent with `POST /photos/upload-url` → `HASH#{sha256}` claim per user in the `createPending` transaction → duplicate = no upload, "Already in your library — skipped"; hard delete / empty trash / stale-pending sweep release the claim (trashed photos still count); thumbnail Lambda stores the hash for new photos + one-off backfill for existing ones; 13.5 import uses the same check server-side. Catches identical bytes only (edited or re-compressed copies still upload). |
 | 2026-11-01 | **Bulk upload speed (explained to the user, nothing changed).** Three overlapping phases: upload (bandwidth; 3 parallel uploads, `CONCURRENCY` in `upload/queue.ts`), thumbnails (13.6 queue, 5 Lambdas ≈ 100–200 photos/min at 1.5–2.7 s each), gallery refresh (15 s while uploading, 13.1j). The queue only limits above ~50 Mbit/s upload. Levers if thumbnails lag (check `ApproximateAgeOfOldestMessage` first): raise `maximum_concurrency` to 10–20 (dev quota 1,000; prod 10 until Phase 11; more Usage conflicts, 13.4), memory 1536 → 1769 MB (one full vCPU, ~15 %), cheaper JPEG encoding (drop `optimize` on thumbs, measure), threads per batch (last). Upload side: 13.1i. Feel: show the picked file at once with a "processing" badge, a refresh right after the last upload, an "All uploaded, preparing N photos…" note. Estimate for 30 GB (~7,500 photos): ~3.5 h at 20 Mbit/s, ~1 h 20 min at 50, ~40 min upload + 40–75 min thumbnails at 100; on a computer (phones: 1 GB per pick), tab kept open; needs a `quotaBytes` override first (dev default 2 GB). |
@@ -617,6 +619,7 @@ Moved to the end by the user (2026-10-27): everything about prod and iOS waits u
 
 | Date | Summary |
 |---|---|
+| 2026-11-01 | 14.0 done: user took the proposed video defaults; spec v0.41 (FR-VID-1–10, §2, §8, §9, §10.2, §12.4, §13, §16, B-7). Docs only. |
 | 2026-11-01 | Phase 14 (videos) planned in detail: tasks 14.0–14.10, open decisions with defaults, costs, risks; spec B-7 and ARCHITECTURE point to it. Docs only. |
 | 2026-11-01 | Explained the 13.6 objects, bulk-upload speed levers, a 30 GB upload estimate and the state of duplicate detection (not planned, deferred by the user); recorded in Decisions & notes and SCALING S4. Docs only. |
 | 2026-11-01 | 13.6 committed (`2a12639`) and applied to dev from local (not pushed, user's request): 3 added, 3 changed, 2 destroyed, deployed allowlist kept. Pipeline checked with a test object; real photo + burst checks left. Spec v0.40. |
