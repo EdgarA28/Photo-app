@@ -77,7 +77,7 @@ DynamoDB limits a single partition to about 1,000 WCU/s (writes), and a throttle
 | S1 | ✅ | Originals in `INTELLIGENT_TIERING` (already the case). **Do not** enable the Deep Archive tiers | Originals are rarely read (the gallery uses thumbs/previews), so after ~90 days they move to Archive Instant Access (~$0.004/GB). Deep Archive would need a restore that takes hours before a download |
 | S2 | 🟠 | **Thumbnails/previews as WebP or AVIF** instead of JPEG (thumbnail Lambda) | They cost ~$23k/month at 1M users; −30–50 % size |
 | S3 | 🟢 | Previews in Intelligent-Tiering as well (or regenerate on demand) | Previews of old photos are rarely viewed |
-| S4 | 🟢 | **Skip duplicate files:** content hash per user (e.g. `HASH#{sha256}` item); skip re-uploads of the same file | Google Photos imports produce many duplicates; −5–15 % of storage |
+| S4 | 🟢 | **Skip duplicate files:** content hash per user (e.g. `HASH#{sha256}` item); skip re-uploads of the same file | Google Photos imports produce many duplicates; −5–15 % of storage. Discussed 2026-11-01, deferred by the user; sketch in PROGRESS Decisions & notes |
 | S5 | 🟢 | Downloads of originals through CloudFront (signed URLs) instead of pre-signed S3 GET | CloudFront's price per GB is lower at volume |
 
 ### 3.5 Product / business
