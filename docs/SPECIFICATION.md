@@ -820,7 +820,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | B-4 | More login providers | Apple, Microsoft — no backend changes needed | Idea |
 | B-5 | "Available offline" albums | Cache previews of selected albums in the service worker | Idea |
 | B-6 | Public share links | Time-limited CloudFront signed URLs for people without an account | Idea |
-| B-7 | Video support | Needs transcoding (e.g. MediaConvert) and different storage/egress planning | Idea |
+| B-7 | Video support | Needs transcoding (e.g. MediaConvert) and different storage/egress planning. Planned as Phase 14 in `PROGRESS.md` (V1: multipart upload, ffmpeg poster + metadata, play the original; V2: playback copy); requirements `FR-VID-*` come with task 14.0 | Planned (Phase 14) |
 | B-8 | Search & metadata | Date ranges, tags (places and map done: §6.8); location off switch | Idea |
 | B-9 | On-the-fly image resizing | Only if many sizes are needed; current fixed sizes are simpler | Idea |
 | B-11 | SQS queue in front of the thumbnail Lambda | S3 → SQS → thumbnail Lambda with an event source maximum concurrency (e.g. 5), so big upload bursts can't use up the account's Lambda capacity and throttle the API. Only if raising the concurrency quota (12.3a) and reserved concurrency on the thumbnail Lambda aren't enough. Costs: new queue (redrives to the existing DLQ), S3 notification target changes, handler reads SQS records | Done in dev (13.6, §10) |
