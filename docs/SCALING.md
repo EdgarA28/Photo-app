@@ -1,6 +1,6 @@
 # Scaling to millions of users — analysis & plan
 
-> Reference document from a design session on 2026-10-31. Nothing here is implemented yet; it is a backlog of changes and a cost model for the scenario **"up to 100 GB per user, millions of users"**.
+> Reference document from a design session on 2026-10-31 (status notes added 2026-11-01). Mostly not implemented yet (see the notes on D1, D4, J2); it is a backlog of changes and a cost model for the scenario **"up to 100 GB per user, millions of users"**.
 > Prices are approximate us-east-1 list prices as of 2026; re-check them with the AWS Pricing Calculator before making decisions.
 > Related: [`SPECIFICATION.md`](SPECIFICATION.md), [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
 
@@ -47,10 +47,10 @@ DynamoDB limits a single partition to about 1,000 WCU/s (writes), and a throttle
 
 | # | Prio | Change | Why |
 |---|---|---|---|
-| D1 | 🔴 | **Shard the pending marker:** `PK = PENDING#{hash(photoId) % 32}` instead of `PENDING`; the stale-pending sweep (`lib/pending.ts`, 6.11) queries all shards | Every upload in the app writes to the single `PENDING` partition. The 6.11 code isn't committed yet, so this is the cheapest moment |
+| D1 | 🔴 | **Shard the pending marker:** `PK = PENDING#{hash(photoId) % 32}` instead of `PENDING`; the stale-pending sweep (`lib/pending.ts`, 6.11) queries all shards | Every upload in the app writes to the single `PENDING` partition. *(2026-11-01: 6.11 shipped to dev with the single `PENDING` key; prod has no data yet, so sharding before the prod launch is still cheap.)* |
 | D2 | 🔴 | **Trash index key by date:** `GSI1PK = TRASH#{purgeDate}` (YYYY-MM-DD) instead of `TRASH`; the purge queries the days that have come due | Every trashed photo in the app lands on one GSI partition |
 | D3 | 🟠 | **Sparse per-user indexes** for `listTrashed` (e.g. `TRASH#{userId}`) and the map's `listLocated` (e.g. `LOCATED#{userId}`) | Both currently read the user's whole photo partition and filter afterwards. At 100 GB that is ~30–50k items per request |
-| D4 | 🟠 | Retries with backoff for `TransactionConflict` on the per-user `Usage` item; limit parallel uploads per client | Bulk imports run many transactions on one item (API reserve + thumbnail Lambda count) |
+| D4 | 🟠 | Retries with backoff for `TransactionConflict` on the per-user `Usage` item; limit parallel uploads per client | Bulk imports run many transactions on one item (API reserve + thumbnail Lambda count). *✅ Retries done (13.4, 2026-11-01: every transaction, up to 8 tries with jittered backoff; thumbnail Lambda too); uploads per client stay at 3 (13.1i may raise it adaptively)* |
 | D5 | 🟢 | Switch from on-demand to provisioned capacity + auto scaling (+ reserved capacity) once traffic is steady | Cost |
 
 ### 3.2 Cognito
@@ -66,7 +66,7 @@ DynamoDB limits a single partition to about 1,000 WCU/s (writes), and a throttle
 | # | Prio | Change | Why |
 |---|---|---|---|
 | J1 | 🔴 | **Fan out the daily purge:** the scheduled Lambda only lists what's due (trash by `TRASH#{date}`, pending shards) and sends batches to SQS; worker Lambdas delete them in parallel | `purge.handler` does every user's work in one run with a 15-minute ceiling |
-| J2 | 🟠 | **`DELETE /trash` (`emptyTrash`) as a background job:** 202 Accepted + SQS worker; the UI polls the trash | API Gateway gives up after 30 s; a trash with thousands of photos times out |
+| J2 | 🟠 | **`DELETE /trash` (`emptyTrash`) as a background job:** 202 Accepted + SQS worker; the UI polls the trash | API Gateway gives up after 30 s; a trash with thousands of photos times out. *Partly done (2026-11-01): `DELETE /trash` now works for up to 5 s per request and returns `{deleted, remaining}`; the web repeats it until empty, so no timeout. A background job is still the option for very large trashes* |
 | J3 | 🟠 | Same pattern for account deletion and the Google Photos import (13.5) | Unbounded work per user |
 | J4 | 🟠 | **Thumbnails via SQS:** S3 event → SQS → thumbnail Lambda with *maximum concurrency* and batches (replaces S3 → Lambda async + DLQ on-failure destination) | Smooths import bursts, protects DynamoDB / `Usage`, gives cleaner retries |
 
