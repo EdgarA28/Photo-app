@@ -3,6 +3,7 @@ import {
   conditionFailedAt,
   isConditionalCheckFailed,
   queryAll,
+  retryOnConflict,
   transactWrite,
   type Db,
 } from "./db";
@@ -326,13 +327,15 @@ async function removeMembershipLeniently(
   photoId: string,
 ): Promise<boolean> {
   try {
-    await db.client.send(
-      new DeleteCommand({
-        TableName: db.table,
-        Key: membershipKey(albumId, photoId),
-        ConditionExpression: "ownerId = :owner",
-        ExpressionAttributeValues: { ":owner": photoOwnerId },
-      }),
+    await retryOnConflict(() =>
+      db.client.send(
+        new DeleteCommand({
+          TableName: db.table,
+          Key: membershipKey(albumId, photoId),
+          ConditionExpression: "ownerId = :owner",
+          ExpressionAttributeValues: { ":owner": photoOwnerId },
+        }),
+      ),
     );
   } catch (err) {
     if (isConditionalCheckFailed(err)) return false;
@@ -358,14 +361,17 @@ async function removeMembershipLeniently(
 
 async function clearCover(db: Db, albumOwnerId: string, albumId: string, photoId: string) {
   try {
-    await db.client.send(
-      new UpdateCommand({
-        TableName: db.table,
-        Key: albumKey(albumOwnerId, albumId),
-        UpdateExpression: "REMOVE coverPhotoId, coverOwnerId",
-        ConditionExpression: "coverPhotoId = :photoId",
-        ExpressionAttributeValues: { ":photoId": photoId },
-      }),
+    // The album item is shared by every photo in it: retried on clashes (13.4).
+    await retryOnConflict(() =>
+      db.client.send(
+        new UpdateCommand({
+          TableName: db.table,
+          Key: albumKey(albumOwnerId, albumId),
+          UpdateExpression: "REMOVE coverPhotoId, coverOwnerId",
+          ConditionExpression: "coverPhotoId = :photoId",
+          ExpressionAttributeValues: { ":photoId": photoId },
+        }),
+      ),
     );
   } catch (err) {
     if (!isConditionalCheckFailed(err)) throw err; // Cover is another photo, or none.
@@ -381,12 +387,15 @@ async function updateIfExists(
   },
 ) {
   try {
-    await db.client.send(
-      new UpdateCommand({
-        TableName: db.table,
-        ...update,
-        ConditionExpression: "attribute_exists(PK)",
-      }),
+    // Album counts are shared by every photo in the album: retried on clashes (13.4).
+    await retryOnConflict(() =>
+      db.client.send(
+        new UpdateCommand({
+          TableName: db.table,
+          ...update,
+          ConditionExpression: "attribute_exists(PK)",
+        }),
+      ),
     );
   } catch (err) {
     if (!isConditionalCheckFailed(err)) throw err;

@@ -137,10 +137,14 @@ export function conditionFailedAt(err: unknown, index: number): boolean {
 }
 
 /**
- * True if a TransactWriteItems failure was only a clash with another transaction on the same
- * items (no condition failed): safe to retry.
+ * True if a write failed only because it clashed with a transaction on the same item(s), so
+ * nothing was applied and it is safe to retry: a TransactWriteItems cancelled for
+ * `TransactionConflict` (no condition failed), or a single-item write rejected with
+ * `TransactionConflictException` because a transaction on that item was in flight (seen in dev
+ * 2026-11-01: emptying a big trash, the empty-place cleanup after each delete).
  */
 export function isTransactionConflict(err: unknown): boolean {
+  if (err instanceof Error && err.name === "TransactionConflictException") return true;
   if (!(err instanceof Error) || err.name !== "TransactionCanceledException") return false;
   const reasons = (err as { CancellationReasons?: { Code?: string }[] }).CancellationReasons ?? [];
   return (
@@ -173,12 +177,28 @@ export const conflictPause = (attempt: number) => Math.random() * Math.min(1000,
 export async function transactWrite(
   db: Db,
   input: TransactWriteCommandInput,
-  { attempts = TRANSACTION_ATTEMPTS, pause = conflictPause } = {},
+  options: RetryOptions = {},
 ): Promise<void> {
+  await retryOnConflict(() => db.client.send(new TransactWriteCommand(input)), options);
+}
+
+export interface RetryOptions {
+  attempts?: number;
+  pause?: (attempt: number) => number;
+}
+
+/**
+ * Runs a write, again after a random, growing pause while it only clashes with transactions on
+ * the same item (`isTransactionConflict`; 13.4). For transactions (`transactWrite`) and for
+ * single-item writes on items many parallel operations touch (place and album counters).
+ */
+export async function retryOnConflict<T>(
+  write: () => Promise<T>,
+  { attempts = TRANSACTION_ATTEMPTS, pause = conflictPause }: RetryOptions = {},
+): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
-      await db.client.send(new TransactWriteCommand(input));
-      return;
+      return await write();
     } catch (err) {
       if (!isTransactionConflict(err) || attempt >= attempts - 1) throw err;
       const ms = pause(attempt);

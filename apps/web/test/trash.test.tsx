@@ -183,4 +183,33 @@ describe("daysLeft", () => {
     );
     expect(calls(request, "DELETE")).toHaveLength(3);
   });
+
+  it("carries on by itself after a temporary server error mid-way", async () => {
+    let items = [trashed(0, 1), trashed(1, 2), trashed(2, 3)];
+    let calls = 0;
+    const { api } = fakeApi({
+      ...defaultResponses,
+      "GET /trash": () => ({ items }),
+      "DELETE /trash": () => {
+        calls++;
+        if (calls === 2) return new ApiRequestError("INTERNAL_ERROR", "Something went wrong", 500);
+        const deleted = Math.min(2, items.length);
+        items = items.slice(deleted);
+        return { deleted, remaining: items.length };
+      },
+    } as Parameters<typeof fakeApi>[0]);
+    await renderAt("/trash", { api });
+    fireEvent.click(await screen.findByRole("button", { name: "Empty trash" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Empty the trash?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Empty trash" }));
+
+    expect(
+      await screen.findByText(
+        "The trash is empty.",
+        { selector: "p:not([role])" },
+        { timeout: 3000 },
+      ),
+    ).toBeTruthy();
+    expect(calls).toBe(3);
+  });
 });

@@ -8,6 +8,7 @@ import {
   conditionFailedAt,
   conflictPause,
   isTransactionConflict,
+  retryOnConflict,
   TRANSACTION_ATTEMPTS,
   transactWrite,
   type Db,
@@ -358,5 +359,27 @@ describe("transactWrite (13.4)", () => {
     random.mockReturnValue(0);
     expect(conflictPause(5)).toBe(0);
     random.mockRestore();
+  });
+});
+
+describe("retryOnConflict (13.4)", () => {
+  const ongoing = () =>
+    Object.assign(new Error("Transaction is ongoing for the item"), {
+      name: "TransactionConflictException",
+    });
+
+  test("a single-item write rejected for an ongoing transaction counts as a conflict", () => {
+    expect(isTransactionConflict(ongoing())).toBe(true);
+  });
+
+  test("retries such a write until it goes through", async () => {
+    const errors = [ongoing(), ongoing()];
+    const write = vi.fn(async () => {
+      const error = errors.shift();
+      if (error) throw error;
+      return "ok";
+    });
+    expect(await retryOnConflict(write, { pause: () => 0 })).toBe("ok");
+    expect(write).toHaveBeenCalledTimes(3);
   });
 });

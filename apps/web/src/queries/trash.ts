@@ -64,6 +64,9 @@ export const useRestorePhotos = () => useTrashAction((api, photoId) => api.trash
 export const useDeleteForever = () =>
   useTrashAction((api, photoId) => api.trash.deleteForever(photoId));
 
+/** Temporary errors (5xx, network) in a row before "Empty trash" gives up, and the pause between. */
+export const EMPTY_TRASH_RETRIES = 3;
+export const EMPTY_TRASH_RETRY_MS = 1000;
 /** Requests in a row that deleted nothing before "Empty trash" gives up (the trash didn't shrink). */
 const EMPTY_TRASH_STALLS = 3;
 
@@ -79,8 +82,19 @@ export function useEmptyTrash() {
     mutationFn: async (onProgress?: (deleted: number, total: number) => void) => {
       let deleted = 0;
       let stalls = 0;
+      let failures = 0;
       for (;;) {
-        const step = await api.trash.empty();
+        let step;
+        try {
+          step = await api.trash.empty();
+          failures = 0;
+        } catch (error) {
+          // A temporary server error mid-way: the steps before stay done, so just ask again.
+          if (!(error instanceof ApiRequestError) || !error.retryable) throw error;
+          if (++failures >= EMPTY_TRASH_RETRIES) throw error;
+          await new Promise((resolve) => setTimeout(resolve, EMPTY_TRASH_RETRY_MS));
+          continue;
+        }
         deleted += step.deleted;
         onProgress?.(deleted, deleted + step.remaining);
         if (step.remaining === 0) return deleted;

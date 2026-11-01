@@ -1,4 +1,5 @@
 import { DeleteCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
+import { log } from "../lib/log";
 import {
   TRASH_RETENTION_DAYS,
   type AllowedContentType,
@@ -15,6 +16,8 @@ import {
   stripKeys,
   type Db,
   transactWrite,
+  retryOnConflict,
+  isTransactionConflict,
 } from "./db";
 import {
   GSI1,
@@ -647,21 +650,32 @@ async function getPhoto(
  * Removes place list entries left without photos, counted or trashed; one that gained a photo
  * meanwhile stays.
  */
+/**
+ * Removes place entries left with no photos. Best effort: the photo's own delete is done by now,
+ * and an empty entry is never listed (`photoCount > 0`) and goes with a later delete there. Other
+ * deletes of photos at the same place update its counter in their transactions at the same moment,
+ * so this write can clash with them: retried, and if it keeps clashing, logged and left
+ * (dev 2026-11-01: emptying a big trash answered 500 here).
+ */
 async function dropEmptyPlaces(db: Db, userId: string, placeIds: Set<string> | undefined) {
   for (const placeId of placeIds ?? []) {
     try {
-      await db.client.send(
-        new DeleteCommand({
-          TableName: db.table,
-          Key: placeKey(userId, placeId),
-          // Trashed photos still need it for a restore (FR-DEL-3).
-          ConditionExpression:
-            "photoCount <= :zero AND (attribute_not_exists(trashedCount) OR trashedCount <= :zero)",
-          ExpressionAttributeValues: { ":zero": 0 },
-        }),
+      await retryOnConflict(() =>
+        db.client.send(
+          new DeleteCommand({
+            TableName: db.table,
+            Key: placeKey(userId, placeId),
+            // Trashed photos still need it for a restore (FR-DEL-3).
+            ConditionExpression:
+              "photoCount <= :zero AND (attribute_not_exists(trashedCount) OR trashedCount <= :zero)",
+            ExpressionAttributeValues: { ":zero": 0 },
+          }),
+        ),
       );
     } catch (err) {
-      if (!isConditionalCheckFailed(err)) throw err;
+      if (isConditionalCheckFailed(err)) continue; // Still has photos.
+      if (!isTransactionConflict(err)) throw err;
+      log("WARN", "Empty place entry left after clashing writes", { userId, placeId });
     }
   }
 }

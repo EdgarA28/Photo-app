@@ -1,5 +1,5 @@
 /** The trash (FR-DEL-3): GET /trash, restore, delete forever, empty, and the daily purge. */
-import { GetCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, GetCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import {
   TRASH_RETENTION_DAYS,
   apiErrorSchema,
@@ -337,6 +337,74 @@ describe("DELETE /trash/{photoId} and DELETE /trash", () => {
     expect(await trash(user)).toEqual([]);
     expect(await emptyTrash(repos, storage, user)).toEqual({ deleted: 0, remaining: 0 });
     expect(await repos.usage.get(user)).toMatchObject({ photoCount: 0, bytesUsed: 0 });
+  });
+
+  test("empty the trash survives the place clean-up clashing with other deletes", async () => {
+    // A single-item write on an item another transaction is updating is rejected with
+    // TransactionConflictException: the empty-place delete after each photo answered 500 when
+    // many photos of one place were deleted in parallel (dev, 2026-11-01).
+    const user = newUserId();
+    const photos = [];
+    for (let i = 0; i < 4; i++) {
+      const photo = await readyPhoto(user);
+      await addPlaces(db, user, photo.photoId, BERLIN);
+      photos.push(photo);
+    }
+    for (const photo of photos) await api(user, "DELETE", `/photos/${photo.photoId}`);
+    const send = db.client.send.bind(db.client);
+    let clashes = 0;
+    const clash = () =>
+      Object.assign(new Error("Transaction is ongoing for the item"), {
+        name: "TransactionConflictException",
+      });
+    const spy = vi.spyOn(db.client, "send").mockImplementation(((command: unknown) => {
+      const key = command instanceof DeleteCommand ? command.input.Key : undefined;
+      // The place clean-up clashes twice per call, then goes through.
+      if (String(key?.SK).startsWith("PLACE#") && clashes % 3 < 2) {
+        clashes++;
+        return Promise.reject(clash());
+      }
+      if (String(key?.SK).startsWith("PLACE#")) clashes++;
+      return send(command as never);
+    }) as typeof db.client.send);
+    try {
+      const res = await api(user, "DELETE", "/trash");
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ deleted: 4, remaining: 0 });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(clashes).toBeGreaterThan(0);
+    expect(await trash(user)).toEqual([]);
+    // The last delete removed the now empty place entries.
+    expect(await placeItem(user, BERLIN[2]!.placeId)).toBeUndefined();
+  });
+
+  test("a place clean-up that keeps clashing is left for later, the delete still succeeds", async () => {
+    const user = newUserId();
+    const photo = await readyPhoto(user);
+    await addPlaces(db, user, photo.photoId, BERLIN);
+    await api(user, "DELETE", `/photos/${photo.photoId}`);
+    const send = db.client.send.bind(db.client);
+    const spy = vi.spyOn(db.client, "send").mockImplementation(((command: unknown) => {
+      const key = command instanceof DeleteCommand ? command.input.Key : undefined;
+      if (String(key?.SK).startsWith("PLACE#")) {
+        return Promise.reject(
+          Object.assign(new Error("ongoing"), { name: "TransactionConflictException" }),
+        );
+      }
+      return send(command as never);
+    }) as typeof db.client.send);
+    const random = vi.spyOn(Math, "random").mockReturnValue(0); // no pauses between tries
+    try {
+      expect((await api(user, "DELETE", `/trash/${photo.photoId}`)).status).toBe(204);
+    } finally {
+      random.mockRestore();
+      spy.mockRestore();
+    }
+    expect(await trash(user)).toEqual([]);
+    // Empty entries stay behind but are never listed.
+    expect((await api(user, "GET", "/places")).body).toEqual({ items: [] });
   });
 
   test("anonymous → 401, invalid ID → 400", async () => {
