@@ -1066,7 +1066,7 @@ Still to come: ACM cert + custom domain (11.1), WAF (11.2), CSP header.
 | `ci.yml` (lint, typecheck, tests, build, `tofu plan`) | ✅ | See below |
 | `deploy.yml` (build, apply, upload site, invalidate, smoke test) | 🚧 | Dev job ✅ (first run `87fbe5c`, app checked by the user 2026-10-27); prod job 10.3 📋 (Phase 11) |
 
-**`ci.yml`** (10.1), on every push and pull request, Ubuntu 24.04 runners:
+**`ci.yml`** (10.1), on pushes to `main` and on pull requests (since 2026-11-01; before, every push to any branch too, so a PR push ran it twice; a branch without a PR now gets no CI), Ubuntu 24.04 runners:
 
 - **`checks`**: pnpm (from `packageManager`), Node (`.nvmrc`, pnpm store cached), uv 0.13.1 (cache on `uv.lock`), OpenTofu 1.13.1 → `pnpm install --frozen-lockfile`, `uv sync --frozen` → `format:check`, `lint`, `typecheck`, `lint:py`, `test` (DynamoDB Local in the runner's Docker), `test:py`, `build`, `build:py`, `tofu fmt -check -recursive`, `test:infra`, `validate` for `envs/prod` and `bootstrap` (`-backend=false`). The Lambda `dist/` folders go to the next job as a 1-day artifact.
 - **`plan-dev`** (after `checks`; skipped for fork PRs): OIDC → `photo-app-ci-plan`, `tofu init/validate/plan -detailed-exitcode` in `infra/envs/dev`; the plan goes to the job summary and to one PR comment (marker `<!-- tofu-plan-dev -->`, updated on each push, cut at 60 KB). Job concurrency group `tofu-dev` (no cancelling) since plans take the state lock.
@@ -1270,6 +1270,7 @@ Target design: spec §12 (TanStack Router file routes with an authenticated layo
 | 2026-10-30 | 8.25c: media cookie expiry remembered in localStorage per user; the guard's `media.ready(sub)` waits for new cookies only when the remembered ones run out within 5 min, otherwise renews in the background (§10.1, §14.1). |
 | 2026-10-30 | 13.5 Import from Google Photos planned (spec v0.24): 📋 status row and §10.8 flow; nothing built. |
 | 2026-10-30 | Web tests: `renderAt` sets `retryDelay: 0` on the app's query client; a failing or uncanned request no longer waits 3 s per test (CI timeouts on `91f28e3`) (§5). |
+| 2026-11-01 | CI: `push` trigger limited to `main` (feature branches are checked through their PR only; no more duplicate runs per PR push). `deploy.yml` unchanged: it starts from the CI push run on `main` (§13). |
 | 2026-11-01 | Gallery album picker removed (user request, "not really useful"): only the sort order is left next to Select; `beforeLoad` redirects `/gallery?album=X` (old links, bookmarks) to `/albums/X`; the `album` search param stays for the album page and viewer lists (§14.1). |
 | 2026-11-01 | Map attribution starts collapsed on phones (user request): `PhotoMap` collapses MapLibre's compact attribution once after it appears (§14.1). |
 | 2026-11-01 | **Shared photo locations (FR-SHR-12, spec v0.29):** album `showLocations` (owner's switch, any shared album); album photo lists and `GET /photos/{id}?albumId` keep other people's place names while it's on (`withPlace`), coordinates never; `albumPhoto` returns the album too. Web: second switch in the share dialog, "Locations are shown in this album" on the album page and in the picker. 4 API tests + 1 schema test. No infra change (§7.4, §8.2, §9, §14.1). |

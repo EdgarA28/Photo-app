@@ -504,6 +504,7 @@ Moved to the end by the user (2026-10-27): everything about prod and iOS waits u
 
 | Date | Summary |
 |---|---|
+| 2026-11-01 | CI runs once per PR push: `ci.yml` push trigger limited to `main` (it ran on both `push` and `pull_request`). In PR #7. |
 | 2026-11-01 | 8.31 gallery album picker removed, old `?album=` links redirect to the album page. 934 TS tests pass. Not committed. |
 | 2026-11-01 | 8.30 map attribution starts collapsed on phones (ⓘ, opens on tap). Not committed. |
 | 2026-11-01 | 8.29 shared photo locations (FR-SHR-12, spec v0.29): owner's switch, place names of all album photos for everyone in it, notices for members. API + web + 5 tests; 937 TS tests pass. Branch `feat/shared-locations`, not committed. |
