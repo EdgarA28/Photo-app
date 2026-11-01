@@ -122,6 +122,7 @@ describe("upload queue (§12.4, FR-UP-1/5/6)", () => {
     expect(result.added).toBe(1);
     expect(result.rejected.map((r) => r.fileName)).toEqual(["notes.pdf", "huge.jpg", "empty.png"]);
     expect(result.rejected[1]!.reason).toBe("Larger than 50 MB");
+    expect(result.rejected.map((r) => r.code)).toEqual(["type", "size", "empty"]);
     expect([...store.items.values()].map((i) => i.contentType)).toEqual(["image/heic"]);
   });
 
@@ -590,7 +591,11 @@ describe("large batches stay in the tab that picked them (13.1c)", () => {
     const result = await queue.add(files);
     expect(result.added).toBe(22);
     expect(result.rejected).toHaveLength(3);
-    expect(result.rejected[0]).toEqual({ fileName: "IMG_22.jpg", reason: PHONE_LIMIT });
+    expect(result.rejected[0]).toEqual({
+      fileName: "IMG_22.jpg",
+      reason: PHONE_LIMIT,
+      code: "phoneLimit",
+    });
     // Copied and stored as before, not a large batch.
     expect(queue.getSnapshot().some((entry) => entry.memoryOnly)).toBe(false);
     await vi.waitFor(() => expect(store.items.size).toBe(22));
@@ -622,7 +627,9 @@ describe("upload queue: files from the device (Android, 2026-10-26)", () => {
     const result = await queue.add([unreadable, testFile("IMG_2.jpg")]);
 
     expect(result.added).toBe(1);
-    expect(result.rejected).toEqual([{ fileName: "cloud.jpg", reason: UNREADABLE_FILE }]);
+    expect(result.rejected).toEqual([
+      { fileName: "cloud.jpg", reason: UNREADABLE_FILE, code: "unreadable" },
+    ]);
   });
 
   it("keeps uploading when saving the queue to IndexedDB fails", async () => {

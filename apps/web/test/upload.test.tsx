@@ -85,16 +85,47 @@ describe("upload page (FR-UP-1/5/6)", () => {
     );
   });
 
-  it("says which files weren't added and why", async () => {
+  it("sums up skipped files by reason, with their names on request (13.1b)", async () => {
     const { api, queue } = setup();
     await renderAt("/upload", { api, uploads: queue });
 
-    pick([testFile("notes.pdf", 10, "application/pdf"), testFile("IMG_1.jpg")]);
+    pick([
+      testFile("notes.pdf", 10, "application/pdf"),
+      testFile("clip.mp4", 10, "video/mp4"),
+      testFile("empty.jpg", 0),
+      testFile("IMG_1.jpg"),
+      testFile("IMG_2.jpg"),
+    ]);
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("1 file wasn't added");
+    expect(alert.textContent).toContain("2 added · 3 files skipped");
+    const groups = within(alert)
+      .getAllByRole("listitem")
+      .map((item) => item.textContent);
+    expect(groups).toEqual(["2 aren't photos (videos and other files)", "1 is empty"]);
+    expect(alert.textContent).not.toContain("notes.pdf");
+
+    fireEvent.click(within(alert).getByRole("button", { name: "Show the files" }));
     expect(alert.textContent).toContain("notes.pdf: Not a supported type");
+    expect(alert.textContent).toContain("empty.jpg: The file is empty");
+    fireEvent.click(within(alert).getByRole("button", { name: "Hide the files" }));
+    expect(alert.textContent).not.toContain("notes.pdf");
+
     fireEvent.click(within(alert).getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("lists at most 200 skipped file names", async () => {
+    const { api, queue } = setup();
+    await renderAt("/upload", { api, uploads: queue });
+    pick(Array.from({ length: 250 }, (_, i) => testFile(`clip_${i}.mp4`, 10, "video/mp4")));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("250 files skipped");
+    expect(alert.textContent).not.toContain("added");
+    fireEvent.click(within(alert).getByRole("button", { name: "Show the files" }));
+    expect(alert.textContent).toContain("clip_199.mp4");
+    expect(alert.textContent).not.toContain("clip_200.mp4");
+    expect(alert.textContent).toContain("and 50 more");
   });
 
   it("shows a permanent failure with its reason, and retries it on request", async () => {
@@ -325,7 +356,7 @@ describe("photos shared from Android's share sheet (9.6, FR-PWA-4)", () => {
     fireEvent.click(within(card).getByRole("button", { name: "Upload" }));
     expect(await screen.findByText("IMG_1.jpg")).toBeTruthy();
     // Not a photo: explained like a picked file.
-    expect(await screen.findByText(/1 file wasn't added/)).toBeTruthy();
+    expect(await screen.findByText("1 added · 1 file skipped")).toBeTruthy();
     expect(screen.queryByRole("region", { name: /shared to this app/ })).toBeNull();
     expect(shareInbox.files).toEqual([]);
     expect([...store.items.values()].map((item) => item.fileName)).toEqual(["IMG_1.jpg"]);

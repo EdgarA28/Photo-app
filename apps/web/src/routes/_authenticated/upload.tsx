@@ -13,6 +13,7 @@ import type { AddOptions, AddResult } from "@/upload/queue";
 import { UploadList } from "@/upload/UploadList";
 import type { WaitingPhoto } from "@/upload/shareInbox";
 import { SharedPhotos } from "@/upload/SharedPhotos";
+import { SkippedFiles } from "@/upload/SkippedFiles";
 import { UploadPicker } from "@/upload/UploadPicker";
 import { isActive, isInTabOnly, useOnline, useUploadQueue, useUploads } from "@/upload/useUploads";
 
@@ -42,7 +43,8 @@ function Upload() {
   const online = useOnline();
   // Not in a loader: the page works without it, it only feeds the storage notices.
   const { data: me } = useQuery(meQuery(api));
-  const [rejected, setRejected] = useState<AddResult["rejected"]>([]);
+  /** The last pick's outcome, while it skipped files (13.1b). */
+  const [picked, setPicked] = useState<Pick<AddResult, "added" | "rejected"> | null>(null);
   const [space, setSpace] = useState<{ needed: number; left: number } | null>(null);
   const [shareFailed, setShareFailed] = useState(shared === "failed");
   const [shareSkipped, setShareSkipped] = useState(skipped ?? 0);
@@ -58,7 +60,7 @@ function Upload() {
     // Space left after what is stored and what is already waiting to upload.
     const waiting = entries.filter(isActive).reduce((sum, entry) => sum + entry.sizeBytes, 0);
     const result = await queue.add(files, options);
-    setRejected(result.rejected);
+    setPicked(result.rejected.length ? result : null);
     const left = me ? Math.max(me.usage.quotaBytes - me.usage.bytesUsed - waiting, 0) : Infinity;
     setSpace(result.addedBytes > left ? { needed: result.addedBytes, left } : null);
   }
@@ -159,35 +161,12 @@ function Upload() {
           </Button>
         </div>
       )}
-      {rejected.length > 0 && (
-        <div
-          role="alert"
-          className="flex gap-3 rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm"
-        >
-          <CircleAlert aria-hidden className="mt-0.5 size-4 shrink-0 text-destructive" />
-          <div className="min-w-0 flex-1 space-y-1">
-            <p className="font-medium">
-              {rejected.length === 1
-                ? "1 file wasn't added"
-                : `${rejected.length} files weren't added`}
-            </p>
-            <ul className="space-y-0.5 text-muted-foreground">
-              {rejected.map(({ fileName, reason }, i) => (
-                <li key={i} className="truncate">
-                  {fileName}: {reason}
-                </li>
-              ))}
-            </ul>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Dismiss"
-            onClick={() => setRejected([])}
-          >
-            <X aria-hidden />
-          </Button>
-        </div>
+      {picked && (
+        <SkippedFiles
+          added={picked.added}
+          skipped={picked.rejected}
+          onDismiss={() => setPicked(null)}
+        />
       )}
       {inTabOnly > 0 && (
         <p

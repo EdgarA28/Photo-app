@@ -2,7 +2,14 @@ import type { Api } from "@/api/api";
 import { attemptUpload, isAbort } from "./attempt";
 import { postToS3, type PostToS3 } from "./s3Post";
 import type { UploadItem, UploadStore } from "./store";
-import { checkFile } from "./validate";
+import { checkFile, type SkipCode } from "./validate";
+
+/** A picked file that wasn't added, with the reason shown and its group (13.1b). */
+export interface SkippedFile {
+  fileName: string;
+  reason: string;
+  code: SkipCode;
+}
 
 /** A queue item as the UI sees it: plus the progress of a running upload (0–1). */
 export type QueueEntry = UploadItem & { progress: number };
@@ -11,7 +18,7 @@ export interface AddResult {
   added: number;
   /** Total size of the added files. */
   addedBytes: number;
-  rejected: { fileName: string; reason: string }[];
+  rejected: SkippedFile[];
 }
 
 export interface AddOptions {
@@ -620,7 +627,13 @@ export function createUploadQueue({
       for (const file of files) {
         const check = checkFile(file);
         if (check.ok) accepted.push({ file, ...check });
-        else result.rejected.push({ fileName: file.name || "photo", reason: check.reason });
+        else {
+          result.rejected.push({
+            fileName: file.name || "photo",
+            reason: check.reason,
+            code: check.code,
+          });
+        }
       }
       const phone = isPhone();
       const total = accepted.reduce((sum, { file }) => sum + file.size, 0);
@@ -631,7 +644,7 @@ export function createUploadQueue({
 
       for (const { file, fileName, contentType } of accepted) {
         if (phone && picked + file.size > PHONE_PICK_BYTES) {
-          result.rejected.push({ fileName, reason: PHONE_LIMIT });
+          result.rejected.push({ fileName, reason: PHONE_LIMIT, code: "phoneLimit" });
           continue;
         }
         let bytes: Blob = file;
@@ -642,7 +655,7 @@ export function createUploadQueue({
           try {
             bytes = new Blob([await file.arrayBuffer()], { type: file.type });
           } catch {
-            result.rejected.push({ fileName, reason: UNREADABLE_FILE });
+            result.rejected.push({ fileName, reason: UNREADABLE_FILE, code: "unreadable" });
             continue;
           }
         }
