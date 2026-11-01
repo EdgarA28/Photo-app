@@ -1,7 +1,13 @@
 import type { UploadUrlRequest } from "@photo-app/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Api } from "../src/api/api";
-import { TAKEOVER_CHECK_MS, TAKEOVER_AFTER_MS, type UploadQueue } from "../src/upload/queue";
+import {
+  BATCH_HEARTBEAT_MS,
+  BATCH_STALE_MS,
+  TAKEOVER_CHECK_MS,
+  TAKEOVER_AFTER_MS,
+  type UploadQueue,
+} from "../src/upload/queue";
 import type { PostToS3 } from "../src/upload/s3Post";
 import type { UploadItem } from "../src/upload/store";
 import {
@@ -65,11 +71,13 @@ async function twoWindows({
   bVisible = true,
   largeBatchBytes,
   postA: postAOverride,
+  postB: postBOverride,
 }: {
   aHangs?: boolean;
   bVisible?: boolean;
   largeBatchBytes?: number;
   postA?: PostToS3;
+  postB?: PostToS3;
 } = {}) {
   const locks = new FakeLocks();
   const hub = channelHub();
@@ -80,7 +88,7 @@ async function twoWindows({
   const apiA = uploadApi({ hang: aHangs });
   const apiB = uploadApi();
   const postA = vi.fn<PostToS3>(postAOverride ?? (async () => {}));
-  const postB = vi.fn<PostToS3>(async () => {});
+  const postB = vi.fn<PostToS3>(postBOverride ?? (async () => {}));
   let bIds = 0;
   const uploadedA = vi.fn();
   const uploadedB = vi.fn();
@@ -121,8 +129,9 @@ describe("upload queue across windows: takeover (§12.4, FR-UP-5)", () => {
     await w.queueB.add([testFile("IMG_1.jpg")]);
     await vi.waitFor(() => expect(w.apiA.uploadUrl).toHaveBeenCalled());
     // A got stuck mid-upload and then froze (Android froze the background tab).
+    // (B hears of it with the next "changed" message, gathered for a moment.)
+    await vi.waitFor(() => expect(statuses(w.queueB)).toEqual(["uploading"]));
     w.a.member.frozen = true;
-    expect(statuses(w.queueB)).toEqual(["uploading"]);
 
     await wait(TAKEOVER_WAIT);
     await vi.waitFor(() => expect(statuses(w.queueB)).toEqual(["done"]));
@@ -304,5 +313,40 @@ describe("upload queue across windows: large batches (13.1c)", () => {
     expect(signals.every((signal) => !signal.aborted)).toBe(true);
     const big = w.queueA.getSnapshot().filter((entry) => entry.memoryOnly);
     expect(big.map((entry) => entry.status)).toEqual(["uploading", "uploading"]);
+  });
+});
+
+describe("upload queue across windows: another tab's batch (13.1d)", () => {
+  it("other windows learn how many photos of a large batch are left, until it's done", async () => {
+    const finish: (() => void)[] = [];
+    const w = await twoWindows({
+      largeBatchBytes: 1500,
+      postB: () => new Promise<void>((resolve) => finish.push(resolve)),
+    });
+    await w.queueB.add([testFile("BIG_1.jpg"), testFile("BIG_2.jpg")]);
+    await vi.waitFor(() => expect(finish).toHaveLength(2));
+
+    await wait(BATCH_HEARTBEAT_MS);
+    expect(w.queueA.getOtherTabsRemaining()).toBe(2);
+    expect(w.queueB.getOtherTabsRemaining()).toBe(0);
+
+    finish.splice(0).forEach((done) => done());
+    await vi.waitFor(() => expect(statuses(w.queueB)).toEqual(["done", "done"]));
+    await wait(BATCH_HEARTBEAT_MS);
+    expect(w.queueA.getOtherTabsRemaining()).toBe(0);
+  });
+
+  it("forgets a batch whose tab went quiet (closed)", async () => {
+    const w = await twoWindows({
+      largeBatchBytes: 1500,
+      postB: () => new Promise<void>(() => {}),
+    });
+    await w.queueB.add([testFile("BIG_1.jpg"), testFile("BIG_2.jpg")]);
+    await wait(BATCH_HEARTBEAT_MS);
+    expect(w.queueA.getOtherTabsRemaining()).toBe(2);
+
+    w.b.member.frozen = true;
+    await wait(BATCH_STALE_MS + BATCH_HEARTBEAT_MS);
+    expect(w.queueA.getOtherTabsRemaining()).toBe(0);
   });
 });

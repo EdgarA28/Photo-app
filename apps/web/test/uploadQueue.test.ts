@@ -602,6 +602,52 @@ describe("large batches stay in the tab that picked them (13.1c)", () => {
   });
 });
 
+describe("the whole queue: pause, resume, cancel (13.1d)", () => {
+  it("pauses everything: running uploads stop, nothing starts, the pause is stored", async () => {
+    const { api, uploadUrl } = uploadApi();
+    const { post, calls } = controlledPost();
+    const { queue, store } = testUploadQueue(api, { post });
+    await queue.start(USER);
+    await queue.add([1, 2, 3, 4].map((n) => testFile(`IMG_${n}.jpg`)));
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
+
+    await queue.pause();
+    expect(calls.every((call) => call.signal?.aborted)).toBe(true);
+    expect(queue.getSnapshot().map((e) => [e.status, e.paused])).toEqual([
+      ["queued", true],
+      ["queued", true],
+      ["queued", true],
+      ["queued", true],
+    ]);
+    // Stored, so another tab or the service worker leaves them alone too.
+    await vi.waitFor(() => expect([...store.items.values()].every((i) => i.paused)).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(uploadUrl).toHaveBeenCalledTimes(3);
+
+    await queue.resume();
+    // They start over, re-signing the same photos (5.6a).
+    await vi.waitFor(() => expect(calls).toHaveLength(6));
+    expect(uploadUrl).toHaveBeenLastCalledWith(expect.objectContaining({ photoId: testId(3) }));
+    expect(queue.getSnapshot().some((e) => e.paused)).toBe(false);
+  });
+
+  it("cancels every unfinished upload, keeping the finished ones", async () => {
+    const { api } = uploadApi();
+    const { post, calls } = controlledPost();
+    const { queue, store } = testUploadQueue(api, { post });
+    await queue.start(USER);
+    await queue.add([1, 2, 3, 4].map((n) => testFile(`IMG_${n}.jpg`)));
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
+    calls[0]!.resolve();
+    await vi.waitFor(() => expect(statuses(queue)[0]).toBe("done"));
+
+    await queue.cancelAll();
+    expect(statuses(queue)).toEqual(["done"]);
+    expect(calls.slice(1, 3).every((call) => call.signal?.aborted)).toBe(true);
+    await vi.waitFor(() => expect(store.items.size).toBe(1));
+  });
+});
+
 describe("storage full (13.1e, FR-UP-7)", () => {
   const full = () => new ApiRequestError("QUOTA_EXCEEDED", "Not enough storage", 413);
 

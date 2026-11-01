@@ -553,4 +553,35 @@ describe("big batches on screen (13.1-0)", () => {
     );
     expect(queue.getSnapshot()[0]!.memoryOnly).toBe(true);
   });
+
+  it("shows the whole queue's progress, pauses, resumes and cancels it (13.1d)", async () => {
+    const { api, queue, calls } = setup();
+    await renderAt("/upload", { api, uploads: queue });
+    pick([testFile("IMG_1.jpg", 1000), testFile("IMG_2.jpg", 1000), testFile("IMG_3.jpg", 2000)]);
+    await waitFor(() => expect(calls).toHaveLength(3));
+    calls[0]!.resolve();
+
+    const header = (await screen.findByRole("heading", { name: "1 of 3 uploaded" })).closest(
+      "header",
+    )!;
+    await waitFor(() => expect(header.textContent).toContain("1000 B of 3.9 KB"));
+    expect(within(header).getByRole("progressbar", { name: "All uploads" })).toBeTruthy();
+
+    fireEvent.click(within(header).getByRole("button", { name: "Pause" }));
+    await waitFor(() => expect(screen.getAllByText(/Paused/).length).toBeGreaterThan(2));
+    fireEvent.click(within(header).getByRole("button", { name: "Resume" }));
+    await waitFor(() => expect(within(header).getByRole("button", { name: "Pause" })).toBeTruthy());
+
+    fireEvent.click(within(header).getByRole("button", { name: "Cancel all" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Cancel 2 uploads?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel uploads" }));
+    await waitFor(() => expect(queue.getSnapshot().map((entry) => entry.status)).toEqual(["done"]));
+  });
+
+  it("says when another tab is uploading a large batch (13.1d)", async () => {
+    const { api, queue } = setup();
+    vi.spyOn(queue, "getOtherTabsRemaining").mockReturnValue(1234);
+    await renderAt("/upload", { api, uploads: queue });
+    expect(await screen.findByText(/Uploading 1,234 photos in\s+another tab/)).toBeTruthy();
+  });
 });

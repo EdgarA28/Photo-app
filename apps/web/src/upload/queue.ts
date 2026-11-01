@@ -43,6 +43,13 @@ export interface UploadQueue {
   remove(id: string): Promise<void>;
   /** Forget everything, for every user on the device (logout, 8.13). */
   clear(): Promise<void>;
+  /** Pause every waiting or running upload (13.1d); running ones stop and start over on resume. */
+  pause(): Promise<void>;
+  resume(): Promise<void>;
+  /** Cancel and forget every upload that isn't finished (13.1d). */
+  cancelAll(): Promise<void>;
+  /** Photos of a large batch still to upload in other tabs of this app (13.1d). */
+  getOtherTabsRemaining(): number;
   subscribe(listener: () => void): () => void;
   /** Stable between changes (useSyncExternalStore). */
   getSnapshot(): readonly QueueEntry[];
@@ -143,14 +150,25 @@ export const STORE_READ_TIMEOUT_MS = 2000;
 
 /** Stored and still to upload: what another tab or the service worker could take over. */
 const isStoredWork = (item: UploadItem) =>
-  !item.memoryOnly && (item.status === "queued" || item.status === "uploading");
+  !item.memoryOnly && !item.paused && (item.status === "queued" || item.status === "uploading");
+
+/** How often a tab with a large batch tells the others how far it is (13.1d). */
+export const BATCH_HEARTBEAT_MS = 2000;
+/** Another tab's batch count is forgotten after this long without news (the tab was closed). */
+export const BATCH_STALE_MS = 3 * BATCH_HEARTBEAT_MS;
+/** "changed" messages to the other tabs are gathered this long: a bulk change sends one. */
+export const CHANGED_BROADCAST_MS = 50;
 
 /**
  * Between tabs and the service worker. `working`: the service worker is uploading (its fetch
  * reports no progress), so a tab doesn't take over from it.
  */
 export type UploadMessage =
-  { type: "changed" } | { type: "progress"; id: string; progress: number } | { type: "working" };
+  | { type: "changed" }
+  | { type: "progress"; id: string; progress: number }
+  | { type: "working" }
+  /** A tab's large batch (13.1d): how many of its photos are still to upload. */
+  | { type: "batch"; tab: string; remaining: number };
 
 /**
  * The upload queue (§12.4, FR-UP-1/5/6). Files are stored in IndexedDB first, then a worker loop
@@ -209,6 +227,14 @@ export function createUploadQueue({
   /** Uploads running in this tab. */
   const active = new Map<string, AbortController>();
   const lastProgressBroadcast = new Map<string, number>();
+  /** This tab, for its large-batch messages (13.1d). */
+  const tabId = crypto.randomUUID();
+  /** Other tabs' large batches: photos left and when last heard. */
+  const otherTabs = new Map<string, { remaining: number; at: number }>();
+  let otherTabsRemaining = 0;
+  let batchTimer: ReturnType<typeof setInterval> | undefined;
+  let lastBatchSent = 0;
+  let changedTimer: ReturnType<typeof setTimeout> | undefined;
 
   const listeners = new Set<() => void>();
   let snapshot: readonly QueueEntry[] = [];
@@ -282,6 +308,39 @@ export function createUploadQueue({
     channel?.postMessage(message);
   }
 
+  /** Tells the other tabs the stored queue changed, once for a burst of writes (pause, cancel). */
+  function announceChanged() {
+    if (changedTimer) return;
+    changedTimer = setTimeout(() => {
+      changedTimer = undefined;
+      broadcast({ type: "changed" });
+    }, CHANGED_BROADCAST_MS);
+  }
+
+  /**
+   * Every few seconds: tells the other tabs how much of this tab's large batch is left (they can't
+   * see it, 13.1c), and forgets other tabs' batches that went quiet (closed).
+   */
+  function batchHeartbeat() {
+    let remaining = 0;
+    for (const item of items.values()) {
+      if (item.memoryOnly && (item.status === "queued" || item.status === "uploading")) remaining++;
+    }
+    if (remaining || lastBatchSent) broadcast({ type: "batch", tab: tabId, remaining });
+    lastBatchSent = remaining;
+    const t = now();
+    for (const [tab, batch] of otherTabs) if (t - batch.at > BATCH_STALE_MS) otherTabs.delete(tab);
+    updateOtherTabs();
+  }
+
+  function updateOtherTabs() {
+    let total = 0;
+    for (const batch of otherTabs.values()) total += batch.remaining;
+    if (total === otherTabsRemaining) return;
+    otherTabsRemaining = total;
+    emit();
+  }
+
   async function save(item: UploadItem) {
     items.set(item.id, item);
     emit();
@@ -294,7 +353,7 @@ export function createUploadQueue({
     const written = store.put(item).then(
       () => {
         if (items.get(item.id) === item) unsaved.delete(item.id);
-        broadcast({ type: "changed" });
+        announceChanged();
       },
       (error: unknown) => console.warn("Saving the upload queue failed", error),
     );
@@ -347,7 +406,13 @@ export function createUploadQueue({
 
   function onMessage(event: MessageEvent<UploadMessage>) {
     const message = event.data;
-    if (message.type === "working") {
+    if (message.type === "batch") {
+      // Its own uploads also count as progress: no takeover from a tab busy with its batch.
+      if (message.remaining)
+        otherTabs.set(message.tab, { remaining: message.remaining, at: now() });
+      else otherTabs.delete(message.tab);
+      updateOtherTabs();
+    } else if (message.type === "working") {
       lastProgress = now();
     } else if (message.type === "progress") {
       lastProgress = now();
@@ -393,7 +458,7 @@ export function createUploadQueue({
     let next = Infinity;
     for (const item of items.values()) {
       if (active.size >= CONCURRENCY) return;
-      if (item.status !== "queued" || active.has(item.id)) continue;
+      if (item.status !== "queued" || item.paused || active.has(item.id)) continue;
       // Stored items only in the tab holding the lock; this tab's large batch always here (13.1c).
       if (!leader && !item.memoryOnly) continue;
       if (item.retryAt <= t) void run(item.id);
@@ -491,7 +556,7 @@ export function createUploadQueue({
     progress.delete(id);
     emit();
     store.delete(id).then(
-      () => broadcast({ type: "changed" }),
+      () => announceChanged(),
       (error: unknown) => console.warn("Removing from the upload queue failed", error),
     );
   }
@@ -592,6 +657,10 @@ export function createUploadQueue({
   function stop() {
     session++;
     clearTimeout(timer);
+    clearInterval(batchTimer);
+    batchTimer = undefined;
+    otherTabs.clear();
+    otherTabsRemaining = 0;
     clearInterval(ticker);
     ticker = undefined;
     document.removeEventListener("visibilitychange", onVisibilityChange);
@@ -620,6 +689,7 @@ export function createUploadQueue({
     const forSession = session;
     channel = createChannel?.();
     channel?.addEventListener("message", onMessage);
+    if (channel) batchTimer = setInterval(batchHeartbeat, BATCH_HEARTBEAT_MS);
     window.addEventListener("online", onOnline);
     await reload();
     if (forSession !== session) return;
@@ -730,6 +800,37 @@ export function createUploadQueue({
     },
 
     remove: forget,
+
+    async pause() {
+      const targets = [...items.values()].filter(
+        (item) => !item.paused && (item.status === "queued" || item.status === "uploading"),
+      );
+      // All marked first (in memory at once), so a stopping upload's freed slot starts nothing.
+      const writes = targets.map((item) =>
+        update(item.id, { status: "queued", paused: true, retryAt: 0 }),
+      );
+      // Running uploads stop; they start over (re-signing the same photo, 5.6a) on resume.
+      for (const item of targets) {
+        active.get(item.id)?.abort();
+        active.delete(item.id);
+        progress.delete(item.id);
+      }
+      await Promise.all(writes);
+      pump();
+    },
+
+    async resume() {
+      for (const item of [...items.values()]) {
+        if (item.paused) await update(item.id, { paused: false, retryAt: 0 });
+      }
+      pump();
+    },
+
+    async cancelAll() {
+      for (const item of [...items.values()]) if (item.status !== "done") await forget(item.id);
+    },
+
+    getOtherTabsRemaining: () => otherTabsRemaining,
 
     async clear() {
       for (const controller of active.values()) controller.abort();

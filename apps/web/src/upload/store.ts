@@ -35,6 +35,11 @@ export interface UploadItem {
    * the tab that picked it, never stored. Absent on stored items.
    */
   memoryOnly?: boolean;
+  /**
+   * Paused by the user (13.1d): waits, in every tab and in the service worker, until resumed.
+   * Stored with the item so another uploader doesn't take it up meanwhile.
+   */
+  paused?: boolean;
 }
 
 /** Persistence of the queue; IndexedDB in the app, in memory in tests. */

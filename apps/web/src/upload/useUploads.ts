@@ -12,6 +12,12 @@ export function useUploads(): readonly QueueEntry[] {
   return useSyncExternalStore(queue.subscribe, queue.getSnapshot);
 }
 
+/** Photos of a large batch other tabs are still uploading (13.1d). */
+export function useOtherTabsUploading(): number {
+  const queue = useUploadQueue();
+  return useSyncExternalStore(queue.subscribe, queue.getOtherTabsRemaining);
+}
+
 /** Waiting or running: what the nav badge counts. */
 export const isActive = (entry: QueueEntry) =>
   entry.status === "queued" || entry.status === "uploading";

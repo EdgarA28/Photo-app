@@ -16,7 +16,14 @@ import { SharedPhotos } from "@/upload/SharedPhotos";
 import { SkippedFiles } from "@/upload/SkippedFiles";
 import { UploadPicker } from "@/upload/UploadPicker";
 import { checkFile } from "@/upload/validate";
-import { isActive, isInTabOnly, useOnline, useUploadQueue, useUploads } from "@/upload/useUploads";
+import {
+  isActive,
+  isInTabOnly,
+  useOnline,
+  useOtherTabsUploading,
+  useUploadQueue,
+  useUploads,
+} from "@/upload/useUploads";
 
 /**
  * `shared`: arriving from Android's share sheet (9.6, FR-PWA-4), set by the service worker's
@@ -59,6 +66,7 @@ function Upload() {
   const [sharing, setSharing] = useState(false);
   const pending = entries.some((entry) => entry.status === "queued");
   const inTabOnly = entries.filter(isInTabOnly).length;
+  const otherTabs = useOtherTabsUploading();
   const storageFull = entries.filter(
     (entry) => entry.status === "failed" && entry.errorCode === "QUOTA_EXCEEDED",
   ).length;
@@ -193,6 +201,13 @@ function Upload() {
           skipped={picked.rejected}
           onDismiss={() => setPicked(null)}
         />
+      )}
+      {otherTabs > 0 && (
+        <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+          <MonitorUp aria-hidden className="size-4 shrink-0" />
+          Uploading {otherTabs === 1 ? "1 photo" : `${otherTabs.toLocaleString()} photos`} in
+          another tab.
+        </p>
       )}
       {inTabOnly > 0 && (
         <p
