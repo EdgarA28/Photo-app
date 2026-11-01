@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "../src/api/errors";
 import { refreshAfterUpload } from "../src/queries/photos";
 import type { UploadQueue } from "../src/upload/queue";
@@ -134,7 +134,10 @@ describe("uploads in the gallery and nav (FR-UP-6)", () => {
       "NEW_4.jpg, waiting to upload",
     ]);
     expect(tiles[0]!.getAttribute("href")).toBe("/upload");
-    expect(within(tiles[0]!).getByRole("progressbar").getAttribute("aria-valuenow")).toBe("50");
+    // The UI hears about changes once per animation frame (13.1-0).
+    await waitFor(() =>
+      expect(within(tiles[0]!).getByRole("progressbar").getAttribute("aria-valuenow")).toBe("50"),
+    );
     expect(screen.queryByText("No photos yet.")).toBeNull();
     // Nav badge: waiting + running.
     expect(screen.getAllByLabelText("4 uploading").length).toBeGreaterThan(0);
@@ -374,5 +377,41 @@ describe("photos shared from Android's share sheet (9.6, FR-PWA-4)", () => {
     const { api, queue } = setup();
     await renderAt("/upload?shared=failed", { api, uploads: queue });
     expect(await screen.findByText(/shared photos couldn't be received/)).toBeTruthy();
+  });
+});
+
+describe("big batches on screen (13.1-0)", () => {
+  it('shows at most 20 upload tiles in the gallery, then "+N more"', async () => {
+    const { api, queue } = setup();
+    await renderAt("/gallery", { api, uploads: queue });
+    await queue.add(Array.from({ length: 25 }, (_, i) => testFile(`NEW_${i}.jpg`, 10)));
+
+    const uploads = await screen.findByRole("region", { name: "Uploads" });
+    await waitFor(() => expect(within(uploads).getAllByRole("link")).toHaveLength(21));
+    const more = within(uploads).getByRole("link", { name: "5 more uploads" });
+    expect(more.textContent).toBe("+5 more");
+    expect(more.getAttribute("href")).toBe("/upload");
+  });
+
+  it("keeps only the rows near the viewport of a long upload list in the page", async () => {
+    // jsdom has no layout: rows measure 73 px (the virtualizer reads offsetHeight); the window
+    // is 768 px high.
+    const height = vi
+      .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        return this.tagName === "LI" ? 73 : 0;
+      });
+    const { api, queue } = setup();
+    await renderAt("/upload", { api, uploads: queue });
+    await queue.add(Array.from({ length: 300 }, (_, i) => testFile(`IMG_${i}.jpg`, 10)));
+
+    const heading = await screen.findByRole("heading", { name: "0 of 300 uploaded" });
+    const list = heading.closest("section")!;
+    const rows = within(list).getAllByRole("listitem");
+    expect(rows.length).toBeGreaterThan(5);
+    expect(rows.length).toBeLessThan(40);
+    expect(within(list).getByText("IMG_0.jpg")).toBeTruthy();
+    expect(within(list).queryByText("IMG_299.jpg")).toBeNull();
+    height.mockRestore();
   });
 });

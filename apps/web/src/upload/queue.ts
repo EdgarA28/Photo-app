@@ -42,8 +42,16 @@ export interface UploadQueueDeps {
   api: Pick<Api, "photos">;
   store: UploadStore;
   post?: PostToS3;
-  /** After each upload: refresh what shows it (gallery, usage). Awaited, so its tile never blinks. */
+  /**
+   * After uploads: refresh what shows them (gallery, usage). Coalesced to at most one call per
+   * `refreshEveryMs` (13.1-0); an upload stays on screen as uploading until the refresh after it
+   * is done, so its tile never blinks, without holding its upload slot meanwhile.
+   */
   onUploaded?: () => unknown;
+  /** Minimum time between two `onUploaded` calls; the first one runs at once. */
+  refreshEveryMs?: number;
+  /** Runs the change notification for the UI: once per animation frame (13.1-0). */
+  scheduleFrame?: (callback: () => void) => unknown;
   /** Web Locks: one tab uploads, the others show its progress. Absent → this tab always uploads. */
   locks?: LockManager | undefined;
   /** Tells the other tabs about changes. Absent → single tab. */
@@ -64,6 +72,13 @@ export interface UploadQueueDeps {
 
 /** §12.4: 3 parallel uploads. */
 export const CONCURRENCY = 3;
+/** At most one gallery + usage refresh this often while uploads finish (13.1-0). */
+export const REFRESH_EVERY_MS = 5000;
+
+const nextFrame = (callback: () => void) =>
+  typeof requestAnimationFrame === "function"
+    ? requestAnimationFrame(callback)
+    : setTimeout(callback, 16);
 export { RETRY_BASE_MS, RETRY_MAX_MS, retryDelay } from "./attempt";
 
 /** Web Lock held by whoever uploads: one tab, or the service worker (9.5). */
@@ -119,6 +134,8 @@ export function createUploadQueue({
   store,
   post = postToS3,
   onUploaded,
+  refreshEveryMs = REFRESH_EVERY_MS,
+  scheduleFrame = nextFrame,
   locks,
   createChannel,
   isOnline = () => navigator.onLine,
@@ -159,12 +176,70 @@ export function createUploadQueue({
 
   const listeners = new Set<() => void>();
   let snapshot: readonly QueueEntry[] = [];
+  /** The snapshot is out of date; it is rebuilt when next read. */
+  let dirty = false;
+  let notifyScheduled = false;
+  /** Entries kept while their item and progress are unchanged, so unchanged rows don't render. */
+  const entries = new WeakMap<UploadItem, QueueEntry>();
 
+  /**
+   * Something changed. The snapshot is rebuilt lazily and the UI told at most once per frame:
+   * with thousands of files, progress events would otherwise re-sort and re-render everything
+   * many times a second (13.1-0).
+   */
   function emit() {
+    dirty = true;
+    if (notifyScheduled) return;
+    notifyScheduled = true;
+    scheduleFrame(() => {
+      notifyScheduled = false;
+      for (const listener of listeners) listener();
+    });
+  }
+
+  function getSnapshot(): readonly QueueEntry[] {
+    if (!dirty) return snapshot;
+    dirty = false;
     snapshot = [...items.values()]
       .sort((a, b) => a.addedAt - b.addedAt)
-      .map((item) => ({ ...item, progress: progress.get(item.id) ?? 0 }));
-    for (const listener of listeners) listener();
+      .map((item) => {
+        const value = progress.get(item.id) ?? 0;
+        const known = entries.get(item);
+        if (known?.progress === value) return known;
+        const entry = { ...item, progress: value };
+        entries.set(item, entry);
+        return entry;
+      });
+    return snapshot;
+  }
+
+  /** When `onUploaded` last started, and the next call if one is waiting. */
+  let lastRefresh = -Infinity;
+  let nextRefresh: Promise<void> | undefined;
+
+  /**
+   * Refreshes the gallery and usage after uploads: at once if the last refresh is long enough
+   * ago, else once the interval has passed, for everything that finished meanwhile. Resolves once
+   * a refresh that started after this call has finished (13.1-0).
+   */
+  function refresh(): Promise<void> {
+    if (!onUploaded) return Promise.resolve();
+    if (nextRefresh) return nextRefresh;
+    let resolve!: () => void;
+    const pending = new Promise<void>((r) => (resolve = r));
+    nextRefresh = pending;
+    const go = () => {
+      nextRefresh = undefined;
+      lastRefresh = now();
+      Promise.resolve()
+        .then(onUploaded)
+        .catch((error: unknown) => console.warn("Refreshing after uploads failed", error))
+        .finally(resolve);
+    };
+    const wait = lastRefresh + refreshEveryMs - now();
+    if (wait > 0) setTimeout(go, wait);
+    else go();
+    return pending;
   }
 
   function broadcast(message: UploadMessage) {
@@ -226,7 +301,7 @@ export function createUploadQueue({
       (item) =>
         item.status === "done" && known.has(item.id) && known.get(item.id)!.status !== "done",
     );
-    if (finishedElsewhere) await onUploaded?.();
+    if (finishedElsewhere) void refresh();
     return storedIds;
   }
 
@@ -266,23 +341,22 @@ export function createUploadQueue({
     pump();
   }
 
+  /**
+   * Starts queued uploads up to `CONCURRENCY`, oldest first (the items are kept in the order
+   * added), and wakes up for the next backoff that ends. One pass, stopping once all slots are
+   * busy (a finishing upload pumps again): called per added file, so no sorting (13.1-0).
+   */
   function pump() {
     clearTimeout(timer);
     if (!leader || !userId || !isOnline()) return;
     const t = now();
-    const queued = [...items.values()]
-      .filter((item) => item.status === "queued" && !active.has(item.id))
-      .sort((a, b) => a.addedAt - b.addedAt);
-    for (const item of queued) {
-      if (active.size >= CONCURRENCY) break;
+    let next = Infinity;
+    for (const item of items.values()) {
+      if (active.size >= CONCURRENCY) return;
+      if (item.status !== "queued" || active.has(item.id)) continue;
       if (item.retryAt <= t) void run(item.id);
+      else next = Math.min(next, item.retryAt);
     }
-    // Wake up for the next backoff that ends.
-    const next = Math.min(
-      ...[...items.values()]
-        .filter((item) => item.status === "queued" && !active.has(item.id) && item.retryAt > t)
-        .map((item) => item.retryAt),
-    );
     if (Number.isFinite(next)) timer = setTimeout(pump, next - t);
   }
 
@@ -291,6 +365,8 @@ export function createUploadQueue({
     const { signal } = controller;
     active.set(id, controller);
     progress.set(id, 0);
+    /** Uploaded: the item's final state, applied once the gallery shows the photo. */
+    let finished: Partial<UploadItem> | undefined;
     try {
       await update(id, { status: "uploading", error: null, errorCode: null });
       const item = items.get(id);
@@ -327,14 +403,21 @@ export function createUploadQueue({
         },
       );
       if (!result || signal.aborted) return;
-      if (result.uploaded) await onUploaded?.();
-      await update(id, result.patch);
+      if (result.uploaded) finished = result.patch;
+      else await update(id, result.patch);
     } finally {
       if (active.get(id) === controller) active.delete(id);
-      progress.delete(id);
+      if (finished) progress.set(id, 1);
+      else progress.delete(id);
       lastProgressBroadcast.delete(id);
+      emit();
+      // The slot is free for the next file while the gallery refresh below is waited for.
       pump();
     }
+    if (!finished) return;
+    await refresh();
+    progress.delete(id);
+    await update(id, finished);
   }
 
   async function forget(id: string) {
@@ -575,6 +658,6 @@ export function createUploadQueue({
       return () => listeners.delete(listener);
     },
 
-    getSnapshot: () => snapshot,
+    getSnapshot,
   };
 }

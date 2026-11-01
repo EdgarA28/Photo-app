@@ -632,7 +632,8 @@ TypeScript Lambda, arm64, in `apps/api` (same bundle as the API, own handler and
 ### 12.4 Upload queue
 
 - Selected files stored in IndexedDB with status (`queued`/`uploading`/`done`/`failed`).
-- Worker loop: request upload URL → POST to S3 with progress → mark done → invalidate gallery.
+- Worker loop: request upload URL → POST to S3 with progress → mark done → invalidate gallery. The gallery refresh is coalesced (at most one per 5 s while uploads finish), so a batch of thousands of files doesn't refetch the gallery after each one.
+- Large queues: the bytes are stored once (status changes rewrite only the item), the UI updates at most once per frame, the upload list is virtualized and the gallery shows at most 20 upload tiles plus "+N more".
 - Retries on `online` event and on app start; Background Sync where supported (Chromium only): the service worker uploads the stored queue once online, even with the app closed, using the stored refresh token (§11.4).
 - Concurrency: 3 parallel uploads.
 
@@ -843,7 +844,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 |---|---|---|
 | 0.11 | 2026-10-26 | Refresh token stored in IndexedDB instead of `localStorage`, so the service worker can upload via Background Sync (§11.4, §12.4) |
 | 0.12 | 2026-10-26 | Select mode by press and slide, "Unselect all", Back leaves select mode (§12.3) |
-| 0.30 | 2026-11-01 | SQS queue in front of the thumbnail Lambda with a maximum concurrency: §10 trigger and transient errors, B-11 planned (13.6) (§17) |
+| 0.30 | 2026-11-01 | SQS queue in front of the thumbnail Lambda with a maximum concurrency: §10 trigger and transient errors, B-11 planned (13.6) (§17). Upload queue at scale: coalesced gallery refresh, bytes stored once, capped/virtualized upload UI (§12.4) |
 | 0.29 | 2026-11-01 | Gallery: album picker removed, `?album=` redirects to the album page (§12.1). Shared photo locations: FR-SHR-12, `showLocations` on Album (§8.2), `PATCH /albums/{id}` and album photo lists (§9), album page (§12.1) |
 | 0.28 | 2026-10-31 | Collaborative albums: FR-SHR-11 (FR-SHR-4 note), `membersCanAdd` + `coverOwnerId` on Album, membership `ownerId` = photo owner + `albumOwnerId` (§8.2); album routes for members, `POST /albums/{albumId}/save` (§9); album page (§12.1) |
 | 0.27 | 2026-10-31 | Stale-pending sweep (6.11): Pending marker item and the "abandoned uploads" access pattern (§8.2); run by the daily purge |

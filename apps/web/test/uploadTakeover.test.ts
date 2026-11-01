@@ -74,7 +74,13 @@ async function twoWindows({ aHangs = false, bVisible = true } = {}) {
   let bIds = 0;
   const uploadedA = vi.fn();
   const uploadedB = vi.fn();
-  const common = { store, locks: locks as unknown as LockManager, now: () => clock };
+  // Refreshes not coalesced here: these tests are about which window refreshes (see uploadQueue).
+  const common = {
+    store,
+    locks: locks as unknown as LockManager,
+    now: () => clock,
+    refreshEveryMs: 0,
+  };
   const queueA = testUploadQueue(apiA.api, {
     ...common,
     createChannel: () => a.channel,

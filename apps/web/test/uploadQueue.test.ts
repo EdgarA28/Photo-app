@@ -400,6 +400,109 @@ describe("upload queue (§12.4, FR-UP-1/5/6)", () => {
   });
 });
 
+describe("upload queue at scale (13.1-0)", () => {
+  it("refreshes the gallery at once, then at most once per interval, without holding a slot", async () => {
+    const { api } = uploadApi();
+    const { post, calls } = controlledPost();
+    const onUploaded = vi.fn();
+    const { queue } = testUploadQueue(api, { post, onUploaded, refreshEveryMs: 300 });
+    await queue.start(USER);
+    await queue.add([1, 2, 3, 4, 5, 6].map((n) => testFile(`IMG_${n}.jpg`)));
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
+
+    calls[0]!.resolve();
+    await vi.waitFor(() => expect(statuses(queue)[0]).toBe("done"));
+    expect(onUploaded).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(calls).toHaveLength(4));
+
+    calls[1]!.resolve();
+    calls[2]!.resolve();
+    // Their slots go to the next files at once…
+    await vi.waitFor(() => expect(calls).toHaveLength(6));
+    // …while they stay on screen as uploaded-but-not-yet-shown until the next refresh.
+    expect(queue.getSnapshot().slice(1, 3)).toMatchObject([
+      { status: "uploading", progress: 1 },
+      { status: "uploading", progress: 1 },
+    ]);
+    expect(onUploaded).toHaveBeenCalledOnce();
+
+    await vi.waitFor(() => expect(statuses(queue).slice(0, 3)).toEqual(["done", "done", "done"]));
+    expect(onUploaded).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps going when the refresh fails", async () => {
+    const { api } = uploadApi();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { queue } = testUploadQueue(api, {
+      onUploaded: () => Promise.reject(new Error("offline")),
+    });
+    await queue.start(USER);
+    await queue.add([testFile("IMG_1.jpg")]);
+    await vi.waitFor(() => expect(statuses(queue)).toEqual(["done"]));
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("tells the UI once per frame; the snapshot is always current and keeps unchanged entries", async () => {
+    const { api } = uploadApi();
+    const { post, calls } = controlledPost();
+    const frames: (() => void)[] = [];
+    const { queue } = testUploadQueue(api, { post, scheduleFrame: (cb) => frames.push(cb) });
+    const listener = vi.fn();
+    queue.subscribe(listener);
+    await queue.start(USER);
+    await queue.add([1, 2].map((n) => testFile(`IMG_${n}.jpg`)));
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
+    frames.splice(0).forEach((frame) => frame());
+
+    const before = queue.getSnapshot();
+    for (let i = 1; i <= 10; i++) calls[0]!.progress(i / 10);
+    expect(frames).toHaveLength(1);
+    expect(listener).toHaveBeenCalledTimes(1);
+    const after = queue.getSnapshot();
+    expect(after[0]!.progress).toBe(1);
+    // Stable between changes (useSyncExternalStore), and the other row didn't change.
+    expect(queue.getSnapshot()).toBe(after);
+    expect(after[1]).toBe(before[1]);
+
+    frames.splice(0).forEach((frame) => frame());
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it("handles 5,000 files: 3 at a time, in the order added", async () => {
+    const { api } = uploadApi();
+    const { post, calls } = controlledPost();
+    const frames: (() => void)[] = [];
+    const { queue } = testUploadQueue(api, {
+      post,
+      refreshEveryMs: 0,
+      scheduleFrame: (cb) => frames.push(cb),
+    });
+    await queue.start(USER);
+    const files = Array.from({ length: 5000 }, (_, i) => testFile(`IMG_${i}.jpg`, 10));
+
+    const started = performance.now();
+    expect((await queue.add(files)).added).toBe(5000);
+    // Linear work per file (it was quadratic): generous, to stay stable on slow CI machines.
+    expect(performance.now() - started).toBeLessThan(5000);
+    expect(queue.getSnapshot()).toHaveLength(5000);
+    await vi.waitFor(() => expect(calls).toHaveLength(3));
+    // One notification for the whole batch, not one per file.
+    expect(frames.length).toBeLessThanOrEqual(1);
+
+    for (let i = 0; i < 5; i++) {
+      calls[i]!.resolve();
+      await vi.waitFor(() => expect(calls).toHaveLength(4 + i));
+    }
+    expect(calls.map((call) => (call.file as File).name ?? "")).toHaveLength(8);
+    const uploading = queue
+      .getSnapshot()
+      .filter((entry) => entry.status === "uploading" && entry.progress < 1)
+      .map((entry) => entry.fileName);
+    expect(uploading).toEqual(["IMG_5.jpg", "IMG_6.jpg", "IMG_7.jpg"]);
+  });
+});
+
 describe("upload queue: files from the device (Android, 2026-10-26)", () => {
   it("keeps its own copy of the bytes, read when the file is added", async () => {
     const store = new MemoryUploadStore();
