@@ -31,7 +31,7 @@ Everything below is on dev: by CI up to `6b1ba67`, the newer local commits (13.1
    - 13.3 trash (delete → trash, restore, delete forever, empty), 13.2h `/map` (pins, clusters, strip, dark mode)
    - 8.16 month sections (gallery + an album, Oldest first), 8.17 zoom on the phone, select mode (Android: press, Unselect all, Back), 9.8 share target (several photos + one non-photo → "1 shared file was left out")
    - 12.2: DevTools console on dev → no CSP violations (login, gallery, viewer, upload, logout)
-2. **6.11 optional look** on 2026-11-03 03:00 UTC: the pending `IMG_0303.jpg` (13.1d *Cancel all* test) and `IMG_0082.jpg` (19:29 test, never arrived) should be swept (`removed: 2`, `bytesReserved` = `bytesUsed`); `stuck` should be 0.
+2. ~~**6.11 optional look**~~ done 2026-11-03: the 03:00 UTC sweep removed `IMG_0303.jpg` and `IMG_0082.jpg` (`removed: 2`, `stuck: 0`, `failed: 0`, `cleared: 4500` old markers of photos no longer pending); both photo items gone, no `pending` photos left, `bytesReserved` = `bytesUsed` for all 7 users; 558 markers from 2026-11-02 remain (< 24 h old, next run clears them).
 3. **13.1 leftovers**: 13.1j on dev and confirmed by the user; 13.1l on dev by hand (user check on Android, see 13.1l) → **13.6** SQS thumbnail queue on dev: two bulk tests found and fixed lost invocations (recursive loop detection → EventBridge originals-only trigger, `49e4a7b`); third bulk test passed 2026-11-02 21:50 UTC (533 uploads → 533 ready, no API errors, `RecursiveInvocationsDropped` 0, ESM 0 failed); **13.6 done** 2026-11-03 (docs, DLQ purged) → 13.1i adaptive concurrency. Optional: 13.1k/g, cancel → delete the pending photo at once, gallery "Select all", PITR on the dev table.
 4. **Phase 12 (verification, against dev)**: 12.3 performance, 12.5 state encryption, 12.6 deploy role scope, 12.8 bootstrap state, 12.9 DLQ alarm (needs approval).
 5. **13.5 Import from Google Photos** (spec v0.24, docs only): first step 13.5a (Google Cloud setup, user).
@@ -622,6 +622,7 @@ Moved to the end by the user (2026-10-27): everything about prod and iOS waits u
 
 | Date | Summary |
 |---|---|
+| 2026-11-03 | 6.11 sweep checked on dev (03:00 UTC run): `removed: 2` (the two abandoned test uploads), `stuck: 0`, `cleared: 4500`, `bytesReserved` = `bytesUsed` for all users. |
 | 2026-11-03 | 13.6 closed: 13.6c/13.6d ticked, spec v0.43 (§16 costs: thumbnail SQS queue + EventBridge), ARCHITECTURE updated, dev thumbnail DLQ purged (19 leftover 2nd-test messages, checked first). |
 | 2026-11-02 | Pushed `main` (`a9a4eec`), CI + Deploy green. Analysed the user's 3rd bulk test (21:50 UTC, after the EventBridge trigger fix): 533 uploads all `ready`, 539 trash moves, Empty trash in 4 steps (~5 s each), no non-2xx, no Lambda errors/throttles, `RecursiveInvocationsDropped` 0, ESM 533 polled/invoked/0 failed, thumbnail concurrency ≤ 5, queue empty, no new DLQ messages (19 old ones left). 13.6 bulk check passed. |
 | 2026-11-01 | Option (b) built and applied to dev: S3 → EventBridge originals rule → queue (2 added, 3 changed); pipeline checked; 8 pending photos re-sent → ready. Not committed. |
