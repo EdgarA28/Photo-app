@@ -1,4 +1,4 @@
-import { MAX_UPLOAD_BYTES } from "@photo-app/shared";
+import { MAX_UPLOAD_BYTES, MAX_VIDEO_BYTES } from "@photo-app/shared";
 import { CircleAlert, X } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -8,8 +8,10 @@ import type { SkipCode } from "./validate";
 
 /** Group labels, in the order shown; `n` picks singular or plural. */
 const GROUPS: Record<SkipCode, (n: number) => string> = {
-  type: (n) => `${n === 1 ? "isn't a photo" : "aren't photos"} (videos and other files)`,
-  size: () => `larger than ${formatBytes(MAX_UPLOAD_BYTES)}`,
+  type: (n) =>
+    `${n === 1 ? "isn't a photo or video" : "aren't photos or videos"} the app takes (only JPEG, PNG, WebP, HEIC, MP4, MOV)`,
+  size: () => `photos larger than ${formatBytes(MAX_UPLOAD_BYTES)}`,
+  videoSize: () => `videos larger than ${formatBytes(MAX_VIDEO_BYTES)}`,
   empty: (n) => (n === 1 ? "is empty" : "are empty"),
   unreadable: (n) =>
     `couldn't be read (if ${n === 1 ? "it's" : "they're"} in the cloud, download ${n === 1 ? "it" : "them"} first)`,

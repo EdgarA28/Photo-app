@@ -94,7 +94,8 @@ describe("upload page (FR-UP-1/5/6)", () => {
 
     pick([
       testFile("notes.pdf", 10, "application/pdf"),
-      testFile("clip.mp4", 10, "video/mp4"),
+      // AVI isn't one of the video formats taken (FR-VID-1: MP4, MOV).
+      testFile("clip.avi", 10, "video/x-msvideo"),
       testFile("empty.jpg", 0),
       testFile("IMG_1.jpg"),
       testFile("IMG_2.jpg"),
@@ -104,7 +105,10 @@ describe("upload page (FR-UP-1/5/6)", () => {
     const groups = within(alert)
       .getAllByRole("listitem")
       .map((item) => item.textContent);
-    expect(groups).toEqual(["2 aren't photos (videos and other files)", "1 is empty"]);
+    expect(groups).toEqual([
+      "2 aren't photos or videos the app takes (only JPEG, PNG, WebP, HEIC, MP4, MOV)",
+      "1 is empty",
+    ]);
     expect(alert.textContent).not.toContain("notes.pdf");
 
     fireEvent.click(within(alert).getByRole("button", { name: "Show the files" }));
@@ -120,14 +124,14 @@ describe("upload page (FR-UP-1/5/6)", () => {
   it("lists at most 200 skipped file names", async () => {
     const { api, queue } = setup();
     await renderAt("/upload", { api, uploads: queue });
-    pick(Array.from({ length: 250 }, (_, i) => testFile(`clip_${i}.mp4`, 10, "video/mp4")));
+    pick(Array.from({ length: 250 }, (_, i) => testFile(`clip_${i}.avi`, 10, "video/x-msvideo")));
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("250 files skipped");
     expect(alert.textContent).not.toContain("added");
     fireEvent.click(within(alert).getByRole("button", { name: "Show the files" }));
-    expect(alert.textContent).toContain("clip_199.mp4");
-    expect(alert.textContent).not.toContain("clip_200.mp4");
+    expect(alert.textContent).toContain("clip_199.avi");
+    expect(alert.textContent).not.toContain("clip_200.avi");
     expect(alert.textContent).toContain("and 50 more");
   });
 
@@ -316,11 +320,11 @@ describe("storage full (FR-UP-7, 8.14)", () => {
     const { router } = await renderAt("/upload", { api, uploads: queue });
     await usageLoaded(router);
 
-    // A video doesn't count: it would be skipped anyway.
+    // A file the app doesn't take doesn't count: it would be skipped anyway.
     const files = [
       testFile("IMG_1.jpg", 1000),
       testFile("IMG_2.jpg", 1000),
-      testFile("clip.mp4", 5000, "video/mp4"),
+      testFile("clip.avi", 5000, "video/x-msvideo"),
     ];
     pick(files);
     let dialog = await screen.findByRole("alertdialog", {

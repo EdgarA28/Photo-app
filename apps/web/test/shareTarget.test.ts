@@ -85,9 +85,27 @@ describe("share target (9.6, FR-PWA-4)", () => {
     await receiveShare(share([jpeg("a.jpg", 600), jpeg("b.jpg", 600), jpeg("c.jpg", 300)]), inbox, {
       files: MAX_SHARED_FILES,
       bytes: 1000,
+      videoBytes: 1000,
     });
     // b would go over; c still fits.
     expect((await inbox.list()).map((photo) => photo.file.name)).toEqual(["a.jpg", "c.jpg"]);
+  });
+
+  it("keeps shared videos up to the video limit; bigger ones are counted apart (FR-VID-9)", async () => {
+    const inbox = createIdbShareInbox(new IDBFactory());
+    const response = await receiveShare(
+      share([
+        new File([new Uint8Array(300)], "small.mp4", { type: "video/mp4" }),
+        new File([new Uint8Array(600)], "big.mov", { type: "video/quicktime" }),
+        new File(["x"], "clip.avi", { type: "video/x-msvideo" }),
+      ]),
+      inbox,
+      { files: MAX_SHARED_FILES, bytes: 10_000, videoBytes: 500 },
+    );
+    expect((await inbox.list()).map((photo) => photo.file.name)).toEqual(["small.mp4"]);
+    expect(response.headers.get("location")).toBe(
+      `${ORIGIN}/upload?shared=received&skipped=2&bigVideos=1`,
+    );
   });
 
   it("replaces what was waiting, so planted files can't ride along (9.8)", async () => {

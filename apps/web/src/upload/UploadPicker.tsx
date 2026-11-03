@@ -1,4 +1,4 @@
-import { MAX_UPLOAD_BYTES } from "@photo-app/shared";
+import { MAX_UPLOAD_BYTES, MAX_VIDEO_BYTES } from "@photo-app/shared";
 import { Camera, FolderUp, ImagePlus, LoaderCircle } from "lucide-react";
 import { useRef, useState, type DragEvent } from "react";
 import { Button } from "@/components/ui/button";
@@ -94,7 +94,8 @@ export function UploadPicker({
           <span className="md:hidden">Add photos</span>
         </p>
         <p className="text-sm text-muted-foreground">
-          JPEG, PNG, WebP or HEIC · up to {formatBytes(MAX_UPLOAD_BYTES)} each
+          JPEG, PNG, WebP or HEIC up to {formatBytes(MAX_UPLOAD_BYTES)} · MP4 or MOV videos up to{" "}
+          {formatBytes(MAX_VIDEO_BYTES)}
         </p>
       </div>
       <div className="flex flex-wrap justify-center gap-2">

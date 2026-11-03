@@ -1,4 +1,5 @@
-import type { PhotoContentType } from "@photo-app/shared";
+import type { MediaContentType } from "@photo-app/shared";
+import type { UploadedPart } from "./multipart";
 import type { ClientErrorCode } from "@/api/errors";
 import { done, promisify } from "@/lib/idb";
 
@@ -16,7 +17,8 @@ export interface UploadItem {
   /** The bytes, until uploaded; then dropped, as they are in S3. */
   file: Blob | null;
   fileName: string;
-  contentType: PhotoContentType;
+  /** A photo or, since 14.5, an MP4/MOV video (always `memoryOnly`). */
+  contentType: MediaContentType;
   sizeBytes: number;
   /** Set by the first upload-url response and sent on every retry (5.6a), so no duplicates. */
   photoId: string | null;
@@ -40,6 +42,12 @@ export interface UploadItem {
    * Stored with the item so another uploader doesn't take it up meanwhile.
    */
   paused?: boolean;
+  /**
+   * Videos (14.5): S3's multipart upload ID while it runs (null once completed) and the parts sent
+   * so far, so a retry or resume in this tab sends only the rest.
+   */
+  videoUploadId?: string | null;
+  videoParts?: UploadedPart[] | null;
   /** A large batch's record (13.1f) and this file's key in it; memory-only items only. */
   batchId?: string;
   sourceKey?: string;

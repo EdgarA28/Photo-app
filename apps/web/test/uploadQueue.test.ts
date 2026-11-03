@@ -931,3 +931,95 @@ describe("adaptive upload concurrency (13.1i, §12.4)", () => {
     expect(concurrency.limit).toBe(CONCURRENCY);
   });
 });
+
+describe("videos (14.5, FR-VID-1/2)", () => {
+  /** A video API answering like the routes of 14.2, and S3 parts that succeed. */
+  function videoApi() {
+    const videos = {
+      start: vi.fn(async () => ({
+        photoId: testId(900),
+        uploadId: "upload-1",
+        partBytes: 16 * 1024 * 1024,
+        partCount: 1,
+      })),
+      parts: vi.fn(async (_photoId: string, partNumbers: number[]) => ({
+        parts: partNumbers.map((n) => ({ partNumber: n, url: `https://s3.test/part-${n}` })),
+        expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
+      })),
+      complete: vi.fn(async () => ({ photoId: testId(900) })),
+    };
+    const photos = { uploadUrl: vi.fn(), delete: vi.fn(async () => undefined) };
+    return { api: { photos, videos } as unknown as Pick<Api, "photos" | "videos">, videos, photos };
+  }
+
+  it("uploads a video in parts, from the picked file, kept in this tab only", async () => {
+    const { api, videos, photos } = videoApi();
+    const putPart = vi.fn(async () => '"etag-1"');
+    const { queue, store } = testUploadQueue(api, { putPart });
+    await queue.start(USER);
+    const clip = testFile("clip.mov", 1000, "video/quicktime");
+    const read = vi.spyOn(clip, "arrayBuffer");
+
+    expect(await queue.add([clip])).toMatchObject({ added: 1, addedBytes: 1000 });
+    await vi.waitFor(() => expect(statuses(queue)).toEqual(["done"]));
+    expect(videos.start).toHaveBeenCalledWith({
+      fileName: "clip.mov",
+      contentType: "video/quicktime",
+      sizeBytes: 1000,
+    });
+    expect(videos.complete).toHaveBeenCalledWith(testId(900), {
+      parts: [{ partNumber: 1, etag: '"etag-1"' }],
+    });
+    // Never copied (up to 2 GB) nor stored; the photo route isn't used.
+    expect(read).not.toHaveBeenCalled();
+    expect(store.items.size).toBe(0);
+    expect(photos.uploadUrl).not.toHaveBeenCalled();
+  });
+
+  it("phones keep videos as picked too, counted in the 1 GB per pick", async () => {
+    const { api } = videoApi();
+    const { queue, store } = testUploadQueue(api, {
+      putPart: () => new Promise(() => {}),
+      isPhone: () => true,
+    });
+    await queue.start(USER);
+    const big = testFile("clip.mp4", 10, "video/mp4");
+    Object.defineProperty(big, "size", { value: 800 * 1024 * 1024 });
+    const another = testFile("clip2.mp4", 10, "video/mp4");
+    Object.defineProperty(another, "size", { value: 300 * 1024 * 1024 });
+
+    const result = await queue.add([big, another]);
+    expect(result.added).toBe(1);
+    expect(result.rejected).toEqual([
+      { fileName: "clip2.mp4", reason: PHONE_LIMIT, code: "phoneLimit" },
+    ]);
+    expect(queue.getSnapshot()[0]!.memoryOnly).toBe(true);
+    expect(store.items.size).toBe(0);
+  });
+
+  it("removing a video mid-upload deletes its pending video (frees the reserved quota)", async () => {
+    const { api, photos } = videoApi();
+    const { queue } = testUploadQueue(api, { putPart: () => new Promise(() => {}) });
+    await queue.start(USER);
+    await queue.add([testFile("clip.mp4", 1000, "video/mp4")]);
+    await vi.waitFor(() => expect(queue.getSnapshot()[0]!.videoUploadId).toBe("upload-1"));
+
+    await queue.remove(queue.getSnapshot()[0]!.id);
+    expect(photos.delete).toHaveBeenCalledWith(testId(900));
+    expect(queue.getSnapshot()).toEqual([]);
+  });
+
+  it("starts over when the upload is gone, and fails a video the server refuses", async () => {
+    const { api, videos } = videoApi();
+    videos.parts.mockRejectedValueOnce(new ApiRequestError("NOT_FOUND", "gone", 404));
+    videos.complete.mockRejectedValueOnce(new ApiRequestError("VALIDATION_ERROR", "size", 400));
+    const { queue } = testUploadQueue(api, { putPart: async () => '"etag-1"' });
+    await queue.start(USER);
+    await queue.add([testFile("clip.mp4", 1000, "video/mp4")]);
+
+    // 404 on the parts → restarted at once (a second start), then complete refuses → failed.
+    await vi.waitFor(() => expect(statuses(queue)).toEqual(["failed"]));
+    expect(videos.start).toHaveBeenCalledTimes(2);
+    expect(queue.getSnapshot()[0]).toMatchObject({ errorCode: "S3_REJECTED" });
+  });
+});

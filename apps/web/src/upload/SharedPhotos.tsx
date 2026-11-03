@@ -2,6 +2,24 @@ import { Share2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { BlobImage } from "./BlobImage";
 import { canPreviewType } from "./useUploads";
+import { isVideoType } from "./validate";
+
+/** "3 photos", "1 video", "4 photos and videos" shared to this app (FR-VID-9). */
+function sharedLabel(files: File[]): string {
+  const videos = files.filter((file) => isVideoType(file.type)).length;
+  const n = files.length;
+  const noun =
+    videos === 0
+      ? n === 1
+        ? "photo"
+        : "photos"
+      : videos === n
+        ? n === 1
+          ? "video"
+          : "videos"
+        : "photos and videos";
+  return `${n} ${noun} shared to this app`;
+}
 
 /** Previews shown; the rest is counted. */
 const MAX_PREVIEWS = 8;
@@ -29,9 +47,7 @@ export function SharedPhotos({
     >
       <h2 id="shared-photos" className="flex items-center gap-2 font-medium">
         <Share2 aria-hidden className="size-4 text-safelight" />
-        {files.length === 1
-          ? "1 photo shared to this app"
-          : `${files.length} photos shared to this app`}
+        {sharedLabel(files)}
       </h2>
       <ul className="grid grid-cols-4 gap-1.5 sm:grid-cols-8">
         {files.slice(0, MAX_PREVIEWS).map((file, i) => (

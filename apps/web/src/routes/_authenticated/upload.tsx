@@ -1,4 +1,4 @@
-import { MAX_UPLOAD_BYTES } from "@photo-app/shared";
+import { MAX_SHARED_VIDEO_BYTES, MAX_UPLOAD_BYTES } from "@photo-app/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { CircleAlert, MonitorUp, WifiOff, X } from "lucide-react";
@@ -36,12 +36,13 @@ import {
 
 /**
  * `shared`: arriving from Android's share sheet (9.6, FR-PWA-4), set by the service worker's
- * redirect (pwa/shareTarget.ts); `skipped`: shared files it left out (type, size, limits; 9.8).
- * Anything else is ignored.
+ * redirect (pwa/shareTarget.ts); `skipped`: shared files it left out (type, size, limits; 9.8);
+ * `bigVideos`: of those, videos over 200 MB (FR-VID-9). Anything else is ignored.
  */
 const uploadSearchSchema = z.object({
   shared: z.enum(["received", "failed"]).optional().catch(undefined),
   skipped: z.coerce.number().int().positive().optional().catch(undefined),
+  bigVideos: z.coerce.number().int().positive().optional().catch(undefined),
 });
 
 // Upload page / queue status (FR-UP-1/5/6, 8.10; storage full, FR-UP-7, 8.14).
@@ -52,7 +53,7 @@ export const Route = createFileRoute("/_authenticated/upload")({
 
 function Upload() {
   const { api, shareInbox, user } = Route.useRouteContext();
-  const { shared, skipped } = Route.useSearch();
+  const { shared, skipped, bigVideos } = Route.useSearch();
   const navigate = Route.useNavigate();
   const queryClient = useQueryClient();
   const queue = useUploadQueue();
@@ -256,8 +257,11 @@ function Upload() {
             {shareSkipped === 1
               ? "1 shared file was left out: "
               : `${shareSkipped} shared files were left out: `}
-            only JPEG, PNG, WebP or HEIC photos up to {formatBytes(MAX_UPLOAD_BYTES)}, at most{" "}
-            {MAX_SHARED_FILES} or {formatBytes(MAX_SHARED_BYTES)} per share.
+            only JPEG, PNG, WebP or HEIC photos up to {formatBytes(MAX_UPLOAD_BYTES)} and MP4 or MOV
+            videos up to {formatBytes(MAX_SHARED_VIDEO_BYTES)}, at most {MAX_SHARED_FILES} or{" "}
+            {formatBytes(MAX_SHARED_BYTES)} per share.
+            {(bigVideos ?? 0) > 0 &&
+              ` ${bigVideos === 1 ? "A bigger video" : "Bigger videos"} can be added here with “Choose photos” instead.`}
           </p>
           <Button
             variant="ghost"

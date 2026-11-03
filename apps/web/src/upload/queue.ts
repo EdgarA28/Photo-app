@@ -1,6 +1,7 @@
 import type { Api } from "@/api/api";
 import { attemptUpload, isAbort } from "./attempt";
 import { createConcurrency, START_CONCURRENCY, type Concurrency } from "./concurrency";
+import { putPart as putPartToS3, type PutPart } from "./s3Part";
 import { postToS3, type PostToS3 } from "./s3Post";
 import type { UploadItem, UploadStore } from "./store";
 import {
@@ -11,7 +12,7 @@ import {
   type BatchStore,
   type InterruptedBatch,
 } from "./batches";
-import { checkFile, type SkipCode } from "./validate";
+import { checkFile, isVideoType, type SkipCode } from "./validate";
 
 /** A picked file that wasn't added, with the reason shown and its group (13.1b). */
 export interface SkippedFile {
@@ -79,9 +80,12 @@ export interface UploadQueue {
 }
 
 export interface UploadQueueDeps {
-  api: Pick<Api, "photos">;
+  /** `videos` for video uploads (14.5); without it a picked video fails. */
+  api: Pick<Api, "photos"> & Partial<Pick<Api, "videos">>;
   store: UploadStore;
   post?: PostToS3;
+  /** One part of a video's multipart upload (14.5). */
+  putPart?: PutPart;
   /**
    * After uploads: refresh what shows them (gallery, usage). Coalesced to at most one call per
    * `refreshEveryMs` (13.1-0); an upload stays on screen as uploading until the refresh after it
@@ -216,6 +220,7 @@ export function createUploadQueue({
   api,
   store,
   post = postToS3,
+  putPart = putPartToS3,
   onUploaded,
   refreshEveryMs = REFRESH_EVERY_MS,
   scheduleFrame = nextFrame,
@@ -567,9 +572,11 @@ export function createUploadQueue({
       if (!item) return;
       const result = await attemptUpload(
         item,
-        { api, post, now },
+        { api, post, now, putPart },
         {
           signal,
+          // A video's upload state (14.5): kept in the item (in this tab) for a retry or resume.
+          onVideoState: (state) => update(id, state),
           // The one write waited for, briefly: with the photoId stored before the file goes out,
           // an app closed mid-upload re-signs this photo on its next start instead of
           // uploading a duplicate (5.6a). A stalled store doesn't hold the upload up.
@@ -642,6 +649,14 @@ export function createUploadQueue({
 
   async function forget(id: string) {
     active.get(id)?.abort();
+    // A video still uploading (14.5): its pending item reserves up to 2 GB of the quota until the
+    // daily sweep, so it is deleted now, which also aborts its S3 upload (FR-VID-3).
+    const video = items.get(id);
+    if (video?.photoId && video.videoUploadId && video.status !== "done") {
+      void api.photos
+        .delete(video.photoId)
+        .catch((error: unknown) => console.warn("Cancelling the video upload failed", error));
+    }
     items.delete(id);
     unsaved.delete(id);
     writes.delete(id);
@@ -878,7 +893,10 @@ export function createUploadQueue({
           continue;
         }
         let bytes: Blob = file;
-        if (!large) {
+        // Videos (14.5) are never copied (up to 2 GB) nor stored: always this tab's, like a large
+        // batch (13.1c), read from the disk while they upload.
+        const video = isVideoType(contentType);
+        if (!large && !video) {
           // Our own copy of the bytes, read now: on Android a picked file is a reference whose
           // read permission can lapse, and every later write of it to IndexedDB then fails
           // (InvalidBlob).
@@ -904,7 +922,7 @@ export function createUploadQueue({
           error: null,
           errorCode: null,
           addedAt: now(),
-          ...(large && { memoryOnly: true }),
+          ...((large || video) && { memoryOnly: true }),
           ...(batch && { batchId: batch.batchId, sourceKey: fileKey(file) }),
         });
         result.added++;

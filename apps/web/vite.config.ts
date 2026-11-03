@@ -75,7 +75,8 @@ export default defineConfig(({ mode }) => {
             action: "/share-target",
             method: "POST",
             enctype: "multipart/form-data",
-            params: { files: [{ name: "photos", accept: ["image/*"] }] },
+            // Videos since 14.5 (FR-VID-9; up to 200 MB each, pwa/shareTarget.ts).
+            params: { files: [{ name: "photos", accept: ["image/*", "video/*"] }] },
           },
         },
       }),

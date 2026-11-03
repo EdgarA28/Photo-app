@@ -19,7 +19,12 @@ import {
   trashListSchema,
   emptyTrashResultSchema,
   uploadUrlResponseSchema,
+  completeVideoUploadResponseSchema,
+  startVideoUploadResponseSchema,
+  videoPartsResponseSchema,
   type AddAlbumPhotosRequest,
+  type CompleteVideoUploadRequest,
+  type StartVideoUploadRequest,
   type CreateAlbumRequest,
   type CreateShareRequest,
   type PageQuery,
@@ -64,6 +69,27 @@ export function createApi(request: Request) {
         }),
       /** Moves it to the trash; a pending upload is deleted at once (FR-DEL-3). */
       delete: (photoId: string) => request("DELETE", `/photos/${enc(photoId)}`),
+    },
+
+    /**
+     * Video uploads (FR-VID-1–3, 14.2): a multipart upload straight to S3. Cancel = `photos.delete`
+     * (aborts it).
+     */
+    videos: {
+      start: (body: StartVideoUploadRequest) =>
+        request("POST", "/videos/uploads", { schema: startVideoUploadResponseSchema, body }),
+      /** Pre-signed part URLs, at most 100 per call, valid 15 min. */
+      parts: (photoId: string, partNumbers: number[], o?: Opts) =>
+        request("POST", `/videos/${enc(photoId)}/parts`, {
+          schema: videoPartsResponseSchema,
+          body: { partNumbers },
+          ...o,
+        }),
+      complete: (photoId: string, body: CompleteVideoUploadRequest) =>
+        request("POST", `/videos/${enc(photoId)}/complete`, {
+          schema: completeVideoUploadResponseSchema,
+          body,
+        }),
     },
 
     /** Public photo links (FR-SHR-8): created signed in, opened without a login. */
