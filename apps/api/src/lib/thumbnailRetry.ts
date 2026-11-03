@@ -1,8 +1,9 @@
 import { SendMessageCommand, type SQSClient } from "@aws-sdk/client-sqs";
+import type { MediaType } from "@photo-app/shared";
 import type { PhotoRecord } from "../repo";
 
 /**
- * Asks the thumbnail Lambda to process a photo again (6.11, 13.6): a photo still `pending` a day
+ * Asks the thumbnail Lambda (or, for a video, the video Lambda, 14.4) to process a photo again (6.11, 13.6): a photo still `pending` a day
  * after its original arrived lost its queue messages (dev 2026-11-01: the event source mapping
  * received some messages without invoking the function, and after 3 receives they went to the
  * DLQ). The daily sweep sends one new message for it to the thumbnail queue.
@@ -17,10 +18,12 @@ export type RetryProcessing = (record: PhotoRecord) => Promise<void>;
  */
 export function sqsRetryProcessing(
   client: SQSClient,
-  queueUrl: string,
+  /** The queue of each media type's service: thumbnail queue, video queue (14.4). */
+  queueUrls: Record<MediaType, string>,
   bucket: string,
 ): RetryProcessing {
   return async (record) => {
+    const queueUrl = queueUrls[record.mediaType ?? "photo"];
     const body = {
       Records: [
         {

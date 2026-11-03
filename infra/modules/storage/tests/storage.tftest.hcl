@@ -59,6 +59,14 @@ run "cors_only_for_app_origins" {
     condition     = contains(one(aws_s3_bucket_cors_configuration.photos.cors_rule).allowed_methods, "POST")
     error_message = "Pre-signed POST uploads need POST in CORS."
   }
+
+  assert {
+    condition = (
+      contains(one(aws_s3_bucket_cors_configuration.photos.cors_rule).allowed_methods, "PUT") &&
+      contains(one(aws_s3_bucket_cors_configuration.photos.cors_rule).expose_headers, "ETag")
+    )
+    error_message = "Video parts are PUT from the browser, which needs each part's ETag (14.2, 14.4)."
+  }
 }
 
 run "versioning_off_by_default" {

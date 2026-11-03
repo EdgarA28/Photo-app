@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.48 |
+| **Version** | 0.49 |
 | **Date** | 2026-11-03 |
 | **Owner** | Edgar |
 | **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5), videos (Phase 14) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
@@ -578,8 +578,8 @@ Second handler in `services/thumbnails` (`thumbnails.video_handler.handler`), so
 
 | Aspect | Specification |
 |---|---|
-| Trigger | EventBridge rule for originals with suffix `.mp4` / `.mov` (`users/*/originals/*.mp4`, `*.mov`) → SQS `photo-app-{env}-videos` → event source mapping, batch 1, **maximum concurrency 2**. The thumbnail rule then excludes these suffixes (§10) |
-| Tools | **PyAV** (Python bindings of FFmpeg's libraries, whose wheels bundle FFmpeg for arm64) instead of ffmpeg/ffprobe executables: installed from `uv.lock` like Pillow, no subprocesses. Its FFmpeg is a **GPL** build (it includes libx264/libx265): fine for our own Lambda, which isn't distributed; no LGPL arm64 wheel exists. Input is limited to the MP4/QuickTime demuxer and the video codecs H.264, HEVC, AV1, VP9, MPEG-4 Part 2 and ProRes (others → `failed`) |
+| Trigger | EventBridge rule for originals with suffix `.mp4` / `.mov` (`users/*/originals/*.mp4`, `*.mov`) → SQS `photo-app-{env}-videos` → event source mapping, batch 1, **maximum concurrency 2**. The thumbnail rule keeps matching all originals (a rule per photo extension is too complex for EventBridge); the thumbnail handler skips video originals (§10) |
+| Tools | **PyAV** (Python bindings of FFmpeg's libraries, whose wheels bundle FFmpeg for arm64) instead of ffmpeg/ffprobe executables: installed from `uv.lock` like Pillow, no subprocesses. Its FFmpeg is a **GPL** build (it includes libx264/libx265): fine for our own Lambda, which isn't distributed; no LGPL arm64 wheel exists. Input is limited inside FFmpeg while probing (`format_whitelist`: MP4/QuickTime; `codec_whitelist`: the decoders below), then checked before decoding: codecs H.264, HEVC, AV1, VP9, MPEG-4 Part 2 and ProRes and at most 40 MP per frame (others → `failed`) |
 | Reading | Through a seekable file object over **ranged S3 GETs** (1 MB each, pinned to the checked ETag with `If-Match`), so FFmpeg reads only the index (`moov`, at the end of most phone videos) and the frames around the poster: a 2 GB file isn't downloaded and needs no `/tmp`. More than 256 MB read for one video → `failed` (a broken index can't make it scan the whole file) |
 | Metadata | Duration, width/height (the display matrix's rotation applied), codec, date → takenAt: iPhone's `com.apple.quicktime.creationdate` (local time + offset), else `creation_time`; dates before 1971 (unset QuickTime dates) or in the future are ignored (same fallback as photos), GPS (`com.apple.quicktime.location.ISO6709` / `location`, decimal ISO 6709) → place (FR-SRCH-1) |
 | Poster | Frame at 1 s (half the length for shorter clips), turned upright, converted with the frame's colour space → the same thumb (400 px, q75) and preview (1600 px, q82) JPEGs as photos. HDR videos (HLG/PQ) are not tone-mapped, so their posters look flatter |
@@ -897,6 +897,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.36 | 2026-11-01 | Continue an interrupted large batch by picking it again (13.1f, §12.4) |
 | 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.38 | 2026-11-01 | Less gallery polling while uploads run: 15 s instead of 3 s, refreshes during a batch only mark lists stale (13.1j, §12.4) |
+| 0.49 | 2026-11-03 | §10.2: the thumbnail rule keeps matching all originals (EventBridge rejected per-extension wildcards), FFmpeg whitelists + 40 MP frame limit (security review); no requirement changes |
 | 0.48 | 2026-11-03 | §10.2 video service as built (14.3): PyAV instead of ffmpeg/ffprobe executables (GPL FFmpeg build, not distributed), ranged S3 reads instead of a pre-signed URL (no `/tmp`, 256 MB read limit), codec allow-list, iPhone creation date preferred, poster at 1 s or half the length, HDR not tone-mapped, separate Lambda package; no requirement changes |
 | 0.47 | 2026-11-03 | §9 video routes (14.2): part URLs pinned to each part's size; a wrong size on complete deletes the photo instead of marking it `failed` (nothing has counted it, so `failed` would break the Usage invariant); repeated complete 200, aborted 409; `videoUrl` on photos (owner path, recipients 4 h); §8.2 `complete` removes `uploadId`; no requirement changes |
 | 0.46 | 2026-11-03 | §9 video routes: response of `/videos/{id}/parts` (`{parts: [{partNumber, url}], expiresAt}`) and `/videos/{id}/complete` (`200 {photoId}`), part-number limits (14.1 shared schemas); no requirement changes |

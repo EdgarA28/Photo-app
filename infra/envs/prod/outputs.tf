@@ -46,6 +46,21 @@ output "thumbnails_queue_url" {
   value = module.thumbnails.queue_url
 }
 
+output "videos_function_name" {
+  description = "Video Lambda (14.4), for logs and manual checks."
+  value       = module.videos.function_name
+}
+
+output "videos_dlq_url" {
+  description = "Video messages that failed 5 receives; inspect or redrive from here."
+  value       = module.videos.dlq_url
+}
+
+output "videos_queue_url" {
+  description = "Video queue: its depth shows videos waiting to be processed."
+  value       = module.videos.queue_url
+}
+
 output "api_endpoint" {
   value = module.api.api_endpoint
 }

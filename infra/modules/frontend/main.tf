@@ -24,6 +24,8 @@ locals {
     "script-src 'self'",
     "style-src 'self'",
     "img-src 'self' blob: data:",
+    # The video player (14.6): own and shared videos from this distribution; blob: for local files.
+    "media-src 'self' blob:",
     "font-src 'self'",
     # Map tiles, styles, sprites and fonts from OpenFreeMap (13.2h, apps/web/src/map/style.ts).
     "connect-src 'self' ${var.auth_domain_url} https://${var.photo_bucket_regional_domain_name} https://tiles.openfreemap.org",

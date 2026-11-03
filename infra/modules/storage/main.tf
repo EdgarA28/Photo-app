@@ -95,8 +95,10 @@ resource "aws_s3_bucket_lifecycle_configuration" "photos" {
 resource "aws_s3_bucket_cors_configuration" "photos" {
   bucket = aws_s3_bucket.photos.id
 
+  # POST: photo uploads (pre-signed POST, 5.6). PUT: video parts (pre-signed UploadPart, 14.2);
+  # the browser reads each part's ETag for `complete`, so ETag is exposed.
   cors_rule {
-    allowed_methods = ["POST", "GET", "HEAD"]
+    allowed_methods = ["POST", "PUT", "GET", "HEAD"]
     allowed_origins = var.cors_allowed_origins
     allowed_headers = ["*"]
     expose_headers  = ["ETag"]

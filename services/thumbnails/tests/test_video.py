@@ -150,9 +150,28 @@ def test_audio_only() -> None:
         process_video(io.BytesIO(out.getvalue()))
 
 
-def test_codecs_outside_the_list_are_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(video_module, "ALLOWED_CODECS", frozenset({"hevc"}))
-    with pytest.raises(PermanentVideoError, match="unsupported video codec h264"):
+def test_codecs_outside_the_list_are_refused() -> None:
+    # MJPEG in a QuickTime: FFmpeg can decode it, but it's not a codec phones record.
+    mjpeg = make_video(fmt="mov", codec="mjpeg", pix_fmt="yuvj420p")
+    with pytest.raises(PermanentVideoError, match="unsupported video codec mjpeg"):
+        process_video(io.BytesIO(mjpeg))
+
+
+def test_av1_by_its_canonical_name() -> None:
+    v = process_video(io.BytesIO(make_video(codec="libsvtav1")))
+    assert (v.codec, v.playable) == ("av1", False)
+
+
+def test_audio_track_is_not_decoded() -> None:
+    # Only the allowed video decoders open while probing (OPEN_OPTIONS): AAC isn't one.
+    v = process_video(io.BytesIO(make_video(audio=True)))
+    assert (v.codec, v.duration_ms) == ("h264", 2000)
+
+
+def test_frame_size_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 320x240 = 76,800 px: refused before any frame is decoded.
+    monkeypatch.setattr(video_module, "MAX_PIXELS", 76_799)
+    with pytest.raises(PermanentVideoError, match="320x240 exceeds 76799 px"):
         process_video(io.BytesIO(make_video()))
 
 

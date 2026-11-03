@@ -56,6 +56,19 @@ module "thumbnails" {
   table_arn   = module.database.table_arn
 }
 
+# Video Lambda (spec §10.2, 14.4): `.mp4` / `.mov` originals, through its own queue.
+module "videos" {
+  source = "../../modules/videos"
+
+  environment = local.environment
+  # Built by `pnpm build:py` (services/thumbnails, Pillow + PyAV); run it before planning.
+  source_dir  = "${path.root}/../../../services/thumbnails/dist-video"
+  bucket_name = module.storage.bucket_name
+  bucket_arn  = module.storage.bucket_arn
+  table_name  = module.database.table_name
+  table_arn   = module.database.table_arn
+}
+
 module "api" {
   source = "../../modules/api"
 
@@ -71,6 +84,8 @@ module "api" {
   # The daily sweep re-sends stuck photos (6.11, 13.6).
   thumbnail_queue_arn = module.thumbnails.queue_arn
   thumbnail_queue_url = module.thumbnails.queue_url
+  video_queue_arn     = module.videos.queue_arn
+  video_queue_url     = module.videos.queue_url
   user_pool_arn       = module.auth.user_pool_arn
   issuer_url          = module.auth.issuer_url
   audience            = [module.auth.web_client_id]

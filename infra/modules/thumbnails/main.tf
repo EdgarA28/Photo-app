@@ -211,6 +211,9 @@ resource "aws_cloudwatch_event_rule" "originals" {
     "detail-type" = ["Object Created"]
     detail = {
       bucket = { name = [var.bucket_name] }
+      # All originals, videos too: a rule per photo extension is "too complex" for EventBridge
+      # (dev 2026-11-03, 14.4). The handler skips video originals ("not a photo original"); the
+      # videos module's rule sends them to the video queue.
       object = { key = [{ wildcard = "users/*/originals/*" }] }
     }
   })

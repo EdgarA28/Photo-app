@@ -22,7 +22,7 @@ const repos = createRepositories({ client: createDocumentClient(), table: config
 const storage = s3PhotoStorage(createS3Client(), config.photoBucket);
 const retryProcessing = sqsRetryProcessing(
   new SQSClient({}),
-  config.thumbnailQueueUrl,
+  { photo: config.thumbnailQueueUrl, video: config.videoQueueUrl },
   config.photoBucket,
 );
 

@@ -50,6 +50,8 @@ variables {
   bucket_arn          = "arn:aws:s3:::photo-app-photos-test-123456789012"
   thumbnail_queue_arn = "arn:aws:sqs:us-east-1:123456789012:photo-app-test-thumbnails"
   thumbnail_queue_url = "https://sqs.us-east-1.amazonaws.com/123456789012/photo-app-test-thumbnails"
+  video_queue_arn     = "arn:aws:sqs:us-east-1:123456789012:photo-app-test-videos"
+  video_queue_url     = "https://sqs.us-east-1.amazonaws.com/123456789012/photo-app-test-videos"
   user_pool_id        = "us-east-1_test"
   user_pool_arn       = "arn:aws:cognito-idp:us-east-1:123456789012:userpool/us-east-1_test"
   issuer_url          = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_test"
@@ -239,7 +241,7 @@ run "trash_purge" {
   }
 
   assert {
-    condition     = aws_lambda_function.purge.environment[0].variables == tomap({ TABLE_NAME = "photo-app-test", PHOTO_BUCKET = "photo-app-photos-test-123456789012", THUMBNAIL_QUEUE_URL = "https://sqs.us-east-1.amazonaws.com/123456789012/photo-app-test-thumbnails", NODE_OPTIONS = "--enable-source-maps" })
+    condition     = aws_lambda_function.purge.environment[0].variables == tomap({ TABLE_NAME = "photo-app-test", PHOTO_BUCKET = "photo-app-photos-test-123456789012", THUMBNAIL_QUEUE_URL = "https://sqs.us-east-1.amazonaws.com/123456789012/photo-app-test-thumbnails", VIDEO_QUEUE_URL = "https://sqs.us-east-1.amazonaws.com/123456789012/photo-app-test-videos", NODE_OPTIONS = "--enable-source-maps" })
     error_message = "The purge needs the table, the photo bucket and the thumbnail queue."
   }
 
@@ -274,8 +276,8 @@ run "trash_purge" {
   }
 
   assert {
-    condition     = toset(data.aws_iam_policy_document.purge.statement[5].actions) == toset(["sqs:SendMessage"]) && toset(data.aws_iam_policy_document.purge.statement[5].resources) == toset(["arn:aws:sqs:us-east-1:123456789012:photo-app-test-thumbnails"])
-    error_message = "The sweep only sends to the thumbnail queue (6.11, 13.6)."
+    condition     = toset(data.aws_iam_policy_document.purge.statement[5].actions) == toset(["sqs:SendMessage"]) && toset(data.aws_iam_policy_document.purge.statement[5].resources) == toset(["arn:aws:sqs:us-east-1:123456789012:photo-app-test-thumbnails", "arn:aws:sqs:us-east-1:123456789012:photo-app-test-videos"])
+    error_message = "The sweep only sends to the thumbnail and video queues (6.11, 13.6, 14.4)."
   }
 
   assert {

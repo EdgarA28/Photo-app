@@ -82,6 +82,7 @@ jobs:
             apps/api/dist
             services/auth-triggers/dist
             services/thumbnails/dist
+            services/thumbnails/dist-video
           retention-days: 1
 
   plan-dev:

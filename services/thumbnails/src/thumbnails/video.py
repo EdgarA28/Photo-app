@@ -12,9 +12,12 @@ What comes out (FR-VID-4, FR-VID-5):
   location tag (ISO 6709);
 - a poster frame: the frame at 1 s (half the length for shorter clips), turned upright, as RGB.
 
-Untrusted input is limited to the MP4/QuickTime demuxer and the video codecs phones and cameras
-record (`ALLOWED_CODECS`). Anything raised as PermanentVideoError can never be processed; other
-exceptions (e.g. S3 errors from the file object) are transient and propagate unchanged.
+Untrusted input is limited inside FFmpeg (`OPEN_OPTIONS`: only the MP4/QuickTime demuxer, and
+while probing only the decoders of `ALLOWED_CODECS`, so audio and other tracks aren't decoded),
+then checked before any frame is decoded: an allowed codec and at most `MAX_PIXELS` per frame
+(a file can declare any frame size). Anything raised as PermanentVideoError can never be
+processed; other exceptions (e.g. S3 errors from the file object) are transient and propagate
+unchanged.
 """
 
 import re
@@ -28,8 +31,18 @@ from PIL import Image
 # FR-VID-1: MP4 and MOV share FFmpeg's "mov,mp4,…" demuxer; nothing else is probed.
 DEMUXER = "mov"
 
-# Video codecs decoded for the poster; others (e.g. a QuickTime with an exotic codec) fail.
+# Video codecs decoded for the poster (canonical names); others (e.g. MJPEG in a QuickTime) fail.
 ALLOWED_CODECS = frozenset({"h264", "hevc", "av1", "vp9", "mpeg4", "prores"})
+# FFmpeg's decoder names for them (AV1 decodes with dav1d in PyAV's FFmpeg).
+DECODERS = ("h264", "hevc", "libdav1d", "vp9", "libvpx-vp9", "mpeg4", "prores")
+# Applied while the file is opened and probed (avformat_find_stream_info opens decoders).
+OPEN_OPTIONS = {
+    "format_whitelist": "mov,mp4,m4a,3gp,3g2,mj2",
+    "codec_whitelist": ",".join(DECODERS),
+}
+# Decompression-bomb guard, like photos' 100 MP (imaging.py): 8K UHD is 33 MP; one RGB frame of
+# 40 MP is ~120 MB.
+MAX_PIXELS = 40_000_000
 # What every browser plays (FR-VID-5); HEVC plays in Safari only.
 PLAYABLE_CODECS = frozenset({"h264"})
 
@@ -76,7 +89,13 @@ class ProcessedVideo:
 
 def process_video(source: BinaryIO) -> ProcessedVideo:
     try:
-        with av.open(source, mode="r", format=DEMUXER, buffer_size=READ_BUFFER_BYTES) as container:
+        with av.open(
+            source,
+            mode="r",
+            format=DEMUXER,
+            options=OPEN_OPTIONS,
+            buffer_size=READ_BUFFER_BYTES,
+        ) as container:
             return _process(container)
     except av.FFmpegError as e:
         raise PermanentVideoError(f"{type(e).__name__}: {e}") from e
@@ -86,12 +105,16 @@ def _process(container: av.container.InputContainer) -> ProcessedVideo:
     if not container.streams.video:
         raise PermanentVideoError("no video stream")
     stream = container.streams.video[0]
-    codec = stream.codec_context.name
+    # Before anything is decoded. The canonical name, e.g. `av1` (decoder `libdav1d`).
+    codec = stream.codec_context.codec.canonical_name
     if codec not in ALLOWED_CODECS:
         raise PermanentVideoError(f"unsupported video codec {codec}")
+    _check_pixels(stream.codec_context.width, stream.codec_context.height)
     duration_ms = _duration_ms(container, stream)
     frame = _poster_frame(container, stream, duration_ms)
 
+    # Frames may differ from the stream's declared size.
+    _check_pixels(frame.width, frame.height)
     rotation = frame.rotation % 360
     poster = _to_rgb(frame)
     if rotation in _ROTATIONS:
@@ -108,6 +131,11 @@ def _process(container: av.container.InputContainer) -> ProcessedVideo:
         gps=_gps(metadata),
         poster=poster,
     )
+
+
+def _check_pixels(width: int, height: int) -> None:
+    if width * height > MAX_PIXELS:
+        raise PermanentVideoError(f"{width}x{height} exceeds {MAX_PIXELS} px")
 
 
 def _duration_ms(container: av.container.InputContainer, stream: av.VideoStream) -> int | None:

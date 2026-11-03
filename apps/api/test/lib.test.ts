@@ -510,7 +510,11 @@ describe("sqsRetryProcessing (6.11, 13.6)", () => {
     const client = {
       send: async (command: { input: (typeof sent)[number] }) => void sent.push(command.input),
     };
-    const retry = sqsRetryProcessing(client as never, "https://sqs.example/q", "photos-bucket");
+    const retry = sqsRetryProcessing(
+      client as never,
+      { photo: "https://sqs.example/q", video: "https://sqs.example/videos" },
+      "photos-bucket",
+    );
     await retry({
       originalKey: "users/u-1/originals/01ABC.jpg",
       sizeBytes: 1234,
@@ -532,5 +536,24 @@ describe("sqsRetryProcessing (6.11, 13.6)", () => {
         },
       ],
     });
+  });
+
+  test("a video goes to the video queue (14.4)", async () => {
+    const sent: { QueueUrl?: string }[] = [];
+    const client = {
+      send: async (command: { input: (typeof sent)[number] }) => void sent.push(command.input),
+    };
+    const retry = sqsRetryProcessing(
+      client as never,
+      { photo: "https://sqs.example/q", video: "https://sqs.example/videos" },
+      "photos-bucket",
+    );
+    await retry({
+      originalKey: "users/u-1/originals/01ABC.mp4",
+      mediaType: "video",
+      sizeBytes: 1234,
+      uploadedAt: "2026-11-01T20:08:09.409Z",
+    } as never);
+    expect(sent.map((s) => s.QueueUrl)).toEqual(["https://sqs.example/videos"]);
   });
 });

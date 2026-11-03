@@ -26,14 +26,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 }
 
 /** The trash purge Lambda (FR-DEL-3, `purge.ts`): only the table and the photo bucket. */
-export function loadPurgeConfig(
-  env: NodeJS.ProcessEnv = process.env,
-): Pick<Config, "tableName" | "photoBucket"> & { thumbnailQueueUrl: string } {
+export function loadPurgeConfig(env: NodeJS.ProcessEnv = process.env): Pick<
+  Config,
+  "tableName" | "photoBucket"
+> & {
+  thumbnailQueueUrl: string;
+  videoQueueUrl: string;
+} {
   return {
     tableName: required(env, "TABLE_NAME"),
     photoBucket: required(env, "PHOTO_BUCKET"),
-    // Stuck photos go back to the thumbnail queue (6.11, 13.6).
+    // Stuck photos go back to the thumbnail queue (6.11, 13.6), stuck videos to the video queue
+    // (14.4).
     thumbnailQueueUrl: required(env, "THUMBNAIL_QUEUE_URL"),
+    videoQueueUrl: required(env, "VIDEO_QUEUE_URL"),
   };
 }
 

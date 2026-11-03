@@ -105,6 +105,8 @@ def make_video(
     metadata: dict[str, str] | None = None,
     faststart: bool = False,
     apple_tags: bool = False,
+    pix_fmt: str = "yuv420p",
+    audio: bool = False,
 ) -> bytes:
     """A video clip made with PyAV (14.3; no binary fixtures in git): black for the first second,
     then `two_tone` (red left, blue right), so the poster at 1 s shows the orientation.
@@ -120,7 +122,9 @@ def make_video(
     # faststart rewrites the file in a second pass, which needs a real file.
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / f"clip.{fmt}"
-        _write_video(path, fmt, codec, seconds, size, fps, rotation, metadata, options)
+        _write_video(
+            path, fmt, codec, seconds, size, fps, rotation, metadata, options, pix_fmt, audio
+        )
         return path.read_bytes()
 
 
@@ -134,6 +138,8 @@ def _write_video(
     rotation: int | None,
     metadata: dict[str, str] | None,
     options: dict[str, str],
+    pix_fmt: str,
+    audio: bool,
 ) -> None:
     import av
 
@@ -143,7 +149,8 @@ def _write_video(
         codec_options = {"x265-params": "log-level=none"} if codec == "libx265" else {}
         stream = container.add_stream(codec, rate=fps, options=codec_options)
         stream.width, stream.height = size
-        stream.pix_fmt = "yuv420p"
+        stream.pix_fmt = pix_fmt
+        sound = container.add_stream("aac", rate=44100) if audio else None
         if rotation is not None:
             stream.set_display_rotation(rotation)
         black = Image.new("RGB", size, (0, 0, 0))
@@ -155,6 +162,14 @@ def _write_video(
                 container.mux(packet)
         for packet in stream.encode():
             container.mux(packet)
+        if sound is not None:
+            samples = av.AudioFrame(format="fltp", layout="mono", samples=1024)
+            for plane in samples.planes:
+                plane.update(bytes(plane.buffer_size))
+            samples.sample_rate = 44100
+            samples.pts = 0
+            for packet in [*sound.encode(samples), *sound.encode()]:
+                container.mux(packet)
 
 
 @pytest.fixture

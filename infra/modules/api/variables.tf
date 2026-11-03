@@ -38,6 +38,16 @@ variable "thumbnail_queue_url" {
   type        = string
 }
 
+variable "video_queue_arn" {
+  description = "Video queue ARN (videos module): the daily sweep re-sends stuck videos to it (14.4)."
+  type        = string
+}
+
+variable "video_queue_url" {
+  description = "Video queue URL (videos module), for the same sweep."
+  type        = string
+}
+
 variable "user_pool_id" {
   description = "Cognito user pool (auth module): USER_POOL_ID, profile and email lookups."
   type        = string

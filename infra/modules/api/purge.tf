@@ -63,9 +63,10 @@ data "aws_iam_policy_document" "purge" {
   # messages; one new message lets the thumbnail Lambda process it (13.6). Same account, so this
   # identity policy is enough next to the queue policy (which admits S3 only). SSE-SQS: no KMS.
   statement {
-    sid       = "RetryProcessing"
-    actions   = ["sqs:SendMessage"]
-    resources = [var.thumbnail_queue_arn]
+    sid     = "RetryProcessing"
+    actions = ["sqs:SendMessage"]
+    # Photos to the thumbnail queue, videos to the video queue (14.4).
+    resources = [var.thumbnail_queue_arn, var.video_queue_arn]
   }
 
   # Stale-pending sweep of a video whose upload never completed (14.2): its parts are dropped.
@@ -109,6 +110,7 @@ resource "aws_lambda_function" "purge" {
       TABLE_NAME          = var.table_name
       PHOTO_BUCKET        = var.bucket_name
       THUMBNAIL_QUEUE_URL = var.thumbnail_queue_url
+      VIDEO_QUEUE_URL     = var.video_queue_url
       NODE_OPTIONS        = "--enable-source-maps"
     }
   }
