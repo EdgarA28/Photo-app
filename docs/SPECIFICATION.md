@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.43 |
+| **Version** | 0.45 |
 | **Date** | 2026-11-03 |
 | **Owner** | Edgar |
 | **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5), videos (Phase 14) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
@@ -678,12 +678,13 @@ Second handler in `services/thumbnails` (`thumbnails.video_handler.handler`), so
 - Phones copy every pick (picked files can lose their read permission on Android), at most 1 GB per pick; the rest is listed as not added.
 - Interrupted large batches (FR-UP-5): a large batch is remembered (folder name, each file's name + size + last change, which are uploaded; no bytes). If its tab closes first, `/upload` says how many photos weren't uploaded; picking the same folder (or files) again uploads only the rest. Forgotten when done, on *Cancel all*, on *Dismiss* and at logout.
 - The whole queue (FR-UP-6): "312 of 1,040 uploaded", uploaded of total size, time left at the speed of the last 30 s, an overall progress bar; *Pause* / *Resume* (stored with the items, so no other tab or the service worker uploads paused files) and *Cancel all* (finished photos stay). Other tabs show "Uploading N photos in another tab" while one tab runs a large batch.
+- No list of files on `/upload` (user request 2026-11-03): the overall progress bar is all that shows while uploads run. When something goes wrong, one message: "Something went wrong: N photos couldn't be uploaded." with the reasons grouped (e.g. "2 × The file is no longer available on this device."), *Retry* and *Remove* for all of them; storage-full failures keep their own banner (FR-UP-7). Uploads waiting to retry after a temporary failure: "Connection problem: N photos will be retried shortly." The gallery tiles (FR-UP-6) are unchanged.
 - Storage (FR-UP-7): a pick that needs more than the space left (quota − used − already waiting) asks first ("Upload anyway" / "Cancel"). At the first upload refused for storage, every file still waiting stops as "storage full" without asking the server for each; "Retry all" sends them again after space is freed.
 - Mobile data (13.1l): a pick of 200 MB or more asks first ("Upload anyway" / "Not now") when the browser reports mobile data or Data Saver (Network Information API, Chromium on Android only; other browsers don't tell, so they never ask); after the storage question if both apply. While uploads run on mobile data the upload page says so. On phones the upload page notes that whole libraries are easier from a computer (folders) and that the app should stay open until uploads finish.
 - Worker loop: request upload URL → POST to S3 with progress → mark done → invalidate gallery. The gallery refresh is coalesced (at most one per 5 s while uploads finish), so a batch of thousands of files doesn't refetch the gallery after each one. While uploads are still going (in any tab), those refreshes only mark the photo lists and usage as out of date; a gallery on screen refetches its loaded pages every 15 s instead of every 3 s, and the batch's last refresh refetches at once (13.1j).
-- Large queues: the bytes are stored once (status changes rewrite only the item), the UI updates at most once per frame, the upload list is virtualized and the gallery shows at most 20 upload tiles plus "+N more".
+- Large queues: the bytes are stored once (status changes rewrite only the item), the UI updates at most once per frame, `/upload` shows no per-file list and the gallery shows at most 20 upload tiles plus "+N more".
 - Retries on `online` event and on app start; Background Sync where supported (Chromium only): the service worker uploads the stored queue once online, even with the app closed, using the stored refresh token (§11.4).
-- Concurrency: 3 parallel uploads.
+- Concurrency (13.1i): adaptive, 1–6 uploads at once. Starts at 3; one more after a full round of successes in a row (as many as the current limit); halved on a temporary failure (network, 5xx, 429, expired signature, stalled upload), at least 1; failures of uploads already running at the last cut don't cut again. Permanent failures and an ended session don't count. Back to 3 on app start and on the `online` event. An S3 POST with no progress for 45 s is aborted and retried. Background Sync keeps a fixed 3.
 
 ### 12.5 PWA configuration (vite-plugin-pwa)
 
@@ -896,6 +897,8 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.36 | 2026-11-01 | Continue an interrupted large batch by picking it again (13.1f, §12.4) |
 | 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.38 | 2026-11-01 | Less gallery polling while uploads run: 15 s instead of 3 s, refreshes during a batch only mark lists stale (13.1j, §12.4) |
+| 0.45 | 2026-11-03 | `/upload` without the list of files (user request): the overall progress bar only, and one message when uploads failed (grouped by reason, Remove / Retry) or wait to retry after a connection problem (§12.4) |
+| 0.44 | 2026-11-03 | Adaptive upload concurrency 1–6 (starts at 3) and a 45 s stall timeout for S3 POSTs (13.1i, §12.4) |
 | 0.43 | 2026-11-03 | §16 cost estimate: thumbnail SQS queue and EventBridge (13.6d); no requirement changes |
 | 0.42 | 2026-11-01 | §10: trigger via EventBridge, originals only (recursive loop detection dropped invocations); §10.2 video trigger likewise; DLQ after 5 receives (was 3); the stale-pending sweep re-sends photos stuck with their original in S3 to the thumbnail queue (dev: the queue trigger lost 19 messages) |
 | 0.41 | 2026-11-01 | Videos specified (Phase 14, decisions of 14.0 = the proposed defaults): FR-VID-1–10 (§6.10), scope (§2), keys + Photo attributes (§8), `/videos/*` multipart routes (§9), video service (§10.2), upload queue + viewer (§12.4), modules + quota defaults (§13), cost (§16), B-7 (§17) |

@@ -43,27 +43,28 @@ function pick(files: File[], testId = "upload-picker") {
 }
 
 describe("upload page (FR-UP-1/5/6)", () => {
-  it("queues picked files and shows each with its progress", async () => {
+  it("queues picked files and shows one progress bar for all of them, no file list", async () => {
     const { api, queue, calls } = setup();
     await renderAt("/upload", { api, uploads: queue });
 
-    pick([testFile("IMG_1.jpg"), testFile("IMG_2.jpg")]);
+    pick([testFile("IMG_1.jpg", 1000), testFile("IMG_2.jpg", 1000)]);
     await waitFor(() => expect(calls).toHaveLength(2));
     calls[0]!.progress(0.4);
 
-    expect(await screen.findByRole("progressbar", { name: "IMG_1.jpg" })).toHaveProperty(
-      "ariaValueNow",
-      "40",
+    expect(await screen.findByRole("heading", { name: "0 of 2 uploaded" })).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.getByRole("progressbar", { name: "All uploads" })).toHaveProperty(
+        "ariaValueNow",
+        "20",
+      ),
     );
-    expect(screen.getByText(/Uploading 40%/)).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "0 of 2 uploaded" })).toBeTruthy();
+    // Only the overall bar (user request 2026-11-03): no rows, names or per-file bars.
+    expect(screen.getAllByRole("progressbar")).toHaveLength(1);
+    expect(screen.queryByText("IMG_1.jpg")).toBeNull();
+    expect(screen.queryByText("IMG_2.jpg")).toBeNull();
 
     calls[0]!.resolve();
     expect(await screen.findByRole("heading", { name: "1 of 2 uploaded" })).toBeTruthy();
-    // A finished upload leaves the list at once (user request 2026-11-01); the count stays.
-    expect(screen.queryByText("IMG_1.jpg")).toBeNull();
-    expect(screen.getByText("IMG_2.jpg")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Clear finished" })).toBeNull();
   });
 
   it("accepts dropped files and the camera", async () => {
@@ -130,7 +131,7 @@ describe("upload page (FR-UP-1/5/6)", () => {
     expect(alert.textContent).toContain("and 50 more");
   });
 
-  it("shows a permanent failure with its reason, and retries it on request", async () => {
+  it("shows permanent failures with their reason, and retries all of them on request", async () => {
     let refused = true;
     const { api, queue } = setup({
       "POST /photos/upload-url": () =>
@@ -138,23 +139,50 @@ describe("upload page (FR-UP-1/5/6)", () => {
     });
     await renderAt("/upload", { api, uploads: queue });
 
-    pick([testFile("IMG_1.jpg")]);
-    expect(await screen.findByText(/This file type isn't supported/)).toBeTruthy();
+    pick([testFile("IMG_1.jpg"), testFile("IMG_2.jpg")]);
+    const alert = await screen.findByRole("alert");
+    await waitFor(() =>
+      expect(alert.textContent).toContain("Something went wrong: 2 photos couldn't be uploaded."),
+    );
+    expect(alert.textContent).toContain("This file type isn't supported");
 
     refused = false;
-    fireEvent.click(screen.getByRole("button", { name: "Retry IMG_1.jpg" }));
-    expect(await screen.findByText(/Uploading 0%/)).toBeTruthy();
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByText(/Something went wrong/)).toBeNull());
+    await waitFor(() =>
+      expect(queue.getSnapshot().map((e) => e.status)).toEqual(["uploading", "uploading"]),
+    );
   });
 
-  it("cancels an upload", async () => {
-    const { api, queue, calls } = setup();
+  it("groups failures by reason and removes them on request", async () => {
+    const { api, queue } = setup({
+      "POST /photos/upload-url": () => new ApiRequestError("UNSUPPORTED_MEDIA_TYPE", "no", 415),
+    });
+    await renderAt("/upload", { api, uploads: queue });
+    pick([testFile("IMG_1.jpg"), testFile("IMG_2.jpg")]);
+
+    const alert = await screen.findByText(/2 photos couldn't be uploaded/);
+    const box = alert.closest("[role=alert]") as HTMLElement;
+    expect(
+      within(box)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual([expect.stringMatching(/^2 × This file type isn't supported/)]);
+    fireEvent.click(within(box).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(queue.getSnapshot()).toHaveLength(0));
+    await waitFor(() => expect(screen.queryByText(/Something went wrong/)).toBeNull());
+  });
+
+  it("says when uploads wait to retry after a connection problem", async () => {
+    const { api, queue } = setup({
+      "POST /photos/upload-url": () => new ApiRequestError("INTERNAL_ERROR", "x", 500),
+    });
     await renderAt("/upload", { api, uploads: queue });
     pick([testFile("IMG_1.jpg")]);
-    await waitFor(() => expect(calls).toHaveLength(1));
-
-    fireEvent.click(screen.getByRole("button", { name: "Cancel IMG_1.jpg" }));
-    await waitFor(() => expect(screen.queryByText("IMG_1.jpg")).toBeNull());
-    expect(calls[0]!.signal?.aborted).toBe(true);
+    expect(
+      await screen.findByText("Connection problem: 1 photo will be retried shortly."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Something went wrong/)).toBeNull();
   });
 });
 
@@ -275,13 +303,12 @@ describe("storage full (FR-UP-7, 8.14)", () => {
         .getByRole("link", { name: "Free up space in the Gallery" })
         .getAttribute("href"),
     ).toBe("/gallery");
-    // The rows only say why in short.
-    expect(screen.getAllByText(/Not enough storage/)).toHaveLength(2);
+    // Explained by the banner only, not again as "something went wrong".
+    expect(screen.queryByText(/Something went wrong/)).toBeNull();
 
     full = false;
     fireEvent.click(within(alert).getByRole("button", { name: "Retry all" }));
     await waitFor(() => expect(screen.queryByText(/Storage full/)).toBeNull());
-    expect(screen.queryAllByText(/Not enough storage/)).toHaveLength(0);
   });
 
   it("asks before queuing photos that need more space than is left (13.1e)", async () => {
@@ -322,24 +349,6 @@ describe("storage full (FR-UP-7, 8.14)", () => {
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
-  it("retries every failed upload from the list", async () => {
-    let refused = true;
-    const { api, queue } = setup({
-      "POST /photos/upload-url": () =>
-        refused ? new ApiRequestError("VALIDATION_ERROR", "bad", 400) : uploadUrl,
-    });
-    await renderAt("/upload", { api, uploads: queue });
-    pick([testFile("IMG_1.jpg"), testFile("IMG_2.jpg")]);
-    await waitFor(() =>
-      expect(queue.getSnapshot().map((e) => e.status)).toEqual(["failed", "failed"]),
-    );
-    refused = false;
-    fireEvent.click(screen.getByRole("button", { name: "Retry all failed" }));
-    await waitFor(() =>
-      expect(queue.getSnapshot().map((e) => e.status)).toEqual(["uploading", "uploading"]),
-    );
-  });
-
   it("labels refused uploads in the gallery as storage full", async () => {
     const { api, queue } = setup({
       "POST /photos/upload-url": new ApiRequestError("QUOTA_EXCEEDED", "over", 413),
@@ -373,7 +382,7 @@ describe("photos shared from Android's share sheet (9.6, FR-PWA-4)", () => {
     expect(store.items.size).toBe(0);
 
     fireEvent.click(within(card).getByRole("button", { name: "Upload" }));
-    expect(await screen.findByText("IMG_1.jpg")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: /of 1 uploaded/ })).toBeTruthy();
     // Not a photo: explained like a picked file.
     expect(await screen.findByText("1 added · 1 file skipped")).toBeTruthy();
     expect(screen.queryByRole("region", { name: /shared to this app/ })).toBeNull();
@@ -451,28 +460,6 @@ describe("big batches on screen (13.1-0)", () => {
     const more = within(uploads).getByRole("link", { name: "5 more uploads" });
     expect(more.textContent).toBe("+5 more");
     expect(more.getAttribute("href")).toBe("/upload");
-  });
-
-  it("keeps only the rows near the viewport of a long upload list in the page", async () => {
-    // jsdom has no layout: rows measure 73 px (the virtualizer reads offsetHeight); the window
-    // is 768 px high.
-    const height = vi
-      .spyOn(HTMLElement.prototype, "offsetHeight", "get")
-      .mockImplementation(function (this: HTMLElement) {
-        return this.tagName === "LI" ? 73 : 0;
-      });
-    const { api, queue } = setup();
-    await renderAt("/upload", { api, uploads: queue });
-    await queue.add(Array.from({ length: 300 }, (_, i) => testFile(`IMG_${i}.jpg`, 10)));
-
-    const heading = await screen.findByRole("heading", { name: "0 of 300 uploaded" });
-    const list = heading.closest("section")!;
-    const rows = within(list).getAllByRole("listitem");
-    expect(rows.length).toBeGreaterThan(5);
-    expect(rows.length).toBeLessThan(40);
-    expect(within(list).getByText("IMG_0.jpg")).toBeTruthy();
-    expect(within(list).queryByText("IMG_299.jpg")).toBeNull();
-    height.mockRestore();
   });
 
   it("asks to keep the tab open while a large batch uploads (13.1c)", async () => {
@@ -570,7 +557,7 @@ describe("big batches on screen (13.1-0)", () => {
     expect(within(header).getByRole("progressbar", { name: "All uploads" })).toBeTruthy();
 
     fireEvent.click(within(header).getByRole("button", { name: "Pause" }));
-    await waitFor(() => expect(screen.getAllByText(/Paused/).length).toBeGreaterThan(2));
+    await waitFor(() => expect(header.textContent).toContain("Paused"));
     fireEvent.click(within(header).getByRole("button", { name: "Resume" }));
     await waitFor(() => expect(within(header).getByRole("button", { name: "Pause" })).toBeTruthy());
 
