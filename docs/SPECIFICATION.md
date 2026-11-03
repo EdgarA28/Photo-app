@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Version** | 0.42 |
-| **Date** | 2026-11-01 |
+| **Version** | 0.43 |
+| **Date** | 2026-11-03 |
 | **Owner** | Edgar |
 | **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5), videos (Phase 14) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
 
@@ -840,7 +840,8 @@ Indicative AWS list prices (us-east-1, 2026). Small scale (≈ 10 users, ≈ 100
 | API Gateway HTTP API | < $0.10 |
 | DynamoDB on-demand | < $0.10 |
 | Cognito (free tier for MAUs) | $0 |
-| SQS import queue (free tier: 1M requests) | $0 |
+| SQS thumbnail queue (13.6: ~3 requests per photo + event source polling) + import queue (free tier: 1M requests) | $0 |
+| EventBridge (S3 `Object Created` events on the default bus: free) | $0 |
 | CloudFront (always-free tier: 1 TB out, 10M requests) | $0 |
 | CloudWatch logs | < $0.50 |
 | Route 53 hosted zone (if used) | $0.50 |
@@ -895,6 +896,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.36 | 2026-11-01 | Continue an interrupted large batch by picking it again (13.1f, §12.4) |
 | 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.38 | 2026-11-01 | Less gallery polling while uploads run: 15 s instead of 3 s, refreshes during a batch only mark lists stale (13.1j, §12.4) |
+| 0.43 | 2026-11-03 | §16 cost estimate: thumbnail SQS queue and EventBridge (13.6d); no requirement changes |
 | 0.42 | 2026-11-01 | §10: trigger via EventBridge, originals only (recursive loop detection dropped invocations); §10.2 video trigger likewise; DLQ after 5 receives (was 3); the stale-pending sweep re-sends photos stuck with their original in S3 to the thumbnail queue (dev: the queue trigger lost 19 messages) |
 | 0.41 | 2026-11-01 | Videos specified (Phase 14, decisions of 14.0 = the proposed defaults): FR-VID-1–10 (§6.10), scope (§2), keys + Photo attributes (§8), `/videos/*` multipart routes (§9), video service (§10.2), upload queue + viewer (§12.4), modules + quota defaults (§13), cost (§16), B-7 (§17) |
 | 0.40 | 2026-11-01 | Thumbnail queue (13.6) built and in dev: §10 trigger/retries describe the current state, note that event filtering can't drop derived-object events; B-11 done (§17) |
