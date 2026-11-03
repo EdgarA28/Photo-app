@@ -172,7 +172,14 @@ export function videoRoutes(app: Hono<AppEnv>, { repos, storage, config }: Deps)
         });
         throw validationError("The uploaded video doesn't have the declared size");
       }
-      await repos.photos.markUploaded(userId, record.photoId, record.uploadId);
+      if (!(await repos.photos.markUploaded(userId, record.photoId, record.uploadId))) {
+        // Deleted meanwhile (cancel, or the stale-pending sweep): its new original must not stay
+        // behind uncounted. A parallel complete also clears uploadId, but leaves the photo.
+        if (!(await repos.photos.get(userId, record.photoId))) {
+          await storage.deleteObjects([record.originalKey]);
+          throw new AppError(409, "CONFLICT", "This video was deleted while uploading");
+        }
+      }
       return c.json(done);
     },
   );

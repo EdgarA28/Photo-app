@@ -247,6 +247,25 @@ describe("POST /videos/{id}/complete (FR-VID-2, §9)", () => {
     expect((await t.repos.usage.get(user)).bytesReserved).toBe(0);
   });
 
+  test("deleted while completing: the new original is removed, 409", async () => {
+    const user = newUserId();
+    const { photoId, parts } = await uploadAll(user);
+    const completeUpload = t.storage.completeMultipartUpload;
+    // A cancel (or the sweep) gets in between S3's complete and markUploaded.
+    t.storage.completeMultipartUpload = async (upload, p) => {
+      const result = await completeUpload(upload, p);
+      await t.repos.photos.delete(user, photoId);
+      return result;
+    };
+    try {
+      const res = await complete(user, photoId, parts);
+      expect(res.status).toBe(409);
+    } finally {
+      t.storage.completeMultipartUpload = completeUpload;
+    }
+    expect(t.deletes).toContainEqual([originalOf(user, photoId)]);
+  });
+
   test("an aborted upload (cancelled, or expired by the lifecycle rule): 409", async () => {
     const user = newUserId();
     const { photoId, uploadId, parts } = await uploadAll(user);
@@ -299,6 +318,31 @@ describe("cancel and delete (FR-VID-6)", () => {
     expect(result).toMatchObject({ removed: 1, stuck: 0 });
     expect(t.aborts).toEqual([{ key: originalOf(user, photoId), uploadId }]);
     expect(await t.repos.photos.get(user, photoId)).toBeNull();
+    expect(t.deletes).toContainEqual([
+      originalOf(user, photoId),
+      thumbKey(user, photoId),
+      previewKey(user, photoId),
+      playbackKey(user, photoId),
+    ]);
+  });
+
+  test("the sweep: an upload completed right after its check loses its original too", async () => {
+    const user = newUserId();
+    const { photoId, parts } = await uploadAll(user);
+    const exists = t.storage.exists;
+    // The check sees nothing; the complete lands before the abort.
+    t.storage.exists = async () => {
+      await complete(user, photoId, parts);
+      return false;
+    };
+    try {
+      const later = new Date(Date.now() + STALE_PENDING_AFTER_MS + 60_000);
+      expect(await sweepStalePending(t.repos, t.storage, later)).toMatchObject({ removed: 1 });
+    } finally {
+      t.storage.exists = exists;
+    }
+    expect(await t.repos.photos.get(user, photoId)).toBeNull();
+    expect(t.deletes.at(-1)).toContain(originalOf(user, photoId));
   });
 });
 

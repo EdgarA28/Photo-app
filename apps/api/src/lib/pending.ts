@@ -1,6 +1,6 @@
 import type { PendingMarker, PhotoRecord, Repositories } from "../repo";
 import { errorFields, log } from "./log";
-import { abortUpload } from "./objects";
+import { abortUpload, objectKeys } from "./objects";
 import type { PhotoStorage } from "./storage";
 import type { RetryProcessing } from "./thumbnailRetry";
 import { inBatches } from "./trash";
@@ -104,6 +104,13 @@ async function sweepOne(
     // Guarded: if the original arrives right now and the thumbnail Lambda finishes first, the
     // status is no longer pending and the delete leaves the photo alone.
     const deleted = await repos.photos.delete(userId, photoId, isAbandoned);
+    if (deleted) {
+      // Its objects too, once the item is gone: a video's parts can be signed again at any time,
+      // so its upload may have completed between the check above and the abort. Nothing would
+      // count or show that original (14.2). After the item, so a photo processed meanwhile (the
+      // guard keeps it) keeps its files.
+      await storage.deleteObjects(objectKeys(deleted));
+    }
     await repos.photos.deletePendingMarker(marker);
     if (deleted) {
       log("INFO", "Abandoned upload removed", {
