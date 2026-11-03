@@ -4,6 +4,13 @@
  */
 
 export const userPk = (userId: string) => `USER#${userId}`;
+/**
+ * GSI1 partition of a user's own photos or videos by date taken: the Gallery (`USER#{userId}`,
+ * photos) and the Videos section (`VIDEOS#{userId}`) are separate lists (FR-VID-11), so neither
+ * query reads the other's items.
+ */
+export const galleryPk = (userId: string, mediaType: "photo" | "video" = "photo") =>
+  mediaType === "video" ? `VIDEOS#${userId}` : userPk(userId);
 export const albumPk = (albumId: string) => `ALBUM#${albumId}`;
 export const usernamePk = (username: string) => `USERNAME#${username}`;
 /** A public photo link (FR-SHR-8), found by its token only. */

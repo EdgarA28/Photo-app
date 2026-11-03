@@ -34,7 +34,7 @@ describe("photo viewer (FR-GAL-4)", () => {
 
     await waitFor(() => expect(heading()).toBe("IMG_1.jpg"));
     expect(router.state.location.pathname).toBe(`/photos/${testId(1)}`);
-    expect(router.state.location.search).toEqual({ sort: "taken-desc" });
+    expect(router.state.location.search).toEqual({ sort: "taken-desc", mediaType: "photo" });
     expect(preview().getAttribute("src")).toBe(testPhoto(1).previewUrl);
     expect(preview().getAttribute("alt")).toBe("IMG_1.jpg");
     expect(screen.queryByRole("navigation")).toBeNull();

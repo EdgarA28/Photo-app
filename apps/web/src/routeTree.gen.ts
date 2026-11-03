@@ -17,6 +17,7 @@ import { Route as AuthenticatedMapRouteImport } from './routes/_authenticated/ma
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
 import { Route as AuthenticatedTrashRouteImport } from './routes/_authenticated/trash'
 import { Route as AuthenticatedUploadRouteImport } from './routes/_authenticated/upload'
+import { Route as AuthenticatedVideosRouteImport } from './routes/_authenticated/videos'
 import { Route as AuthCallbackRouteImport } from './routes/auth/callback'
 import { Route as STokenRouteImport } from './routes/s/$token'
 import { Route as AuthenticatedAlbumsIndexRouteImport } from './routes/_authenticated/albums/index'
@@ -62,6 +63,11 @@ const AuthenticatedUploadRoute = AuthenticatedUploadRouteImport.update({
   path: '/upload',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedVideosRoute = AuthenticatedVideosRouteImport.update({
+  id: '/videos',
+  path: '/videos',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 const AuthCallbackRoute = AuthCallbackRouteImport.update({
   id: '/auth/callback',
   path: '/auth/callback',
@@ -99,6 +105,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof AuthenticatedSettingsRoute
   '/trash': typeof AuthenticatedTrashRoute
   '/upload': typeof AuthenticatedUploadRoute
+  '/videos': typeof AuthenticatedVideosRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/s/$token': typeof STokenRoute
   '/albums/$albumId': typeof AuthenticatedAlbumsAlbumIdRoute
@@ -113,6 +120,7 @@ export interface FileRoutesByTo {
   '/settings': typeof AuthenticatedSettingsRoute
   '/trash': typeof AuthenticatedTrashRoute
   '/upload': typeof AuthenticatedUploadRoute
+  '/videos': typeof AuthenticatedVideosRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/s/$token': typeof STokenRoute
   '/albums/$albumId': typeof AuthenticatedAlbumsAlbumIdRoute
@@ -129,6 +137,7 @@ export interface FileRoutesById {
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
   '/_authenticated/trash': typeof AuthenticatedTrashRoute
   '/_authenticated/upload': typeof AuthenticatedUploadRoute
+  '/_authenticated/videos': typeof AuthenticatedVideosRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/s/$token': typeof STokenRoute
   '/_authenticated/albums/$albumId': typeof AuthenticatedAlbumsAlbumIdRoute
@@ -145,6 +154,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/trash'
     | '/upload'
+    | '/videos'
     | '/auth/callback'
     | '/s/$token'
     | '/albums/$albumId'
@@ -159,6 +169,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/trash'
     | '/upload'
+    | '/videos'
     | '/auth/callback'
     | '/s/$token'
     | '/albums/$albumId'
@@ -174,6 +185,7 @@ export interface FileRouteTypes {
     | '/_authenticated/settings'
     | '/_authenticated/trash'
     | '/_authenticated/upload'
+    | '/_authenticated/videos'
     | '/auth/callback'
     | '/s/$token'
     | '/_authenticated/albums/$albumId'
@@ -247,6 +259,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedUploadRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/videos': {
+      id: '/_authenticated/videos'
+      path: '/videos'
+      fullPath: '/videos'
+      preLoaderRoute: typeof AuthenticatedVideosRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/auth/callback': {
       id: '/auth/callback'
       path: '/auth/callback'
@@ -291,6 +310,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
   AuthenticatedTrashRoute: typeof AuthenticatedTrashRoute
   AuthenticatedUploadRoute: typeof AuthenticatedUploadRoute
+  AuthenticatedVideosRoute: typeof AuthenticatedVideosRoute
   AuthenticatedAlbumsAlbumIdRoute: typeof AuthenticatedAlbumsAlbumIdRoute
   AuthenticatedPhotosPhotoIdRoute: typeof AuthenticatedPhotosPhotoIdRoute
   AuthenticatedAlbumsIndexRoute: typeof AuthenticatedAlbumsIndexRoute
@@ -302,6 +322,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
   AuthenticatedTrashRoute: AuthenticatedTrashRoute,
   AuthenticatedUploadRoute: AuthenticatedUploadRoute,
+  AuthenticatedVideosRoute: AuthenticatedVideosRoute,
   AuthenticatedAlbumsAlbumIdRoute: AuthenticatedAlbumsAlbumIdRoute,
   AuthenticatedPhotosPhotoIdRoute: AuthenticatedPhotosPhotoIdRoute,
   AuthenticatedAlbumsIndexRoute: AuthenticatedAlbumsIndexRoute,

@@ -132,6 +132,28 @@ describe("GET /places/{placeId}/photos", () => {
     expect(JSON.stringify(body)).not.toMatch(/latitude|longitude|52\.52/);
   });
 
+  test("lists photos and videos; ?mediaType= keeps one kind (Gallery's place filter, FR-VID-11)", async () => {
+    const user = newUserId();
+    const photoId = await photoAt(user, "2024-01-01T10:00:00.000Z", BERLIN);
+    const video = newPhoto(user);
+    const { photoId: videoId } = await createPending(repos, {
+      ...video,
+      contentType: "video/mp4",
+      originalKey: video.originalKey.replace(/\.jpg$/, ".mp4"),
+      mediaType: "video",
+    });
+    await markReady(db, user, videoId, 1000, "2024-01-02T10:00:00.000Z");
+    await addPlaces(db, user, videoId, BERLIN);
+    const ids = async (query: string) =>
+      photoPageSchema
+        .parse((await api(user, "GET", `/places/${BERLIN[0]!.placeId}/photos${query}`)).body)
+        .items.map((p) => p.photoId);
+
+    expect(await ids("")).toEqual([videoId, photoId]);
+    expect(await ids("?mediaType=photo")).toEqual([photoId]);
+    expect(await ids("?mediaType=video")).toEqual([videoId]);
+  });
+
   test("a place the caller doesn't have is 404, a malformed ID 400", async () => {
     const user = newUserId();
     const unknown = await api(user, "GET", "/places/city:2950159/photos");

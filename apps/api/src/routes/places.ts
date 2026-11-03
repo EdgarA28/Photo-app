@@ -57,7 +57,7 @@ export function placeRoutes(app: Hono<AppEnv>, { repos }: Deps): void {
     async (c) => {
       const userId = c.get("userId");
       const { placeId } = c.req.valid("param");
-      const { sort, limit, cursor } = c.req.valid("query");
+      const { sort, limit, cursor, mediaType } = c.req.valid("query");
       orNotFound(await repos.places.get(userId, placeId), "Place not found");
 
       const page = await repos.places.listPhotos(userId, placeId, { sort, limit, cursor });
@@ -68,9 +68,13 @@ export function placeRoutes(app: Hono<AppEnv>, { repos }: Deps): void {
       const byId = new Map(photos.map((photo) => [photo.photoId, photo]));
       const body: PhotoPage = {
         // A photo being deleted can briefly outlive its place item; skip it.
+        // With `mediaType`, only that kind (the Gallery's place filter: photos, FR-VID-11); a
+        // page may then hold fewer items, the cursor still goes on.
         items: page.items.flatMap((item) => {
           const photo = byId.get(item.photoId);
-          return photo ? [toPhoto(photo)] : [];
+          if (!photo) return [];
+          if (mediaType && (photo.mediaType ?? "photo") !== mediaType) return [];
+          return [toPhoto(photo)];
         }),
         nextCursor: page.nextCursor,
       };

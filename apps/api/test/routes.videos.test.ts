@@ -360,7 +360,9 @@ describe("playing a video (FR-VID-5, FR-VID-7, FR-VID-8)", () => {
     const own = photoSchema.parse((await t.api(user, "GET", `/photos/${photoId}`)).body);
     expect(own).toMatchObject({ mediaType: "video", videoUrl: `/${originalOf(user, photoId)}` });
 
-    const listed = (await t.api(user, "GET", "/photos")).body as { items: unknown[] };
+    const listed = (await t.api(user, "GET", "/photos?mediaType=video")).body as {
+      items: unknown[];
+    };
     expect(photoSchema.parse(listed.items[0]).videoUrl).toBe(`/${originalOf(user, photoId)}`);
   });
 
@@ -410,6 +412,57 @@ describe("playing a video (FR-VID-5, FR-VID-7, FR-VID-8)", () => {
     expect(video).toMatchObject({ mediaType: "video", durationMs: null });
     const expires = verifySignedUrl(video!.videoUrl!, `/${originalOf(user, photoId)}`);
     expect(expires).toBe(Math.floor(Date.parse(link.expiresAt) / 1000));
+  });
+});
+
+describe("Gallery and Videos are separate lists (FR-VID-11)", () => {
+  async function readyVideo(user: string) {
+    const { photoId, parts } = await uploadAll(user);
+    await complete(user, photoId, parts);
+    await markReady(t.db, user, photoId, SIZE, nextIso());
+    return photoId;
+  }
+  const ids = (body: unknown) =>
+    (body as { items: { photoId: string }[] }).items.map((p) => p.photoId);
+
+  test("GET /photos lists photos only; ?mediaType=video lists the videos", async () => {
+    const user = newUserId();
+    const photo = await t.api(user, "POST", "/photos/upload-url", {
+      fileName: "a.jpg",
+      contentType: "image/jpeg",
+      sizeBytes: 10,
+    });
+    const photoId = (photo.body as { photoId: string }).photoId;
+    const videoId = await readyVideo(user);
+    const pending = (await startUpload(user)).photoId;
+
+    expect(ids((await t.api(user, "GET", "/photos")).body)).toEqual([photoId]);
+    expect(ids((await t.api(user, "GET", "/photos?mediaType=photo")).body)).toEqual([photoId]);
+    expect(ids((await t.api(user, "GET", "/photos?mediaType=video")).body).sort()).toEqual(
+      [videoId, pending].sort(),
+    );
+    expect((await t.api(user, "GET", "/photos?mediaType=audio")).status).toBe(400);
+  });
+
+  test("a cursor of the Videos list isn't followed in the Gallery", async () => {
+    const user = newUserId();
+    await readyVideo(user);
+    await readyVideo(user);
+    const page = (await t.api(user, "GET", "/photos?mediaType=video&limit=1")).body as {
+      nextCursor: string;
+    };
+    const res = await t.api(user, "GET", `/photos?cursor=${encodeURIComponent(page.nextCursor)}`);
+    expect(res.status).toBe(400);
+  });
+
+  test("a video restored from the trash goes back to the Videos list", async () => {
+    const user = newUserId();
+    const videoId = await readyVideo(user);
+    await t.api(user, "DELETE", `/photos/${videoId}`);
+    expect(ids((await t.api(user, "GET", "/photos?mediaType=video")).body)).toEqual([]);
+    expect((await t.api(user, "POST", `/trash/${videoId}/restore`)).status).toBe(200);
+    expect(ids((await t.api(user, "GET", "/photos?mediaType=video")).body)).toEqual([videoId]);
+    expect(ids((await t.api(user, "GET", "/photos")).body)).toEqual([]);
   });
 });
 

@@ -23,6 +23,7 @@ import {
 import {
   GSI1,
   GSI1_KEY_ATTRIBUTES,
+  galleryPk,
   PENDING_PK,
   pendingMarkerKey,
   photoKey,
@@ -166,7 +167,8 @@ export function photosRepo(db: Db) {
                 TableName: db.table,
                 Item: {
                   ...photoKey(photo.userId, photo.photoId),
-                  GSI1PK: userPk(photo.userId),
+                  // Photos in the Gallery's list, videos in the Videos list (FR-VID-11).
+                  GSI1PK: galleryPk(photo.userId, photo.mediaType),
                   GSI1SK: takenSk(record.takenAt, photo.photoId),
                   entity: "photo",
                   ...record,
@@ -290,20 +292,27 @@ export function photosRepo(db: Db) {
       return items.map((item) => stripKeys<PhotoRecord>(item));
     },
 
-    /** Gallery: GSI1, by date taken (FR-GAL-1/2). */
+    /** Gallery (photos) or Videos section: GSI1, by date taken (FR-GAL-1/2, FR-VID-11). */
     async list(
       userId: string,
-      options: { sort: PhotoSort; limit: number; cursor?: string | undefined },
+      options: {
+        sort: PhotoSort;
+        limit: number;
+        cursor?: string | undefined;
+        mediaType?: MediaType | undefined;
+      },
     ): Promise<Page<PhotoRecord>> {
+      const pk = galleryPk(userId, options.mediaType);
       const page = await queryPage(db, {
         input: {
           IndexName: GSI1,
           KeyConditionExpression: "GSI1PK = :pk AND begins_with(GSI1SK, :taken)",
-          ExpressionAttributeValues: { ":pk": userPk(userId), ":taken": "TAKEN#" },
+          ExpressionAttributeValues: { ":pk": pk, ":taken": "TAKEN#" },
           ScanIndexForward: options.sort === "taken-asc",
         },
         keyAttributes: GSI1_KEY_ATTRIBUTES,
-        partition: { attribute: "GSI1PK", value: userPk(userId) },
+        // A cursor of the other list (or another user's) is refused, not followed.
+        partition: { attribute: "GSI1PK", value: pk },
         limit: options.limit,
         cursor: options.cursor,
       });
@@ -513,7 +522,8 @@ export function photosRepo(db: Db) {
                     "SET GSI1PK = :pk, GSI1SK = :sk REMOVE trashedAt, purgeAt, trashedAlbumIds",
                   ConditionExpression: "trashedAt = :trashedAt",
                   ExpressionAttributeValues: {
-                    ":pk": userPk(userId),
+                    // Back into its own list (FR-VID-11).
+                    ":pk": galleryPk(userId, record.mediaType),
                     ":sk": takenSk(record.takenAt, photoId),
                     ":trashedAt": record.trashedAt,
                   },

@@ -1,4 +1,4 @@
-import type { Photo, PhotoPage, PhotoSort } from "@photo-app/shared";
+import type { MediaType, Photo, PhotoPage, PhotoSort } from "@photo-app/shared";
 import {
   infiniteQueryOptions,
   queryOptions,
@@ -17,6 +17,11 @@ export interface GalleryFilter {
   album?: string | undefined;
   place?: string | undefined;
   sort: PhotoSort;
+  /**
+   * FR-VID-11: own photos (the Gallery, also when unset) or videos (the Videos section); in a
+   * place, unset = both (the map's list). Albums always hold both.
+   */
+  mediaType?: MediaType | undefined;
 }
 
 /** How often the gallery refetches while photos are processing (§5 step 5, FR-GAL-5). */
@@ -85,21 +90,34 @@ export function processingPollInterval(
  * it lists that album, with a place that place's photos (13.2); all sorted by date taken (§9,
  * §12.3). Everything sits under ["photos"] for invalidation after uploads/deletes.
  */
-export const galleryQuery = (api: Api, { album, place, sort }: GalleryFilter) =>
+export const galleryQuery = (api: Api, { album, place, sort, mediaType }: GalleryFilter) =>
   infiniteQueryOptions({
     queryKey: album
       ? ["photos", { album, sort }]
       : place
-        ? ["photos", { place, sort }]
-        : ["photos", { sort }],
+        ? ["photos", { place, sort, ...(mediaType && { mediaType }) }]
+        : mediaType === "video"
+          ? ["photos", { sort, mediaType }]
+          : ["photos", { sort }],
     // `?? undefined`: a list restored from the saved cache (9.3) has `null` for the first page,
     // since JSON can't store `undefined`; sent as `?cursor=null`, the API answers 400.
     queryFn: ({ pageParam, signal }) =>
       album
         ? api.albums.photos(album, { sort, cursor: pageParam ?? undefined }, { signal })
         : place
-          ? api.places.photos(place, { sort, cursor: pageParam ?? undefined }, { signal })
-          : api.photos.list({ sort, cursor: pageParam ?? undefined }, { signal }),
+          ? api.places.photos(
+              place,
+              { sort, cursor: pageParam ?? undefined, ...(mediaType && { mediaType }) },
+              { signal },
+            )
+          : api.photos.list(
+              {
+                sort,
+                cursor: pageParam ?? undefined,
+                ...(mediaType === "video" && { mediaType }),
+              },
+              { signal },
+            ),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
     // Refetches every loaded page, so a finished photo gets its size, thumbnail and date position,

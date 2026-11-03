@@ -53,6 +53,7 @@ describe("routes (§12.1)", () => {
       const links = within(nav).getAllByRole("link");
       expect(links.map((link) => [link.textContent, link.getAttribute("href")])).toEqual([
         ["Gallery", "/gallery"],
+        ["Videos", "/videos"],
         ["Albums", "/albums"],
         ["Map", "/map"],
         ["Upload", "/upload"],

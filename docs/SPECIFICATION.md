@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.49 |
+| **Version** | 0.50 |
 | **Date** | 2026-11-03 |
 | **Owner** | Edgar |
 | **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5), videos (Phase 14) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
@@ -343,13 +343,14 @@ Decided 2026-11-01 (user, the proposed defaults of task 14.0). V1 plays the orig
 | FR-VID-1 | Users can upload videos in **MP4** (`video/mp4`) and **MOV** (`video/quicktime`) up to **2 GB** each (`MAX_VIDEO_BYTES`), with no duration limit. Other video formats are skipped like other unsupported files (FR-UP-2). |
 | FR-VID-2 | Video uploads go directly to S3 as a **multipart upload** (parts of 16 MB, several in parallel); a dropped connection repeats only the failed part. Videos are uploaded by the tab that picked them (like a large batch, FR-UP-5): they survive connection loss, not closing or reloading the tab, and the app asks before the tab is closed. On phones videos count towards the 1 GB per pick. |
 | FR-VID-3 | Videos count against the same storage quota as photos (FR-UP-7, FR-ACC-2); the quota is reserved when the upload starts. |
-| FR-VID-4 | Videos appear in the gallery, albums, places and the map like photos, sorted by their recording date (video metadata `creation_time`, else the upload time), with a **poster frame** and a play icon with the **duration**. A video with GPS in its metadata gets a place (FR-SRCH-1). |
+| FR-VID-4 | Videos appear in the **Videos section** (FR-VID-11), albums, places and the map like photos, sorted by their recording date (video metadata `creation_time`, else the upload time), with a **poster frame** and a play icon with the **duration**. A video with GPS in its metadata gets a place (FR-SRCH-1). |
 | FR-VID-5 | The viewer **plays the original** with the browser's player (play/pause, seek, full screen, sound). When the browser can't play it (e.g. HEVC outside Safari), the viewer says so and offers the download. |
 | FR-VID-6 | Download, delete, trash and restore work as for photos (FR-DL-*, FR-DEL-*). |
 | FR-VID-7 | Albums and sharing work as for photos: recipients see and play videos of shared albums, can download them and save them to their gallery (FR-SHR-10). |
 | FR-VID-8 | Public links (FR-SHR-8) can contain videos: people with the link can play and download them until the link expires. |
 | FR-VID-9 | Videos shared to the app from other apps (share target, §12.5) are accepted up to **200 MB** each; bigger ones are left out with a note ("open the app and pick it there"). |
 | FR-VID-10 | Imports from Google Photos still skip videos (FR-IMP-3). |
+| FR-VID-11 | Photos and videos are **separate in the library** (user request 2026-11-04): the Gallery lists own photos only (also when filtered by a place), a **Videos** section lists own videos the same way (date sections, sort, select, delete, add to album, public link). Albums, shared albums, the map and place search show both. Adding to an album can switch between the photos and the videos list. |
 
 ---
 
@@ -419,7 +420,7 @@ Initial design; refine during implementation.
 
 | Entity | PK | SK | GSI1PK | GSI1SK | Attributes |
 |---|---|---|---|---|---|
-| Photo | `USER#{userId}` | `PHOTO#{photoId}` | `USER#{userId}`; `TRASH` while in the trash | `TAKEN#{takenAt}#{photoId}`; `PURGE#{purgeAt}#{userId}#{photoId}` while in the trash | status (`pending`/`ready`/`failed`), fileName, contentType, sizeBytes, width, height, takenAt, uploadedAt, originalKey, originalETag, latitude, longitude, place `{city, region, country, countryCode}`, placeIds; in the trash: trashedAt, purgeAt, trashedAlbumIds |
+| Photo | `USER#{userId}` | `PHOTO#{photoId}` | `USER#{userId}` (photos), `VIDEOS#{userId}` (videos, FR-VID-11); `TRASH` while in the trash | `TAKEN#{takenAt}#{photoId}`; `PURGE#{purgeAt}#{userId}#{photoId}` while in the trash | status (`pending`/`ready`/`failed`), fileName, contentType, sizeBytes, width, height, takenAt, uploadedAt, originalKey, originalETag, latitude, longitude, place `{city, region, country, countryCode}`, placeIds; in the trash: trashedAt, purgeAt, trashedAlbumIds |
 | Album | `USER#{ownerId}` | `ALBUM#{albumId}` | — | — | name, createdAt, coverPhotoId, coverOwnerId (when the cover is a member's photo, FR-SHR-11), photoCount, membersCanAdd (FR-SHR-11), showLocations (FR-SHR-12) |
 | Album membership | `ALBUM#{albumId}` | `PHOTO#{photoId}` | `ALBUM#{albumId}` | `TAKEN#{takenAt}#{photoId}` (the photo's) | ownerId (the **photo's** owner), albumOwnerId (only when a member added it, FR-SHR-11; absent = ownerId), addedAt |
 | Photo link | `LINK#{token}` | `LINK` | — | — | ownerId, photoIds (≤ 100, newest first), createdAt, expiresAt, ttl (epoch seconds, DynamoDB TTL) |
@@ -440,7 +441,7 @@ Access patterns:
 
 | Pattern | Query |
 |---|---|
-| Gallery (by date taken) | GSI1: `GSI1PK = USER#{id}`, descending, paginated |
+| Gallery (by date taken) | GSI1: `GSI1PK = USER#{id}` (photos) or `VIDEOS#{id}` (the Videos section, FR-VID-11), descending, paginated |
 | Get one photo | `PK = USER#{id}, SK = PHOTO#{photoId}` |
 | List my albums | `PK = USER#{id}, SK begins_with ALBUM#` |
 | Photos in album (by date taken) | GSI1: `GSI1PK = ALBUM#{albumId}`, descending (or ascending), paginated |
@@ -480,7 +481,7 @@ Access patterns:
 | `POST` | `/videos/uploads` | Start a video upload (FR-VID-1–3): body `{fileName, contentType, sizeBytes}` → `201 {photoId, uploadId, partBytes, partCount}`; same quota check and `pending` item as `upload-url`, plus `CreateMultipartUpload` |
 | `POST` | `/videos/{photoId}/parts` | Body `{partNumbers}` (1–100 distinct, each 1–128) → `{parts: [{partNumber, url}], expiresAt}`: pre-signed `UploadPart` URLs, 15 min; only for the caller's `pending` video (else 404 / 409) |
 | `POST` | `/videos/{photoId}/complete` | Body `{parts: [{partNumber, etag}]}` (every part once, any order) → `200 {photoId}` (still `pending` until the video service); `CompleteMultipartUpload`, then the stored size must equal `sizeBytes`, else the object and the photo are deleted (its reservation released) and `400` (a second guard: each part URL is signed with its exact `Content-Length`; together they replace the POST policy's size condition); a repeated complete → `200`, an aborted upload → `409`. `DELETE /photos/{id}` of a pending video aborts the multipart upload |
-| `GET` | `/photos` | List own photos `?cursor&limit&sort` |
+| `GET` | `/photos` | List own photos `?cursor&limit&sort`; `?mediaType=video` lists own videos instead (FR-VID-11). `/places/{placeId}/photos` lists both unless `?mediaType=` is given |
 | `GET` | `/photos/{photoId}` | Photo metadata; with `?albumId=` a photo of an album shared with the caller, with signed image URLs. A ready video has `videoUrl` (FR-VID-5/7): the original's CloudFront path for the owner, a signed URL valid 4 h for recipients (playback needs range requests until the end) |
 | `GET` | `/photos/{photoId}/download-url` | 5-min pre-signed GET with `attachment` disposition |
 | `DELETE` | `/photos/{photoId}` | Move to the trash (FR-DEL-3): out of gallery, albums and places, files and usage stay; a `pending` upload is deleted at once (files + metadata + usage) |
@@ -643,8 +644,9 @@ Second handler in `services/thumbnails` (`thumbnails.video_handler.handler`), so
 | `/login` | Login page (Google + email) |
 | `/auth/callback` | OAuth code exchange |
 | `/_authenticated` (layout) | `beforeLoad` guard → redirect to `/login` if no session |
-| `/gallery` | Main gallery; search params `place`, `sort` (Zod-validated); place search box at the top (FR-SRCH-2). No album picker (albums open from `/albums`); an old `?album=` link redirects to `/albums/$albumId` |
-| `/photos/$photoId` | Full-screen viewer |
+| `/gallery` | Main gallery, own photos only (FR-VID-11); search params `place`, `sort` (Zod-validated); place search box at the top (FR-SRCH-2). No album picker (albums open from `/albums`); an old `?album=` link redirects to `/albums/$albumId` |
+| `/videos` | Videos section (FR-VID-11): own videos, same page as the gallery (search param `sort`), no place search |
+| `/photos/$photoId` | Full-screen viewer; search param `mediaType` says which list prev/next walk (photos, videos, or both for a place opened from the map) |
 | `/albums` | Invitations (accept / decline) + my albums + shared with me |
 | `/albums/$albumId` | Album view. Owner: "Members can add photos" (FR-SHR-11) and "Share photo locations" (FR-SHR-12) switches in the share dialog; members see "Locations are shown in this album". Member of a collaborative album: Add photos (picked in the gallery), remove own photos; "Added by @name" in the viewer |
 | `/map` | Map of own photos with GPS (FR-SRCH-5); MapLibre, loaded only with this page |
@@ -897,6 +899,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.36 | 2026-11-01 | Continue an interrupted large batch by picking it again (13.1f, §12.4) |
 | 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.38 | 2026-11-01 | Less gallery polling while uploads run: 15 s instead of 3 s, refreshes during a batch only mark lists stale (13.1j, §12.4) |
+| 0.50 | 2026-11-04 | FR-VID-11 (user request): photos and videos separate in the library, Gallery = photos, new Videos section (`/videos`), albums / map / places mixed; FR-VID-4 adjusted; §8.2 `VIDEOS#{userId}` GSI1 partition; §9 `mediaType` on `/photos` and place photos; §12.1 routes |
 | 0.49 | 2026-11-03 | §10.2: the thumbnail rule keeps matching all originals (EventBridge rejected per-extension wildcards), FFmpeg whitelists + 40 MP frame limit (security review); no requirement changes |
 | 0.48 | 2026-11-03 | §10.2 video service as built (14.3): PyAV instead of ffmpeg/ffprobe executables (GPL FFmpeg build, not distributed), ranged S3 reads instead of a pre-signed URL (no `/tmp`, 256 MB read limit), codec allow-list, iPhone creation date preferred, poster at 1 s or half the length, HDR not tone-mapped, separate Lambda package; no requirement changes |
 | 0.47 | 2026-11-03 | §9 video routes (14.2): part URLs pinned to each part's size; a wrong size on complete deletes the photo instead of marking it `failed` (nothing has counted it, so `failed` would break the Usage invariant); repeated complete 200, aborted 409; `videoUrl` on photos (owner path, recipients 4 h); §8.2 `complete` removes `uploadId`; no requirement changes |

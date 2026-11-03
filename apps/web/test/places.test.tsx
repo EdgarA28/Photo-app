@@ -151,7 +151,12 @@ describe("searching the gallery by place (13.2f)", () => {
     expect(router.state.location.search).toEqual({ place: BERLIN, sort: "taken-desc" });
     const href = new URL(tile.getAttribute("href")!, "http://app.test");
     expect(href.pathname).toBe(`/photos/${testId(7)}`);
-    expect(Object.fromEntries(href.searchParams)).toEqual({ place: BERLIN, sort: "taken-desc" });
+    // The Gallery's place filter lists photos only (FR-VID-11).
+    expect(Object.fromEntries(href.searchParams)).toEqual({
+      place: BERLIN,
+      sort: "taken-desc",
+      mediaType: "photo",
+    });
   });
 });
 

@@ -79,7 +79,12 @@ const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", tim
 export const Route = createFileRoute("/_authenticated/photos/$photoId")({
   staticData: { fullScreen: true },
   validateSearch: gallerySearchSchema,
-  loaderDeps: ({ search: { album, place, sort } }) => ({ album, place, sort }),
+  loaderDeps: ({ search: { album, place, sort, mediaType } }) => ({
+    album,
+    place,
+    sort,
+    mediaType,
+  }),
   loader: async ({ context: { queryClient, api }, params: { photoId }, deps }) => {
     // Usually cached from the gallery. A photo beyond the loaded pages (deep link) is fetched on
     // its own; then there is no prev/next. 404 for other users' photos (NFR-SEC-2).
@@ -111,12 +116,12 @@ export const Route = createFileRoute("/_authenticated/photos/$photoId")({
 function Viewer() {
   const { api } = Route.useRouteContext();
   const { photoId } = Route.useParams();
-  const { album, place, sort } = Route.useSearch();
+  const { album, place, sort, mediaType } = Route.useSearch();
   const navigate = Route.useNavigate();
   const close = useClose();
 
   const { data, hasNextPage, isFetchingNextPage, fetchNextPage } = useSuspenseInfiniteQuery(
-    galleryQuery(api, { album, place, sort }),
+    galleryQuery(api, { album, place, sort, mediaType }),
   );
   // Previous/next walk what the grid shows (no photos still processing); a processing photo
   // opened by its link is still found in the loaded pages.
@@ -660,13 +665,18 @@ function NavButton({
   );
 }
 
-/** Back to where the viewer was opened from (keeps the gallery's scroll), else to the gallery. */
+/**
+ * Back to where the viewer was opened from (keeps the list's scroll), else to the Gallery, or to
+ * Videos for a video opened there (FR-VID-11).
+ */
 function useClose() {
   const router = useRouter();
   const search = Route.useSearch();
   return useCallback(() => {
     if (router.history.canGoBack()) router.history.back();
-    else void router.navigate({ to: "/gallery", search });
+    else if (search.mediaType === "video" && !search.album && !search.place) {
+      void router.navigate({ to: "/videos", search: { ...search, mediaType: undefined } });
+    } else void router.navigate({ to: "/gallery", search });
   }, [router, search]);
 }
 

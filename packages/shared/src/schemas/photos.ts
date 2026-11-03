@@ -82,9 +82,14 @@ export type Photo = z.infer<typeof photoSchema>;
 export const photoSortSchema = z.enum(["taken-desc", "taken-asc"]);
 export type PhotoSort = z.infer<typeof photoSortSchema>;
 
-/** GET /photos */
+/**
+ * GET /photos, GET /places/{placeId}/photos. `mediaType` (FR-VID-11): `/photos` lists photos
+ * (the Gallery) unless it is `video` (the Videos section); a place lists both unless it is given
+ * (the Gallery's place filter asks for photos).
+ */
 export const listPhotosQuerySchema = pageQuerySchema.extend({
   sort: photoSortSchema.default("taken-desc"),
+  mediaType: mediaTypeSchema.optional(),
 });
 export type ListPhotosQuery = z.infer<typeof listPhotosQuerySchema>;
 export const photoPageSchema = pageSchema(photoSchema);

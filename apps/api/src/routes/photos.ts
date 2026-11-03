@@ -100,10 +100,13 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, media, config }
     return c.json(body, 201);
   });
 
-  /** Own photos by date taken, newest first by default, paginated (FR-GAL-1, FR-GAL-2). */
+  /**
+   * Own photos by date taken, newest first by default, paginated (FR-GAL-1, FR-GAL-2): the
+   * Gallery's photos, or with `?mediaType=video` the Videos section (FR-VID-11).
+   */
   app.get("/photos", validate("query", listPhotosQuerySchema), async (c) => {
-    const { sort, limit, cursor } = c.req.valid("query");
-    const page = await repos.photos.list(c.get("userId"), { sort, limit, cursor });
+    const { sort, limit, cursor, mediaType } = c.req.valid("query");
+    const page = await repos.photos.list(c.get("userId"), { sort, limit, cursor, mediaType });
     const body: PhotoPage = { items: page.items.map(toPhoto), nextCursor: page.nextCursor };
     return c.json(body);
   });

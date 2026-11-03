@@ -1,6 +1,6 @@
 # Photo App
 
-A private, multi-user photo storage and gallery PWA, similar in spirit to Google Photos, built serverless on AWS.
+A private, multi-user photo and video storage and gallery PWA, similar in spirit to Google Photos, built serverless on AWS.
 
 - **Spec:** [`docs/SPECIFICATION.md`](docs/SPECIFICATION.md)
 - **Implementation plan & progress:** [`PROGRESS.md`](PROGRESS.md)

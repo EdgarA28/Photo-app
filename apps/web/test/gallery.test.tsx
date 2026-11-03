@@ -33,6 +33,45 @@ const queriesTo = (request: ReturnType<typeof fakeApi>["request"], path: string)
 
 const tiles = () => screen.queryAllByRole("link", { name: /^IMG_/ });
 
+describe("Videos section (FR-VID-11)", () => {
+  const video = (n: number) =>
+    testPhoto(n, {
+      fileName: `CLIP_${n}.mp4`,
+      mediaType: "video",
+      contentType: "video/mp4",
+      videoUrl: `/users/u/originals/${testId(n)}.mp4`,
+    });
+
+  it("lists own videos apart from the Gallery, and its tiles open the viewer in that list", async () => {
+    const { api, request } = setup({
+      "GET /photos": (query: { mediaType?: string } | undefined) =>
+        query?.mediaType === "video"
+          ? { items: [video(5)], nextCursor: null }
+          : testPhotoPage(0, 1),
+    });
+    await renderAt("/videos", { api });
+
+    expect(await screen.findByRole("heading", { name: "Videos" })).toBeTruthy();
+    const link = await screen.findByRole("link", { name: "CLIP_5.mp4" });
+    expect(link.getAttribute("href")).toBe(`/photos/${testId(5)}?sort=taken-desc&mediaType=video`);
+    expect(screen.queryByRole("link", { name: "IMG_0.jpg" })).toBeNull();
+    expect(queriesTo(request, "/photos")).toEqual([
+      { sort: "taken-desc", cursor: undefined, mediaType: "video" },
+    ]);
+    // The map covers places; no place search here.
+    expect(screen.queryByRole("combobox", { name: "Search places" })).toBeNull();
+  });
+
+  it("an empty Videos section says so and links to the upload page", async () => {
+    const { api } = setup({ "GET /photos": { items: [], nextCursor: null } });
+    await renderAt("/videos", { api });
+    expect(await screen.findByText("No videos yet.")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Upload videos" }).getAttribute("href")).toBe(
+      "/upload",
+    );
+  });
+});
+
 describe("gallery (FR-GAL-1/2/3)", () => {
   it("shows the photos as thumbnail links to the viewer, newest first by default", async () => {
     const { api, request } = setup({ "GET /photos": testPhotoPage(0, 3) });
@@ -44,7 +83,10 @@ describe("gallery (FR-GAL-1/2/3)", () => {
       "IMG_1.jpg",
       "IMG_2.jpg",
     ]);
-    expect(links[0]!.getAttribute("href")).toBe(`/photos/${testId(0)}?sort=taken-desc`);
+    // The viewer walks the Gallery's photos (FR-VID-11: videos have their own list).
+    expect(links[0]!.getAttribute("href")).toBe(
+      `/photos/${testId(0)}?sort=taken-desc&mediaType=photo`,
+    );
     expect(links[0]!.querySelector("img")!.getAttribute("src")).toBe(testPhoto(0).thumbUrl);
     expect(queriesTo(request, "/photos")).toEqual([{ sort: "taken-desc", cursor: undefined }]);
   });

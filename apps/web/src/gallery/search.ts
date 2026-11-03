@@ -1,4 +1,4 @@
-import { photoSortSchema, placeIdSchema, ULID_REGEX } from "@photo-app/shared";
+import { mediaTypeSchema, photoSortSchema, placeIdSchema, ULID_REGEX } from "@photo-app/shared";
 import { z } from "zod";
 
 // §12.1: `album` filters to one album, `place` to one of the user's places (13.2), `sort` orders by
@@ -9,6 +9,11 @@ export const gallerySearchSchema = z.object({
   album: z.string().regex(ULID_REGEX).optional().catch(undefined),
   place: placeIdSchema.optional().catch(undefined),
   sort: photoSortSchema.default("taken-desc").catch("taken-desc"),
+  /**
+   * Which own items a list holds (FR-VID-11): `photo` the Gallery, `video` the Videos section.
+   * Set by the grids for the viewer; a place without it (opened from the map) lists both.
+   */
+  mediaType: mediaTypeSchema.optional().catch(undefined),
   /** Picking photos to add to this album (8.11, from the album's "Add photos"). */
   addTo: z.string().regex(ULID_REGEX).optional().catch(undefined),
 });
