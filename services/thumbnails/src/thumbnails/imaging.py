@@ -13,14 +13,14 @@ from datetime import UTC, datetime, timedelta, timezone
 import pillow_heif
 from PIL import ExifTags, Image, ImageCms, ImageOps, UnidentifiedImageError
 
+from .derived import PREVIEW_MAX_EDGE, THUMB_MAX_EDGE, derive_jpegs, to_iso
+
 pillow_heif.register_heif_opener()
 
-# Mirrors THUMB_MAX_EDGE / PREVIEW_MAX_EDGE / MAX_UPLOAD_BYTES in packages/shared/src/constants.ts.
-THUMB_MAX_EDGE = 400
-PREVIEW_MAX_EDGE = 1600
+__all__ = ["PREVIEW_MAX_EDGE", "THUMB_MAX_EDGE", "to_iso"]
+
+# Mirrors MAX_UPLOAD_BYTES in packages/shared/src/constants.ts.
 MAX_SOURCE_BYTES = 50 * 1024 * 1024
-THUMB_QUALITY = 75
-PREVIEW_QUALITY = 82
 
 # Decompression-bomb guard: ~100 MP decodes to ~400 MB RGBA, well inside the 1536 MB Lambda.
 MAX_PIXELS = 100_000_000
@@ -91,18 +91,14 @@ def _process(data: bytes) -> ProcessedImage:
         oriented = ImageOps.exif_transpose(img)  # FR-GAL-6
         rgb = _to_srgb(_flatten(oriented), img.info.get("icc_profile"))
 
-    preview = rgb.copy()
-    preview.thumbnail((PREVIEW_MAX_EDGE, PREVIEW_MAX_EDGE), Image.Resampling.LANCZOS)
-    thumb = preview.copy()  # Downscaling from the preview is faster and visually identical.
-    thumb.thumbnail((THUMB_MAX_EDGE, THUMB_MAX_EDGE), Image.Resampling.LANCZOS)
-
+    thumb, preview = derive_jpegs(rgb)
     return ProcessedImage(
         width=width,
         height=height,
         taken_at=taken_at,
         gps=gps,
-        thumb=_encode_jpeg(thumb, THUMB_QUALITY),
-        preview=_encode_jpeg(preview, PREVIEW_QUALITY),
+        thumb=thumb,
+        preview=preview,
     )
 
 
@@ -130,14 +126,6 @@ def _to_srgb(img: Image.Image, icc_profile: bytes | None) -> Image.Image:
     except (ImageCms.PyCMSError, OSError):
         return img  # Broken profile: keep the pixels as they are.
     return converted if converted is not None else img
-
-
-def _encode_jpeg(img: Image.Image, quality: int) -> bytes:
-    """NFR-SEC-5: write pixels only, so no EXIF (incl. GPS), XMP, ICC or comments."""
-    img.info.clear()
-    out = io.BytesIO()
-    img.save(out, format="JPEG", quality=quality, optimize=True, progressive=True)
-    return out.getvalue()
 
 
 def _taken_at(exif: Image.Exif) -> datetime | None:
@@ -204,10 +192,3 @@ def _degrees(dms: object, ref: object) -> float | None:
     if ref in ("S", "W"):
         return -value
     return value if ref in ("N", "E") else None
-
-
-def to_iso(dt: datetime) -> str:
-    """Same format as JS `Date.toISOString()` (millisecond precision, `Z`), so `takenAt` values
-    written here and by the API sort correctly as strings in GSI1SK."""
-    utc = dt.astimezone(UTC)
-    return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond // 1000:03d}Z"

@@ -348,7 +348,7 @@ def test_transaction_conflict_is_retried_at_once(
         return real(**kwargs)
 
     monkeypatch.setattr(processor._dynamodb, "transact_write_items", flaky)
-    monkeypatch.setattr("thumbnails.processor.time.sleep", lambda _s: None)
+    monkeypatch.setattr("thumbnails.base.time.sleep", lambda _s: None)
     handler_module.handler(event)
     item = get(dynamodb, PHOTO_KEY)
     assert item is not None and item["status"]["S"] == "ready"
@@ -377,7 +377,7 @@ def test_conflicts_are_retried_with_growing_random_pauses_then_given_up(
 
     pauses: list[float] = []
     monkeypatch.setattr(processor._dynamodb, "transact_write_items", always_conflict)
-    monkeypatch.setattr("thumbnails.processor.time.sleep", pauses.append)
+    monkeypatch.setattr("thumbnails.base.time.sleep", pauses.append)
     with pytest.raises(ClientError):
         handler_module.handler(event)
     assert calls["n"] == processor_module.TRANSACTION_ATTEMPTS
@@ -386,7 +386,7 @@ def test_conflicts_are_retried_with_growing_random_pauses_then_given_up(
 
 
 def test_conflict_pause_grows_and_is_capped(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("thumbnails.processor.random.uniform", lambda _a, b: b)
+    monkeypatch.setattr("thumbnails.base.random.uniform", lambda _a, b: b)
     assert processor_module.conflict_pause(0) == pytest.approx(0.025)
     assert processor_module.conflict_pause(3) == pytest.approx(0.2)
     assert processor_module.conflict_pause(10) == 1.0

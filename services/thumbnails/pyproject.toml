@@ -1,17 +1,31 @@
 [project]
 name = "thumbnails"
 version = "0.1.0"
-description = "Photo App thumbnail Lambda: generates thumbs and previews from uploaded originals (spec §10)"
+description = "Photo App thumbnail and video Lambdas: thumbs and previews of uploaded photos and video poster frames (spec §10, §10.2)"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "pillow>=13.0.0",
+]
+
+# One package per Lambda (build.sh): `photo` for the thumbnail Lambda (§10), `video` for the
+# video Lambda (§10.2, 14.3). Kept apart so neither carries the other's native libraries
+# (pillow-heif ~16 MB, PyAV/FFmpeg ~91 MB unpacked on arm64).
+[project.optional-dependencies]
+photo = [
     "pillow-heif>=1.8.1",
+]
+# PyAV bundles FFmpeg (GPL build: its wheels include libx264/libx265). Run in our own Lambda
+# only, never distributed (spec §10.2).
+video = [
+    "av>=19.0.2",
 ]
 
 [dependency-groups]
 dev = [
+    "av>=19.0.2",
     "boto3>=1.43.114",
     "moto[dynamodb,s3]>=5.2.4",
+    "pillow-heif>=1.8.1",
     "pytest>=9.1.1",
     "ruff>=0.17.1",
 ]
