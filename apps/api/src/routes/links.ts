@@ -88,8 +88,9 @@ export function publicLinkRoutes(app: Hono<AppEnv>, { repos, storage, media }: D
           photoId: photo.photoId,
           mediaType: photo.mediaType ?? "photo",
           durationMs: photo.durationMs ?? null,
-          // FR-VID-8: the signed URL of a video's original comes with the video routes (14.2).
-          videoUrl: null,
+          // FR-VID-8: a video plays from its original, signed until the link expires like the
+          // images. (Only ready photos are linkable, so the original is there.)
+          videoUrl: photo.mediaType === "video" ? await sign(photo.originalKey) : null,
           thumbUrl: await sign(thumbKey(photo.userId, photo.photoId)),
           previewUrl: await sign(previewKey(photo.userId, photo.photoId)),
           width: photo.width ?? null,

@@ -171,8 +171,24 @@ run "least_privilege" {
   }
 
   assert {
-    condition     = toset(data.aws_iam_policy_document.api.statement[2].actions) == toset(["s3:DeleteObject"]) && length(data.aws_iam_policy_document.api.statement[2].resources) == 3
-    error_message = "Delete only photo objects (original, thumb, preview)."
+    condition     = toset(data.aws_iam_policy_document.api.statement[2].actions) == toset(["s3:DeleteObject"]) && toset(data.aws_iam_policy_document.api.statement[2].resources) == toset([for d in ["originals", "thumbs", "previews", "playback"] : "arn:aws:s3:::photo-app-photos-test-123456789012/users/*/${d}/*"])
+    error_message = "Delete only photo objects (original, thumb, preview, a video's playback copy)."
+  }
+
+  assert {
+    condition = (
+      toset(data.aws_iam_policy_document.api.statement[6].actions) == toset(["s3:AbortMultipartUpload"]) &&
+      toset(data.aws_iam_policy_document.api.statement[6].resources) == toset(["arn:aws:s3:::photo-app-photos-test-123456789012/users/*/originals/*"])
+    )
+    error_message = "Abort video uploads of originals only (14.2)."
+  }
+
+  assert {
+    condition = (
+      toset(data.aws_iam_policy_document.api.statement[7].actions) == toset(["s3:ListBucket"]) &&
+      toset(data.aws_iam_policy_document.api.statement[7].resources) == toset(["arn:aws:s3:::photo-app-photos-test-123456789012"])
+    )
+    error_message = "ListBucket on the photo bucket only, for 404s of missing originals."
   }
 
   assert {
@@ -243,8 +259,8 @@ run "trash_purge" {
   }
 
   assert {
-    condition     = toset(data.aws_iam_policy_document.purge.statement[1].actions) == toset(["s3:DeleteObject"]) && length(data.aws_iam_policy_document.purge.statement[1].resources) == 3
-    error_message = "Purge deletes only photo objects (original, thumb, preview)."
+    condition     = toset(data.aws_iam_policy_document.purge.statement[1].actions) == toset(["s3:DeleteObject"]) && length(data.aws_iam_policy_document.purge.statement[1].resources) == 4
+    error_message = "Purge deletes only photo objects (original, thumb, preview, playback copy)."
   }
 
   assert {
@@ -260,5 +276,13 @@ run "trash_purge" {
   assert {
     condition     = toset(data.aws_iam_policy_document.purge.statement[5].actions) == toset(["sqs:SendMessage"]) && toset(data.aws_iam_policy_document.purge.statement[5].resources) == toset(["arn:aws:sqs:us-east-1:123456789012:photo-app-test-thumbnails"])
     error_message = "The sweep only sends to the thumbnail queue (6.11, 13.6)."
+  }
+
+  assert {
+    condition = (
+      toset(data.aws_iam_policy_document.purge.statement[6].actions) == toset(["s3:AbortMultipartUpload"]) &&
+      toset(data.aws_iam_policy_document.purge.statement[6].resources) == toset(["arn:aws:s3:::photo-app-photos-test-123456789012/users/*/originals/*"])
+    )
+    error_message = "The sweep aborts only video uploads of originals (14.2)."
   }
 }

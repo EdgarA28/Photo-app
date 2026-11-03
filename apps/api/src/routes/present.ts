@@ -1,5 +1,6 @@
 import {
   MAP_COORDINATE_DECIMALS,
+  SHARED_VIDEO_URL_TTL_SECONDS,
   previewKey,
   thumbKey,
   type Album,
@@ -41,6 +42,8 @@ export function toPhoto(record: PhotoRecord): Photo {
     // Derived images exist only once the thumbnail Lambda is done (FR-GAL-5).
     thumbUrl: ready ? `/${thumbKey(record.userId, record.photoId)}` : null,
     previewUrl: ready ? `/${previewKey(record.userId, record.photoId)}` : null,
+    // The original itself, through the same media cookie (FR-VID-5).
+    videoUrl: ready && record.mediaType === "video" ? `/${record.originalKey}` : null,
     trashedAt: record.trashedAt ?? null,
     purgeAt: record.purgeAt ?? null,
     ownerId: record.userId,
@@ -104,8 +107,8 @@ export async function coverThumbUrl(
  * exactly that file (7.4, §9). Callers pass only photos visible to recipients (ready).
  *
  * Signing is the expensive part (one RSA operation per URL), so album pages sign thumbnails only
- * (`preview: false`); the viewer fetches the photo on its own for the preview (GET /photos/{id}
- * with `albumId`).
+ * (`preview: false`); the viewer fetches the photo on its own for the preview and a video's URL
+ * (GET /photos/{id} with `albumId`).
  */
 export async function toSharedPhoto(
   record: PhotoRecord,
@@ -123,13 +126,28 @@ export async function toSharedPhoto(
   },
 ): Promise<Photo> {
   const photo = toPhoto(record);
-  const [thumbUrl, previewUrl] = await Promise.all([
+  const [thumbUrl, previewUrl, videoUrl] = await Promise.all([
     photo.thumbUrl ? media.signUrl(photo.thumbUrl, now) : null,
     preview && photo.previewUrl ? media.signUrl(photo.previewUrl, now) : null,
+    // FR-VID-7: for as long as a video may play (range requests until the end).
+    preview && photo.videoUrl
+      ? media.signUrl(
+          photo.videoUrl,
+          now,
+          new Date(now.getTime() + SHARED_VIDEO_URL_TTL_SECONDS * 1000),
+        )
+      : null,
   ]);
   // Places are the owner's (13.2g): others don't learn where a photo was taken...
   // ...unless the album shares locations (FR-SHR-12). Names only: `Photo` has no coordinates.
-  return { ...photo, place: withPlace ? photo.place : null, thumbUrl, previewUrl, ownerUsername };
+  return {
+    ...photo,
+    place: withPlace ? photo.place : null,
+    thumbUrl,
+    previewUrl,
+    videoUrl,
+    ownerUsername,
+  };
 }
 
 /**

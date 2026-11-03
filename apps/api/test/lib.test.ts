@@ -1,6 +1,15 @@
 /** Config loading, the Cognito user directory (5.5) and the photo bucket (5.6, 5.8, 5.9). */
 import type { CognitoIdentityProviderClient } from "@aws-sdk/client-cognito-identity-provider";
-import { DeleteObjectsCommand, HeadObjectCommand, NotFound, S3Client } from "@aws-sdk/client-s3";
+import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
+  DeleteObjectsCommand,
+  HeadObjectCommand,
+  NotFound,
+  S3Client,
+  S3ServiceException,
+} from "@aws-sdk/client-s3";
 import { DOWNLOAD_URL_TTL_SECONDS, UPLOAD_URL_TTL_SECONDS } from "@photo-app/shared";
 import { describe, expect, test, vi } from "vitest";
 import { loadConfig } from "../src/lib/config";
@@ -13,7 +22,7 @@ import {
   transactWrite,
   type Db,
 } from "../src/repo/db";
-import { attachmentDisposition, s3PhotoStorage } from "../src/lib/storage";
+import { attachmentDisposition, createS3Client, s3PhotoStorage } from "../src/lib/storage";
 import { sqsRetryProcessing } from "../src/lib/thumbnailRetry";
 import { cognitoUserDirectory } from "../src/lib/users";
 
@@ -259,6 +268,116 @@ describe("s3PhotoStorage", () => {
     // A 403 (e.g. missing s3:ListBucket) must not read as "missing": the photo would be deleted.
     send.mockRejectedValueOnce(Object.assign(new Error("Forbidden"), { name: "403" }) as never);
     await expect(storage.exists(key)).rejects.toThrow("Forbidden");
+    send.mockRestore();
+  });
+});
+
+describe("s3PhotoStorage: video multipart uploads (14.2, FR-VID-2)", () => {
+  const client = createS3Client({
+    region: "us-east-1",
+    credentials: { accessKeyId: "AKIDEXAMPLE", secretAccessKey: "secret" },
+  });
+  const storage = s3PhotoStorage(client, "photo-bucket");
+  const key = `users/${USER}/originals/01JABCDEFGHJKMNPQRSTVWXYZ0.mp4`;
+  const upload = { key, uploadId: "the-upload" };
+  const s3Error = (name: string) =>
+    new S3ServiceException({ name, $fault: "client", $metadata: {}, message: name });
+
+  test("part URLs: PUT per part, 15 min, Content-Length signed, no SDK checksum", async () => {
+    const [first, last] = await storage.createUploadPartUrls(upload, [
+      { partNumber: 1, sizeBytes: 16 * 1024 * 1024 },
+      { partNumber: 3, sizeBytes: 5 },
+    ]);
+    expect(first!.partNumber).toBe(1);
+    expect(last!.partNumber).toBe(3);
+    const url = new URL(last!.url);
+    expect(url.origin + url.pathname).toBe(
+      `https://photo-bucket.s3.us-east-1.amazonaws.com/${key}`,
+    );
+    expect(url.searchParams.get("partNumber")).toBe("3");
+    expect(url.searchParams.get("uploadId")).toBe("the-upload");
+    expect(url.searchParams.get("X-Amz-Expires")).toBe(String(UPLOAD_URL_TTL_SECONDS));
+    // S3 then refuses a body of any other length (the browser sets Content-Length itself).
+    expect(url.searchParams.get("X-Amz-SignedHeaders")).toBe("content-length;host");
+    // A default client would add a CRC32 of the empty body, and S3 would reject every part.
+    const keys = [...url.searchParams.keys()].map((k) => k.toLowerCase());
+    expect(keys.filter((k) => k.includes("checksum"))).toEqual([]);
+  });
+
+  test("create: content type and Intelligent-Tiering, returns the upload ID", async () => {
+    const send = vi.spyOn(client, "send");
+    send.mockResolvedValueOnce({ UploadId: "new-upload" } as never);
+    expect(await storage.createMultipartUpload({ key, contentType: "video/mp4" })).toBe(
+      "new-upload",
+    );
+    const command = send.mock.calls[0]![0] as CreateMultipartUploadCommand;
+    expect(command).toBeInstanceOf(CreateMultipartUploadCommand);
+    expect(command.input).toEqual({
+      Bucket: "photo-bucket",
+      Key: key,
+      ContentType: "video/mp4",
+      StorageClass: "INTELLIGENT_TIERING",
+    });
+    send.mockRestore();
+  });
+
+  test("complete: parts sorted; S3 errors mapped, others thrown", async () => {
+    const send = vi.spyOn(client, "send");
+    send.mockResolvedValueOnce({} as never);
+    const parts = [
+      { partNumber: 2, etag: '"b"' },
+      { partNumber: 1, etag: '"a"' },
+    ];
+    expect(await storage.completeMultipartUpload(upload, parts)).toBe("completed");
+    const command = send.mock.calls[0]![0] as CompleteMultipartUploadCommand;
+    expect(command).toBeInstanceOf(CompleteMultipartUploadCommand);
+    expect(command.input).toEqual({
+      Bucket: "photo-bucket",
+      Key: key,
+      UploadId: "the-upload",
+      MultipartUpload: {
+        Parts: [
+          { PartNumber: 1, ETag: '"a"' },
+          { PartNumber: 2, ETag: '"b"' },
+        ],
+      },
+    });
+
+    for (const [name, result] of [
+      ["NoSuchUpload", "no-such-upload"],
+      ["InvalidPart", "invalid-parts"],
+      ["InvalidPartOrder", "invalid-parts"],
+      ["EntityTooSmall", "invalid-parts"],
+    ] as const) {
+      send.mockRejectedValueOnce(s3Error(name) as never);
+      expect(await storage.completeMultipartUpload(upload, parts)).toBe(result);
+    }
+    send.mockRejectedValueOnce(s3Error("AccessDenied") as never);
+    await expect(storage.completeMultipartUpload(upload, parts)).rejects.toThrow("AccessDenied");
+    send.mockRestore();
+  });
+
+  test("abort: an upload that is gone already is fine", async () => {
+    const send = vi.spyOn(client, "send");
+    send.mockResolvedValueOnce({} as never);
+    await storage.abortMultipartUpload(upload);
+    const command = send.mock.calls[0]![0] as AbortMultipartUploadCommand;
+    expect(command).toBeInstanceOf(AbortMultipartUploadCommand);
+    expect(command.input).toEqual({ Bucket: "photo-bucket", Key: key, UploadId: "the-upload" });
+
+    send.mockRejectedValueOnce(s3Error("NoSuchUpload") as never);
+    await storage.abortMultipartUpload(upload);
+    send.mockRejectedValueOnce(s3Error("AccessDenied") as never);
+    await expect(storage.abortMultipartUpload(upload)).rejects.toThrow("AccessDenied");
+    send.mockRestore();
+  });
+
+  test("objectSize: the stored length, null when missing", async () => {
+    const send = vi.spyOn(client, "send");
+    send.mockResolvedValueOnce({ ContentLength: 1234 } as never);
+    expect(await storage.objectSize(key)).toBe(1234);
+    send.mockRejectedValueOnce(new NotFound({ message: "Not Found", $metadata: {} }) as never);
+    expect(await storage.objectSize(key)).toBeNull();
     send.mockRestore();
   });
 });

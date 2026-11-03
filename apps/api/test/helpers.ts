@@ -5,7 +5,13 @@ import { createVerify, generateKeyPairSync, randomUUID } from "node:crypto";
 import { expect, inject } from "vitest";
 import { createApp } from "../src/app";
 import { cloudFrontMediaSigner } from "../src/lib/media";
-import type { DownloadTarget, PhotoStorage, UploadTarget } from "../src/lib/storage";
+import type {
+  DownloadTarget,
+  MultipartUpload,
+  PartToSign,
+  PhotoStorage,
+  UploadTarget,
+} from "../src/lib/storage";
 import type { UserDirectory, UserProfile } from "../src/lib/users";
 import {
   createDocumentClient,
@@ -312,6 +318,26 @@ export async function createTestApi() {
   const copies: { from: string; to: string }[] = [];
   /** Keys `storage.exists` reports as present (6.11 sweep tests). */
   const objects = new Set<string>();
+  /** Stored sizes for `storage.objectSize` (a key only in `objects` has size 0). */
+  const sizes = new Map<string, number>();
+  /**
+   * Video multipart uploads in progress (FR-VID-2), by upload ID: the parts "uploaded" with
+   * `uploadPart` (what the browser's PUT to a part URL does). Completed and aborted ones are
+   * removed, as in S3.
+   */
+  const multipart = new Map<
+    string,
+    { key: string; contentType: string; parts: Map<number, { etag: string; size: number }> }
+  >();
+  const signedParts: (MultipartUpload & PartToSign)[] = [];
+  const aborts: MultipartUpload[] = [];
+  function uploadPart(uploadId: string, partNumber: number, size: number): string {
+    const upload = multipart.get(uploadId);
+    if (!upload) throw new Error(`NoSuchUpload ${uploadId}`);
+    const etag = `"etag-${partNumber}-${size}"`;
+    upload.parts.set(partNumber, { etag, size });
+    return etag;
+  }
   const hooks: {
     onDelete?: (keys: string[]) => Promise<void>;
     onCopy?: (from: string, to: string) => Promise<void>;
@@ -337,6 +363,38 @@ export async function createTestApi() {
       copies.push({ from, to });
     },
     exists: async (key) => objects.has(key),
+    objectSize: async (key) => (objects.has(key) ? (sizes.get(key) ?? 0) : null),
+    createMultipartUpload: async ({ key, contentType }) => {
+      const uploadId = `upload-${randomUUID()}`;
+      multipart.set(uploadId, { key, contentType, parts: new Map() });
+      return uploadId;
+    },
+    createUploadPartUrls: async (upload, parts) =>
+      parts.map((part) => {
+        signedParts.push({ ...upload, ...part });
+        return {
+          partNumber: part.partNumber,
+          url: `${TEST_UPLOAD_URL}${upload.key}?uploadId=${upload.uploadId}&partNumber=${part.partNumber}`,
+        };
+      }),
+    completeMultipartUpload: async ({ key, uploadId }, parts) => {
+      const upload = multipart.get(uploadId);
+      if (!upload || upload.key !== key) return "no-such-upload";
+      if (parts.some((p) => upload.parts.get(p.partNumber)?.etag !== p.etag)) {
+        return "invalid-parts";
+      }
+      multipart.delete(uploadId);
+      objects.add(key);
+      sizes.set(
+        key,
+        parts.reduce((sum, p) => sum + upload.parts.get(p.partNumber)!.size, 0),
+      );
+      return "completed";
+    },
+    abortMultipartUpload: async (upload) => {
+      aborts.push(upload);
+      multipart.delete(upload.uploadId);
+    },
   };
   const deps = {
     repos,
@@ -375,6 +433,11 @@ export async function createTestApi() {
     deletes,
     copies,
     objects,
+    sizes,
+    multipart,
+    signedParts,
+    aborts,
+    uploadPart,
     hooks,
     storage,
     app,

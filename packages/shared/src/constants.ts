@@ -142,6 +142,11 @@ export const MAX_PHOTOS_PER_SAVE_REQUEST = 10;
 export const UPLOAD_URL_TTL_SECONDS = 15 * 60;
 export const DOWNLOAD_URL_TTL_SECONDS = 5 * 60;
 export const SHARED_IMAGE_URL_TTL_SECONDS = 15 * 60;
+/**
+ * A shared video's signed URL (FR-VID-7): the player sends range requests for as long as it plays,
+ * so 15 minutes would cut off a longer video. Recipients may download it anyway.
+ */
+export const SHARED_VIDEO_URL_TTL_SECONDS = 4 * 60 * 60;
 export const MEDIA_COOKIE_TTL_SECONDS = 8 * 60 * 60;
 
 /** Derived image sizes (§10); a video's poster frame uses the same two (§10.2). */

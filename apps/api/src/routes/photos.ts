@@ -7,8 +7,6 @@ import {
   listPhotosQuerySchema,
   newId,
   originalKey,
-  previewKey,
-  thumbKey,
   uploadUrlRequestSchema,
   type DownloadUrlResponse,
   type Photo,
@@ -18,7 +16,8 @@ import {
 import type { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../env";
-import { AppError, orNotFound } from "../lib/errors";
+import { AppError, orNotFound, quotaExceeded } from "../lib/errors";
+import { abortUpload, objectKeys } from "../lib/objects";
 import { validate } from "../lib/validation";
 import type { PhotoRecord } from "../repo";
 import type { Deps } from ".";
@@ -45,8 +44,6 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, media, config }
     // The quota covers counted photos plus every pending upload (`bytesReserved`, 5.6b).
     const usage = await repos.usage.get(userId);
     const quotaBytes = usage.quotaBytes ?? config.defaultQuotaBytes;
-    const quotaExceeded = () =>
-      new AppError(413, "QUOTA_EXCEEDED", "This upload would exceed your storage quota");
 
     const resign = async (record: PhotoRecord) => {
       // Once processed, the original must not be replaced.
@@ -172,7 +169,8 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, media, config }
   /**
    * Deletes an own photo (FR-DEL-1/3): a ready or failed photo goes to the trash for 15 days
    * (`repos.photos.trash`; restore and delete forever under /trash). An upload still pending has
-   * nothing to restore, so it is deleted at once: original, thumb and preview, then the item, its
+   * nothing to restore, so it is deleted at once: original, thumb and preview (a video's upload is
+   * aborted first), then the item, its
    * album memberships and its Usage (`repos.photos.delete`). Objects go first: if the item delete
    * then fails, a retry still finds the photo and finishes, whereas the other order could leave
    * unreferenced files behind. 204 also when it vanished meanwhile (a concurrent delete), or was
@@ -188,7 +186,10 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, media, config }
     if (trashed !== "pending") return c.body(null, 204);
 
     const record = orNotFound(await repos.photos.get(userId, photoId), "Photo not found");
-    const keys = [record.originalKey, thumbKey(userId, photoId), previewKey(userId, photoId)];
+    // A video still uploading: cancel the multipart upload first (FR-VID-2), so no part lands
+    // after the delete.
+    await abortUpload(storage, record);
+    const keys = objectKeys(record);
     await storage.deleteObjects(keys);
     const deleted = await repos.photos.delete(userId, photoId);
     // The thumbnail Lambda finished in between and wrote thumb and preview after our delete.

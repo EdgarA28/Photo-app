@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.46 |
+| **Version** | 0.47 |
 | **Date** | 2026-11-03 |
 | **Owner** | Edgar |
 | **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5), videos (Phase 14) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
@@ -434,7 +434,7 @@ Initial design; refine during implementation.
 | Username claim | `USERNAME#{username}` | `USERNAME` | — | — | userId, claimedAt; when released: releasedAt, heldUntil |
 
 
-Videos (§6.10) are Photo items with `mediaType = video` (absent = photo, so existing items need no backfill) and, once processed, `durationMs`, `videoCodec` and `playable` (the codec is one every browser plays: H.264/AAC MP4). While uploading, the item holds the multipart `uploadId`. `contentType` is `video/mp4` or `video/quicktime`. Usage keeps one `photoCount` for both media types.
+Videos (§6.10) are Photo items with `mediaType = video` (absent = photo, so existing items need no backfill) and, once processed, `durationMs`, `videoCodec` and `playable` (the codec is one every browser plays: H.264/AAC MP4). While uploading, the item holds the multipart `uploadId`; `complete` removes it. `contentType` is `video/mp4` or `video/quicktime`. Usage keeps one `photoCount` for both media types.
 
 Access patterns:
 
@@ -479,9 +479,9 @@ Access patterns:
 | `POST` | `/photos/upload-url` | Body `{fileName, contentType, sizeBytes}` → `{photoId, upload: {url, fields}}`; creates `pending` item, checks quota |
 | `POST` | `/videos/uploads` | Start a video upload (FR-VID-1–3): body `{fileName, contentType, sizeBytes}` → `201 {photoId, uploadId, partBytes, partCount}`; same quota check and `pending` item as `upload-url`, plus `CreateMultipartUpload` |
 | `POST` | `/videos/{photoId}/parts` | Body `{partNumbers}` (1–100 distinct, each 1–128) → `{parts: [{partNumber, url}], expiresAt}`: pre-signed `UploadPart` URLs, 15 min; only for the caller's `pending` video (else 404 / 409) |
-| `POST` | `/videos/{photoId}/complete` | Body `{parts: [{partNumber, etag}]}` (every part once, any order) → `200 {photoId}` (still `pending` until the video service); `CompleteMultipartUpload`, then the stored size must equal `sizeBytes`, else the object is deleted, the photo `failed` and `400` (replaces the POST policy's size condition). `DELETE /photos/{id}` of a pending video aborts the multipart upload |
+| `POST` | `/videos/{photoId}/complete` | Body `{parts: [{partNumber, etag}]}` (every part once, any order) → `200 {photoId}` (still `pending` until the video service); `CompleteMultipartUpload`, then the stored size must equal `sizeBytes`, else the object and the photo are deleted (its reservation released) and `400` (a second guard: each part URL is signed with its exact `Content-Length`; together they replace the POST policy's size condition); a repeated complete → `200`, an aborted upload → `409`. `DELETE /photos/{id}` of a pending video aborts the multipart upload |
 | `GET` | `/photos` | List own photos `?cursor&limit&sort` |
-| `GET` | `/photos/{photoId}` | Photo metadata; with `?albumId=` a photo of an album shared with the caller, with signed image URLs |
+| `GET` | `/photos/{photoId}` | Photo metadata; with `?albumId=` a photo of an album shared with the caller, with signed image URLs. A ready video has `videoUrl` (FR-VID-5/7): the original's CloudFront path for the owner, a signed URL valid 4 h for recipients (playback needs range requests until the end) |
 | `GET` | `/photos/{photoId}/download-url` | 5-min pre-signed GET with `attachment` disposition |
 | `DELETE` | `/photos/{photoId}` | Move to the trash (FR-DEL-3): out of gallery, albums and places, files and usage stay; a `pending` upload is deleted at once (files + metadata + usage) |
 | `POST` | `/imports/google` | Start an import (FR-IMP-1): body `{code, codeVerifier, redirectUri}` (Google authorization code) → `201 {importId, pickerUri, expiresAt}`; exchanges the code server-side and creates the Picker session; `400 GOOGLE_AUTH_FAILED` when Google rejects the code |
@@ -897,6 +897,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.36 | 2026-11-01 | Continue an interrupted large batch by picking it again (13.1f, §12.4) |
 | 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.38 | 2026-11-01 | Less gallery polling while uploads run: 15 s instead of 3 s, refreshes during a batch only mark lists stale (13.1j, §12.4) |
+| 0.47 | 2026-11-03 | §9 video routes (14.2): part URLs pinned to each part's size; a wrong size on complete deletes the photo instead of marking it `failed` (nothing has counted it, so `failed` would break the Usage invariant); repeated complete 200, aborted 409; `videoUrl` on photos (owner path, recipients 4 h); §8.2 `complete` removes `uploadId`; no requirement changes |
 | 0.46 | 2026-11-03 | §9 video routes: response of `/videos/{id}/parts` (`{parts: [{partNumber, url}], expiresAt}`) and `/videos/{id}/complete` (`200 {photoId}`), part-number limits (14.1 shared schemas); no requirement changes |
 | 0.45 | 2026-11-03 | `/upload` without the list of files (user request): the overall progress bar only, and one message when uploads failed (grouped by reason, Remove / Retry) or wait to retry after a connection problem (§12.4) |
 | 0.44 | 2026-11-03 | Adaptive upload concurrency 1–6 (starts at 3) and a 45 s stall timeout for S3 POSTs (13.1i, §12.4) |

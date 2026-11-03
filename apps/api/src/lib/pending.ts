@@ -1,5 +1,6 @@
 import type { PendingMarker, PhotoRecord, Repositories } from "../repo";
 import { errorFields, log } from "./log";
+import { abortUpload } from "./objects";
 import type { PhotoStorage } from "./storage";
 import type { RetryProcessing } from "./thumbnailRetry";
 import { inBatches } from "./trash";
@@ -97,6 +98,9 @@ async function sweepOne(
       });
       return "stuck";
     }
+    // A video whose upload never completed (FR-VID-2): its parts go too. (The bucket's lifecycle
+    // rule would abort it after 2 days anyway.)
+    await abortUpload(storage, record);
     // Guarded: if the original arrives right now and the thumbnail Lambda finishes first, the
     // status is no longer pending and the delete leaves the photo alone.
     const deleted = await repos.photos.delete(userId, photoId, isAbandoned);

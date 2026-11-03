@@ -1,10 +1,10 @@
-import { DeleteCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
+import { DeleteCommand, GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { log } from "../lib/log";
 import {
   TRASH_RETENTION_DAYS,
+  type MediaContentType,
   type MediaType,
   type Page,
-  type PhotoContentType,
   type PhotoSort,
   type PhotoStatus,
 } from "@photo-app/shared";
@@ -45,7 +45,7 @@ export interface PhotoRecord {
   photoId: string;
   status: PhotoStatus;
   fileName: string;
-  contentType: PhotoContentType;
+  contentType: MediaContentType;
   sizeBytes: number;
   originalKey: string;
   uploadedAt: string;
@@ -59,6 +59,12 @@ export interface PhotoRecord {
   durationMs?: number;
   videoCodec?: string;
   playable?: boolean;
+  /**
+   * S3's multipart upload ID while a video is being uploaded (FR-VID-2); removed once
+   * `POST /videos/{id}/complete` stored the original. (Not the client queue ID that
+   * `createPending` records as a claim.)
+   */
+  uploadId?: string;
   width?: number;
   height?: number;
   processedAt?: string;
@@ -112,10 +118,13 @@ export interface NewPhoto {
   userId: string;
   photoId: string;
   fileName: string;
-  contentType: PhotoContentType;
+  contentType: MediaContentType;
   sizeBytes: number;
   originalKey: string;
   uploadedAt: string;
+  /** Videos only (`POST /videos/uploads`): `video` and the multipart upload ID. */
+  mediaType?: MediaType;
+  uploadId?: string;
 }
 
 export function photosRepo(db: Db) {
@@ -247,6 +256,29 @@ export function photosRepo(db: Db) {
     },
 
     get: (userId: string, photoId: string) => getPhoto(db, userId, photoId),
+
+    /**
+     * A video's original is stored (`POST /videos/{id}/complete`): drops its multipart upload ID,
+     * so its parts can't be signed again and a delete has nothing to abort. False if the photo no
+     * longer has that upload (completed by a parallel request, or deleted).
+     */
+    async markUploaded(userId: string, photoId: string, uploadId: string): Promise<boolean> {
+      try {
+        await db.client.send(
+          new UpdateCommand({
+            TableName: db.table,
+            Key: photoKey(userId, photoId),
+            UpdateExpression: "REMOVE uploadId",
+            ConditionExpression: "uploadId = :uploadId",
+            ExpressionAttributeValues: { ":uploadId": uploadId },
+          }),
+        );
+        return true;
+      } catch (err) {
+        if (isConditionalCheckFailed(err)) return false;
+        throw err;
+      }
+    },
 
     /** Several of one user's photos; IDs that don't exist (or aren't theirs) are left out. */
     async getMany(userId: string, photoIds: string[]): Promise<PhotoRecord[]> {

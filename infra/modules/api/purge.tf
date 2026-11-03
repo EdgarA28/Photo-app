@@ -67,6 +67,13 @@ data "aws_iam_policy_document" "purge" {
     actions   = ["sqs:SendMessage"]
     resources = [var.thumbnail_queue_arn]
   }
+
+  # Stale-pending sweep of a video whose upload never completed (14.2): its parts are dropped.
+  statement {
+    sid       = "AbortVideoUploads"
+    actions   = ["s3:AbortMultipartUpload"]
+    resources = [local.originals_arn]
+  }
 }
 
 resource "aws_iam_role_policy" "purge" {

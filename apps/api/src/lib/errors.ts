@@ -17,6 +17,11 @@ export function notFound(message = "Not found"): AppError {
   return new AppError(404, "NOT_FOUND", message);
 }
 
+/** FR-UP-7, FR-VID-3: the upload doesn't fit in the caller's storage. */
+export function quotaExceeded(): AppError {
+  return new AppError(413, "QUOTA_EXCEEDED", "This upload would exceed your storage quota");
+}
+
 export function validationError(message: string): AppError {
   return new AppError(400, "VALIDATION_ERROR", message);
 }

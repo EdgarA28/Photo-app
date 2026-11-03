@@ -116,6 +116,7 @@ describe("photoSchema", () => {
       durationMs: null,
       videoCodec: null,
       playable: null,
+      videoUrl: null,
       place: null,
       trashedAt: null,
       purgeAt: null,
@@ -141,6 +142,7 @@ describe("photoSchema", () => {
       uploadedAt: "2026-10-18T10:00:00Z",
       thumbUrl: "/users/x/thumbs/a.jpg",
       previewUrl: "/users/x/previews/a.jpg",
+      videoUrl: "/users/x/originals/a.mov",
     });
     expect(video).toMatchObject({ mediaType: "video", durationMs: 12_345, playable: false });
     expect(photoSchema.safeParse({ ...video, mediaType: "audio" }).success).toBe(false);

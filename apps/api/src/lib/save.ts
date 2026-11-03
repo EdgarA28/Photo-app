@@ -84,6 +84,8 @@ async function saveOne(
         photoId,
         fileName: source.fileName,
         contentType: source.contentType,
+        // A shared video stays a video (FR-VID-7); the copy has no multipart upload.
+        ...(source.mediaType === "video" && { mediaType: "video" as const }),
         // The actual size: the thumbnail Lambda stored it when it processed the owner's upload.
         sizeBytes: source.sizeBytes,
         originalKey: key,

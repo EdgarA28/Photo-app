@@ -8,19 +8,18 @@
  * Shares the repositories and storage with the API; needs the table, the photo bucket and the
  * thumbnail queue.
  */
-import { S3Client } from "@aws-sdk/client-s3";
 import { SQSClient } from "@aws-sdk/client-sqs";
 import { loadPurgeConfig } from "./lib/config";
 import { log } from "./lib/log";
 import { sweepStalePending } from "./lib/pending";
-import { s3PhotoStorage } from "./lib/storage";
+import { createS3Client, s3PhotoStorage } from "./lib/storage";
 import { sqsRetryProcessing } from "./lib/thumbnailRetry";
 import { purgeExpired } from "./lib/trash";
 import { createDocumentClient, createRepositories } from "./repo";
 
 const config = loadPurgeConfig();
 const repos = createRepositories({ client: createDocumentClient(), table: config.tableName });
-const storage = s3PhotoStorage(new S3Client({}), config.photoBucket);
+const storage = s3PhotoStorage(createS3Client(), config.photoBucket);
 const retryProcessing = sqsRetryProcessing(
   new SQSClient({}),
   config.thumbnailQueueUrl,

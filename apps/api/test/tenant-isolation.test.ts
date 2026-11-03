@@ -45,6 +45,8 @@ const w = {
   p3: "",
   /** In Alice's trash (FR-DEL-3). */
   p4: "",
+  /** Alice's video, still uploading (14.2, FR-VID-2). */
+  v1: "",
   albumA: "",
   albumB: "",
   albumC: "",
@@ -103,6 +105,17 @@ beforeAll(async () => {
 
   w.p4 = await readyPhoto(w.alice);
   await repos.photos.trash(w.alice, w.p4, new Date());
+
+  const video = newPhoto(w.alice);
+  w.v1 = (
+    await createPending(repos, {
+      ...video,
+      contentType: "video/mp4",
+      originalKey: video.originalKey.replace(/\.jpg$/, ".mp4"),
+      mediaType: "video",
+      uploadId: "alice-upload",
+    })
+  ).photoId;
 
   w.malloryPhoto = await readyPhoto(w.mallory);
   w.malloryAlbum = await album(w.mallory, "Mine");
@@ -328,6 +341,45 @@ const cases: Case[] = [
       path: "/photos/upload-url",
       body: json({ fileName: "x.jpg", contentType: "image/jpeg", sizeBytes: 1000, photoId: id() }),
     }),
+  },
+  // ---- videos (14.2) ----
+  {
+    route: "POST /api/videos/:photoId/parts",
+    name: "stranger signs parts of someone else's video upload",
+    foreign: () => ({
+      as: w.mallory,
+      method: "POST",
+      path: `/videos/${w.v1}/parts`,
+      body: { partNumbers: [1] },
+    }),
+    missing: () => ({
+      as: w.mallory,
+      method: "POST",
+      path: `/videos/${id()}/parts`,
+      body: { partNumbers: [1] },
+    }),
+  },
+  {
+    route: "POST /api/videos/:photoId/complete",
+    name: "stranger completes someone else's video upload",
+    foreign: () => ({
+      as: w.mallory,
+      method: "POST",
+      path: `/videos/${w.v1}/complete`,
+      body: { parts: [{ partNumber: 1, etag: "x" }] },
+    }),
+    missing: () => ({
+      as: w.mallory,
+      method: "POST",
+      path: `/videos/${id()}/complete`,
+      body: { parts: [{ partNumber: 1, etag: "x" }] },
+    }),
+  },
+  {
+    route: "DELETE /api/photos/:photoId",
+    name: "stranger cancels someone else's video upload",
+    foreign: () => ({ as: w.mallory, method: "DELETE", path: `/photos/${w.v1}` }),
+    missing: () => ({ as: w.mallory, method: "DELETE", path: `/photos/${id()}` }),
   },
 
   // ---- albums ----
@@ -660,6 +712,7 @@ const exempt: Record<string, string> = {
   "PUT /api/me/username": "caller's own username (uniqueness: 409, tested in routes.usernames)",
   "GET /api/photos": "caller's gallery; foreign cursor case below",
   "GET /api/albums": "caller's albums",
+  "POST /api/videos/uploads": "creates under the caller (quota and keys from the JWT sub)",
   "POST /api/albums": "creates under the caller",
   "GET /api/shared-albums": "caller's shares; foreign cursor case below",
   "GET /api/share-invitations": "caller's invitations; foreign cursor case below",
@@ -798,5 +851,8 @@ describe("nothing changed", () => {
     expect(t.downloads).toEqual([]);
     expect(t.deletes).toEqual([]);
     expect(t.uploads.filter((u) => u.key.includes(w.alice))).toEqual([]);
+    // Alice's video upload: no part signed, nothing aborted (14.2).
+    expect(t.signedParts).toEqual([]);
+    expect(t.aborts).toEqual([]);
   });
 });

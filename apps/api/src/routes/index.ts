@@ -12,6 +12,7 @@ import { placeRoutes } from "./places";
 import { sessionRoutes } from "./session";
 import { shareRoutes } from "./shares";
 import { trashRoutes } from "./trash";
+import { videoRoutes } from "./videos";
 
 /** What route handlers may use. Built once per Lambda environment in index.ts; faked in tests. */
 export interface Deps {
@@ -27,6 +28,7 @@ export function registerRoutes(deps: Deps): (app: Hono<AppEnv>) => void {
   return (app) => {
     meRoutes(app, deps);
     photoRoutes(app, deps);
+    videoRoutes(app, deps);
     albumRoutes(app, deps);
     placeRoutes(app, deps);
     shareRoutes(app, deps);

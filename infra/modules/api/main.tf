@@ -12,6 +12,9 @@ locals {
     local.originals_arn,
     "${var.bucket_arn}/users/*/thumbs/*",
     "${var.bucket_arn}/users/*/previews/*",
+    # A video's playback copy (B-7 V2): deleted with the video (14.2). Without the permission,
+    # DeleteObjects reports AccessDenied for the key even when it doesn't exist.
+    "${var.bucket_arn}/users/*/playback/*",
   ]
 }
 
@@ -95,6 +98,23 @@ data "aws_iam_policy_document" "api" {
     sid       = "Logs"
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["${aws_cloudwatch_log_group.lambda.arn}:*"]
+  }
+
+  # Video uploads (14.2, FR-VID-2): create, part URLs and complete are covered by s3:PutObject
+  # above; cancelling a video upload (DELETE /photos/{id}) aborts it.
+  statement {
+    sid       = "AbortVideoUploads"
+    actions   = ["s3:AbortMultipartUpload"]
+    resources = [local.originals_arn]
+  }
+
+  # POST /videos/{id}/complete checks the stored size with HeadObject (s3:GetObject). Without
+  # s3:ListBucket S3 answers 403 instead of 404 for a missing original, and a repeated complete
+  # of an aborted upload would fail with 500 instead of 409.
+  statement {
+    sid       = "ListForMissingOriginals"
+    actions   = ["s3:ListBucket"]
+    resources = [var.bucket_arn]
   }
 }
 

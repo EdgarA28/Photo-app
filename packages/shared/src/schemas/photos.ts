@@ -58,6 +58,12 @@ export const photoSchema = z.object({
   thumbUrl: z.string().nullable(),
   previewUrl: z.string().nullable(),
   /**
+   * The video itself (FR-VID-5, FR-VID-7), once `ready`: the original's stable CloudFront path for
+   * own videos, a signed URL for shared ones (only where the preview is signed too: the viewer's
+   * GET /photos/{id}). Null for photos. Missing (an API from before videos) reads as null.
+   */
+  videoUrl: z.string().nullable().default(null),
+  /**
    * Set while the photo is in the trash (FR-DEL-3): when it was deleted and when the daily purge
    * removes it for good. Missing (an API from before the trash) reads as null.
    */

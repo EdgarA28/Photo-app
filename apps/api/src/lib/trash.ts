@@ -1,6 +1,7 @@
-import { previewKey, thumbKey, type EmptyTrashResult } from "@photo-app/shared";
+import type { EmptyTrashResult } from "@photo-app/shared";
 import type { PhotoRecord, Repositories } from "../repo";
 import { errorFields, log } from "./log";
+import { objectKeys } from "./objects";
 import type { PhotoStorage } from "./storage";
 
 /**
@@ -23,13 +24,8 @@ export async function deleteTrashedPhoto(
   guard: (record: PhotoRecord) => boolean = isTrashed,
 ): Promise<boolean> {
   if (!guard(record)) return false;
-  const { userId, photoId } = record;
-  await storage.deleteObjects([
-    record.originalKey,
-    thumbKey(userId, photoId),
-    previewKey(userId, photoId),
-  ]);
-  return (await repos.photos.delete(userId, photoId, guard)) !== null;
+  await storage.deleteObjects(objectKeys(record));
+  return (await repos.photos.delete(record.userId, record.photoId, guard)) !== null;
 }
 
 export const isTrashed = (record: PhotoRecord) => record.trashedAt !== undefined;
