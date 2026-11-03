@@ -1,5 +1,6 @@
 import type { Api } from "@/api/api";
 import { attemptUpload, isAbort } from "./attempt";
+import { createConcurrency, START_CONCURRENCY, type Concurrency } from "./concurrency";
 import { postToS3, type PostToS3 } from "./s3Post";
 import type { UploadItem, UploadStore } from "./store";
 import {
@@ -97,6 +98,8 @@ export interface UploadQueueDeps {
   /** Tells the other tabs about changes. Absent → single tab. */
   createChannel?: (() => BroadcastChannel) | undefined;
   isOnline?: () => boolean;
+  /** How many files go at once, adapted to how uploads are going (13.1i). */
+  concurrency?: Concurrency;
   /** Whether this tab / app window is on screen: only a visible one takes over (see below). */
   isVisible?: () => boolean;
   /**
@@ -116,8 +119,11 @@ export interface UploadQueueDeps {
   newId?: () => string;
 }
 
-/** §12.4: 3 parallel uploads. */
-export const CONCURRENCY = 3;
+/**
+ * §12.4: parallel uploads to start with. The page's queue adapts from here (1–6, 13.1i,
+ * concurrency.ts); Background Sync in the service worker keeps it fixed (short, best-effort runs).
+ */
+export const CONCURRENCY = START_CONCURRENCY;
 /**
  * A pick above this total (or a folder) is a large batch (13.1c, user 2026-11-01): its files are
  * read at upload time instead of copied, and it is kept only in the tab that picked it.
@@ -216,6 +222,7 @@ export function createUploadQueue({
   locks,
   createChannel,
   isOnline = () => navigator.onLine,
+  concurrency = createConcurrency(),
   isVisible = () => document.visibilityState === "visible",
   registerSync,
   requestPersistence,
@@ -502,6 +509,8 @@ export function createUploadQueue({
   }
 
   function onOnline() {
+    // The failures while offline said nothing about how fast the link is (13.1i).
+    concurrency.reset();
     for (const item of items.values()) if (item.status === "queued") item.retryAt = 0;
     pump();
   }
@@ -524,7 +533,7 @@ export function createUploadQueue({
   }
 
   /**
-   * Starts queued uploads up to `CONCURRENCY`, oldest first (the items are kept in the order
+   * Starts queued uploads up to the current concurrency limit (13.1i), oldest first (the items are kept in the order
    * added), and wakes up for the next backoff that ends. One pass, stopping once all slots are
    * busy (a finishing upload pumps again): called per added file, so no sorting (13.1-0).
    */
@@ -534,7 +543,7 @@ export function createUploadQueue({
     const t = now();
     let next = Infinity;
     for (const item of items.values()) {
-      if (active.size >= CONCURRENCY) return;
+      if (active.size >= concurrency.limit) return;
       if (item.status !== "queued" || item.paused || active.has(item.id)) continue;
       // Stored items only in the tab holding the lock; this tab's large batch always here (13.1c).
       if (!leader && !item.memoryOnly) continue;
@@ -547,6 +556,7 @@ export function createUploadQueue({
   async function run(id: string) {
     const controller = new AbortController();
     const { signal } = controller;
+    const slot = concurrency.started();
     active.set(id, controller);
     progress.set(id, 0);
     /** Uploaded: the item's final state, applied once the gallery shows the photo. */
@@ -587,6 +597,8 @@ export function createUploadQueue({
         },
       );
       if (!result || signal.aborted) return;
+      if (result.uploaded) concurrency.succeeded(slot);
+      else if (result.transient) concurrency.failed(slot);
       if (result.uploaded) finished = result.patch;
       else {
         await update(id, result.patch);
@@ -788,6 +800,7 @@ export function createUploadQueue({
   return {
     start(nextUserId) {
       if (userId === nextUserId) return starting;
+      concurrency.reset();
       starting = begin(nextUserId);
       return starting;
     },

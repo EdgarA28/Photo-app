@@ -27,6 +27,11 @@ export interface AttemptResult {
   uploaded: boolean;
   /** The item's new state. */
   patch: Partial<UploadItem>;
+  /**
+   * Failed in a way that says the connection or the backend is struggling (network, 5xx, 429,
+   * stalled or expired upload): the queue sends fewer files at once (13.1i).
+   */
+  transient?: boolean;
 }
 
 class FileMissingError extends Error {
@@ -96,9 +101,12 @@ export async function attemptUpload(
 
 function failed(item: UploadItem, error: unknown, now: () => number): AttemptResult {
   const result = (patch: Partial<UploadItem>) => ({ uploaded: false, patch });
-  const later = () => {
+  const later = (transient = true) => {
     const attempts = item.attempts + 1;
-    return result({ status: "queued", attempts, retryAt: now() + retryDelay(attempts) });
+    return {
+      ...result({ status: "queued", attempts, retryAt: now() + retryDelay(attempts) }),
+      ...(transient && { transient }),
+    };
   };
 
   if (error instanceof ApiRequestError) {
@@ -110,7 +118,9 @@ function failed(item: UploadItem, error: unknown, now: () => number): AttemptRes
     // photo found by photoId, or by uploadId when the photoId never got stored).
     if (error.status === 409) return { uploaded: true, patch: DONE };
     // The page's client already sent the user to /login; the upload continues after it.
-    if (error.code === "UNAUTHORIZED" || error.retryable) return later();
+    // An ended session says nothing about the connection (13.1i).
+    if (error.code === "UNAUTHORIZED") return later(false);
+    if (error.retryable) return later();
     return result({ status: "failed", error: errorMessage(error), errorCode: error.code });
   } else if (error instanceof S3UploadError) {
     if (error.retryable) return later();

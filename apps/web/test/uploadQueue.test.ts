@@ -11,6 +11,7 @@ import {
   STORE_READ_TIMEOUT_MS,
   UNREADABLE_FILE,
 } from "../src/upload/queue";
+import { createConcurrency, MAX_CONCURRENCY } from "../src/upload/concurrency";
 import { S3UploadError } from "../src/upload/s3Post";
 import type { UploadItem } from "../src/upload/store";
 import {
@@ -513,6 +514,8 @@ describe("upload queue at scale (13.1-0)", () => {
     const frames: (() => void)[] = [];
     const { queue } = testUploadQueue(api, {
       post,
+      // Pinned: this is about order and linear work, not the adaptive limit (13.1i, below).
+      concurrency: createConcurrency({ max: 3 }),
       refreshEveryMs: 0,
       scheduleFrame: (cb) => frames.push(cb),
     });
@@ -853,5 +856,78 @@ describe("upload queue: files from the device (Android, 2026-10-26)", () => {
     await queue.retry(queue.getSnapshot()[0]!.id);
     await vi.waitFor(() => expect(statuses(queue)).toEqual(["done"]));
     warn.mockRestore();
+  });
+});
+
+describe("adaptive upload concurrency (13.1i, §12.4)", () => {
+  /** Waits until `n` POSTs have started. */
+  const started = (calls: unknown[], n: number) => vi.waitFor(() => expect(calls).toHaveLength(n));
+
+  it("sends more files at once while uploads succeed, up to the maximum", async () => {
+    const { api } = uploadApi();
+    const { post, calls } = controlledPost();
+    const { queue } = testUploadQueue(api, { post, refreshEveryMs: 0 });
+    await queue.start(USER);
+    await queue.add(Array.from({ length: 40 }, (_, i) => testFile(`IMG_${i}.jpg`)));
+    await started(calls, CONCURRENCY);
+
+    let peak = 0;
+    for (let done = 0; done < 30; done++) {
+      calls[done]!.resolve();
+      await vi.waitFor(() => expect(calls.length).toBeGreaterThan(done + 1));
+      const running = queue
+        .getSnapshot()
+        .filter((entry) => entry.status === "uploading" && entry.progress < 1).length;
+      peak = Math.max(peak, running);
+    }
+    await vi.waitFor(() =>
+      expect(
+        queue.getSnapshot().filter((entry) => entry.status === "uploading" && entry.progress < 1),
+      ).toHaveLength(MAX_CONCURRENCY),
+    );
+    expect(peak).toBeLessThanOrEqual(MAX_CONCURRENCY);
+  });
+
+  it("halves on a temporary failure, once for failures of the same burst", async () => {
+    const concurrency = createConcurrency({ start: 6 });
+    const { api } = uploadApi();
+    const { post, calls } = controlledPost();
+    const { queue } = testUploadQueue(api, { post, concurrency, refreshEveryMs: 0 });
+    await queue.start(USER);
+    await queue.add(Array.from({ length: 10 }, (_, i) => testFile(`IMG_${i}.jpg`)));
+    await started(calls, 6);
+
+    // The connection drops: every running upload fails, which is one signal.
+    for (const call of calls.slice(0, 6)) call.reject(new S3UploadError(0));
+    await vi.waitFor(() => expect(concurrency.limit).toBe(3));
+    await started(calls, 9);
+    expect(concurrency.limit).toBe(3);
+  });
+
+  it("isn't slowed down by permanent failures or an ended session", async () => {
+    const concurrency = createConcurrency();
+    const { api } = uploadApi((body) =>
+      body.fileName === "IMG_1.jpg"
+        ? new ApiRequestError("UNAUTHORIZED", "x", 401)
+        : new ApiRequestError("VALIDATION_ERROR", "x", 400),
+    );
+    const { queue } = testUploadQueue(api, { concurrency });
+    await queue.start(USER);
+    await queue.add([testFile("IMG_1.jpg"), testFile("IMG_2.jpg")]);
+    await vi.waitFor(() => expect(statuses(queue)).toEqual(["queued", "failed"]));
+    expect(concurrency.limit).toBe(CONCURRENCY);
+  });
+
+  it("starts again from the start value when back online", async () => {
+    const concurrency = createConcurrency();
+    concurrency.failed(concurrency.started());
+    expect(concurrency.limit).toBe(1);
+    const { api } = uploadApi();
+    const { queue } = testUploadQueue(api, { concurrency });
+    await queue.start(USER);
+    expect(concurrency.limit).toBe(CONCURRENCY);
+    concurrency.failed(concurrency.started());
+    window.dispatchEvent(new Event("online"));
+    expect(concurrency.limit).toBe(CONCURRENCY);
   });
 });

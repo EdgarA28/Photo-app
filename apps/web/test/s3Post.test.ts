@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { postToS3, postToS3WithFetch, S3UploadError } from "../src/upload/s3Post";
+import { postToS3, postToS3WithFetch, S3UploadError, STALL_TIMEOUT_MS } from "../src/upload/s3Post";
 
 /** Just enough XMLHttpRequest to drive postToS3. */
 class FakeXhr {
@@ -74,6 +74,40 @@ describe("postToS3 (FR-UP-4)", () => {
     const sent = postToS3(upload, file);
     FakeXhr.last.onerror!();
     await expect(sent).rejects.toMatchObject({ status: 0, retryable: true });
+  });
+
+  it("gives up a stalled upload as a retryable failure (13.1i)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      vi.stubGlobal("XMLHttpRequest", FakeXhr);
+      const sent = postToS3(upload, file).catch((e: unknown) => e);
+      const xhr = FakeXhr.last;
+      // Progress keeps it alive.
+      vi.advanceTimersByTime(STALL_TIMEOUT_MS - 1);
+      xhr.upload.onprogress!({ lengthComputable: true, loaded: 1, total: 4 });
+      vi.advanceTimersByTime(STALL_TIMEOUT_MS - 1);
+      expect(xhr.aborted).toBe(false);
+      vi.advanceTimersByTime(1);
+      expect(xhr.aborted).toBe(true);
+      const error = await sent;
+      expect(error).toBeInstanceOf(S3UploadError);
+      expect(error).toMatchObject({ status: 0, retryable: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops watching for a stall once S3 answers", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      vi.stubGlobal("XMLHttpRequest", FakeXhr);
+      const sent = postToS3(upload, file, { stallTimeoutMs: 1000 });
+      FakeXhr.last.respond(204);
+      await expect(sent).resolves.toBeUndefined();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("aborts with the signal", async () => {
