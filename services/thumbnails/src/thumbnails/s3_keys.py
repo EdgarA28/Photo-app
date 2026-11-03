@@ -2,16 +2,20 @@
 
 Both implementations are tested against packages/shared/test-vectors/s3-keys.json.
 
-    users/{userId}/originals/{photoId}.{ext}
-    users/{userId}/thumbs/{photoId}.jpg
+    users/{userId}/originals/{photoId}.{ext}   photo or video (FR-VID-1: mp4, mov)
+    users/{userId}/thumbs/{photoId}.jpg        a video's poster frame too (§10.2)
     users/{userId}/previews/{photoId}.jpg
+    users/{userId}/playback/{photoId}.mp4      a video's playback copy (B-7 V2, later)
 """
 
 import re
 from dataclasses import dataclass
 
-# Mirrors CONTENT_TYPE_EXTENSIONS / ORIGINAL_EXTENSIONS in packages/shared/src/constants.ts.
-ORIGINAL_EXTENSIONS = ("jpg", "png", "heic", "heif", "webp")
+# Mirrors PHOTO_EXTENSIONS / VIDEO_EXTENSIONS / ORIGINAL_EXTENSIONS in
+# packages/shared/src/constants.ts.
+PHOTO_EXTENSIONS = ("jpg", "png", "heic", "heif", "webp")
+VIDEO_EXTENSIONS = ("mp4", "mov")
+ORIGINAL_EXTENSIONS = PHOTO_EXTENSIONS + VIDEO_EXTENSIONS
 
 # Mirrors ULID_REGEX / USER_ID_REGEX in packages/shared/src/ids.ts.
 ULID_REGEX = re.compile(r"[0-7][0-9A-HJKMNP-TV-Z]{25}")
@@ -27,6 +31,8 @@ class ParsedOriginalKey:
     user_id: str
     photo_id: str
     ext: str
+    media_type: str
+    """`photo` (thumbnail service, §10) or `video` (video service, §10.2)."""
 
 
 def is_id(value: str) -> bool:
@@ -67,6 +73,15 @@ def preview_key(user_id: str, photo_id: str) -> str:
     return f"users/{user_id}/previews/{photo_id}.jpg"
 
 
+def playback_key(user_id: str, photo_id: str) -> str:
+    _assert_ids(user_id, photo_id)
+    return f"users/{user_id}/playback/{photo_id}.mp4"
+
+
+def media_type_of_extension(ext: str) -> str:
+    return "video" if ext in VIDEO_EXTENSIONS else "photo"
+
+
 def parse_original_key(key: str) -> ParsedOriginalKey | None:
     """Returns None for anything that is not a well-formed original key (loop protection, §10)."""
     match = _ORIGINAL_KEY_REGEX.fullmatch(key)
@@ -75,4 +90,6 @@ def parse_original_key(key: str) -> ParsedOriginalKey | None:
     user_id, photo_id, ext = match.groups()
     if not is_user_id(user_id) or not is_id(photo_id):
         return None
-    return ParsedOriginalKey(user_id=user_id, photo_id=photo_id, ext=ext)
+    return ParsedOriginalKey(
+        user_id=user_id, photo_id=photo_id, ext=ext, media_type=media_type_of_extension(ext)
+    )

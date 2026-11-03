@@ -1,7 +1,22 @@
 import { describe, expect, test } from "vitest";
-import { MAX_UPLOAD_BYTES, PAGE_LIMIT_DEFAULT, PAGE_LIMIT_MAX } from "../constants";
+import {
+  MAX_PARTS_PER_SIGN_REQUEST,
+  MAX_UPLOAD_BYTES,
+  MAX_VIDEO_BYTES,
+  MAX_VIDEO_PARTS,
+  MULTIPART_PART_BYTES,
+  PAGE_LIMIT_DEFAULT,
+  PAGE_LIMIT_MAX,
+} from "../constants";
 import {
   addAlbumPhotosRequestSchema,
+  completeVideoUploadRequestSchema,
+  linkedPhotoSchema,
+  startVideoUploadRequestSchema,
+  startVideoUploadResponseSchema,
+  videoPartCount,
+  videoPartsRequestSchema,
+  videoPartsResponseSchema,
   apiErrorSchema,
   createAlbumRequestSchema,
   createShareRequestSchema,
@@ -94,14 +109,43 @@ describe("photoSchema", () => {
     };
     // Without `place` (an API from before 13.2), the trash dates (FR-DEL-3) or the owner
     // (FR-SHR-11) they read as null.
+    // Without the video fields (FR-VID-*: an API from before videos) it is a photo.
     expect(photoSchema.parse(pending)).toEqual({
       ...pending,
+      mediaType: "photo",
+      durationMs: null,
+      videoCodec: null,
+      playable: null,
       place: null,
       trashedAt: null,
       purgeAt: null,
       ownerId: null,
       ownerUsername: null,
     });
+  });
+
+  test("a processed video (FR-VID-4, FR-VID-5)", () => {
+    const video = photoSchema.parse({
+      photoId: PHOTO_ID,
+      status: "ready",
+      mediaType: "video",
+      fileName: "IMG_0001.MOV",
+      contentType: "video/quicktime",
+      sizeBytes: 123_456_789,
+      width: 1920,
+      height: 1080,
+      durationMs: 12_345,
+      videoCodec: "hevc",
+      playable: false,
+      takenAt: "2026-10-18T10:00:00Z",
+      uploadedAt: "2026-10-18T10:00:00Z",
+      thumbUrl: "/users/x/thumbs/a.jpg",
+      previewUrl: "/users/x/previews/a.jpg",
+    });
+    expect(video).toMatchObject({ mediaType: "video", durationMs: 12_345, playable: false });
+    expect(photoSchema.safeParse({ ...video, mediaType: "audio" }).success).toBe(false);
+    expect(photoSchema.safeParse({ ...video, contentType: "video/webm" }).success).toBe(false);
+    expect(photoSchema.safeParse({ ...video, durationMs: -1 }).success).toBe(false);
   });
 
   test("takes a place name, and rejects place IDs in the wrong shape (13.2)", () => {
@@ -113,6 +157,113 @@ describe("photoSchema", () => {
     for (const bad of ["Berlin", "city:", "city:12a", "country:de", "region:DE", "x:DE"]) {
       expect(placeIdSchema.safeParse(bad).success).toBe(false);
     }
+  });
+});
+
+describe("video upload schemas (FR-VID-1, FR-VID-2, §9)", () => {
+  const ok = { fileName: "clip.mp4", contentType: "video/mp4", sizeBytes: 1234 };
+
+  test("start accepts MP4 and MOV up to 2 GB", () => {
+    expect(startVideoUploadRequestSchema.parse(ok)).toEqual(ok);
+    expect(
+      startVideoUploadRequestSchema.parse({
+        ...ok,
+        contentType: "video/quicktime",
+        sizeBytes: MAX_VIDEO_BYTES,
+      }).sizeBytes,
+    ).toBe(MAX_VIDEO_BYTES);
+    const bad = [
+      { ...ok, sizeBytes: MAX_VIDEO_BYTES + 1 },
+      { ...ok, sizeBytes: 0 },
+      { ...ok, contentType: "video/webm" },
+      { ...ok, contentType: "image/jpeg" },
+      { ...ok, fileName: " " },
+    ];
+    for (const body of bad)
+      expect(startVideoUploadRequestSchema.safeParse(body).success).toBe(false);
+  });
+
+  test("photo uploads still take photos only", () => {
+    const photo = { fileName: "a.jpg", contentType: "video/quicktime", sizeBytes: 10 };
+    expect(uploadUrlRequestSchema.safeParse(photo).success).toBe(false);
+  });
+
+  test("part count: 16 MB parts, a 2 GB video is 128", () => {
+    expect(MULTIPART_PART_BYTES).toBe(16 * 1024 * 1024);
+    expect(videoPartCount(1)).toBe(1);
+    expect(videoPartCount(MULTIPART_PART_BYTES)).toBe(1);
+    expect(videoPartCount(MULTIPART_PART_BYTES + 1)).toBe(2);
+    expect(videoPartCount(MAX_VIDEO_BYTES)).toBe(MAX_VIDEO_PARTS);
+    expect(MAX_VIDEO_PARTS).toBe(128);
+  });
+
+  test("parts request: 1–100 distinct part numbers in range", () => {
+    expect(videoPartsRequestSchema.parse({ partNumbers: [1, 2, 3] })).toEqual({
+      partNumbers: [1, 2, 3],
+    });
+    const all = Array.from({ length: MAX_PARTS_PER_SIGN_REQUEST }, (_, i) => i + 1);
+    expect(videoPartsRequestSchema.safeParse({ partNumbers: all }).success).toBe(true);
+    for (const partNumbers of [
+      [],
+      [0],
+      [MAX_VIDEO_PARTS + 1],
+      [1.5],
+      [2, 2],
+      [...all, MAX_PARTS_PER_SIGN_REQUEST + 1],
+    ]) {
+      expect(videoPartsRequestSchema.safeParse({ partNumbers }).success).toBe(false);
+    }
+  });
+
+  test("complete: every part once, with its ETag", () => {
+    const parts = [
+      { partNumber: 2, etag: '"b"' },
+      { partNumber: 1, etag: '"a"' },
+    ];
+    expect(completeVideoUploadRequestSchema.parse({ parts })).toEqual({ parts });
+    for (const bad of [
+      [],
+      [{ partNumber: 1, etag: "" }],
+      [{ partNumber: 1 }],
+      [...parts, { partNumber: 1, etag: '"c"' }],
+    ]) {
+      expect(completeVideoUploadRequestSchema.safeParse({ parts: bad }).success).toBe(false);
+    }
+  });
+
+  test("responses", () => {
+    expect(
+      startVideoUploadResponseSchema.parse({
+        photoId: PHOTO_ID,
+        uploadId: "abc",
+        partBytes: MULTIPART_PART_BYTES,
+        partCount: 3,
+      }).partCount,
+    ).toBe(3);
+    expect(
+      videoPartsResponseSchema.safeParse({
+        parts: [{ partNumber: 1, url: "https://bucket.s3.amazonaws.com/k?partNumber=1" }],
+        expiresAt: "2026-11-03T10:15:00Z",
+      }).success,
+    ).toBe(true);
+  });
+});
+
+describe("linkedPhotoSchema (FR-SHR-8, FR-VID-8)", () => {
+  const photo = { photoId: PHOTO_ID, thumbUrl: "t", previewUrl: "p", width: 1, height: 1 };
+
+  test("an entry without video fields is a photo", () => {
+    expect(linkedPhotoSchema.parse(photo)).toEqual({
+      ...photo,
+      mediaType: "photo",
+      durationMs: null,
+      videoUrl: null,
+    });
+  });
+
+  test("a video carries its duration and the signed URL of the original", () => {
+    const video = { ...photo, mediaType: "video", durationMs: 5000, videoUrl: "https://cdn/v" };
+    expect(linkedPhotoSchema.parse(video)).toEqual(video);
   });
 });
 

@@ -212,6 +212,27 @@ def test_non_original_keys_are_ignored(aws: tuple[Any, Any], key: str) -> None:
     assert result["results"][0]["reason"] == "not an original key"
 
 
+@pytest.mark.parametrize("ext", ["mp4", "mov"])
+def test_video_originals_are_left_to_the_video_service(
+    aws: tuple[Any, Any], jpeg_plain: bytes, ext: str
+) -> None:
+    # §10.2 / 14.1: a video is neither processed nor deleted as an orphan here, even without
+    # an item, and its pending item stays as it is.
+    s3, dynamodb = aws
+    put_pending(dynamodb)
+    video = f"users/{USER}/originals/{PHOTO}.{ext}"
+    s3.put_object(Bucket=BUCKET, Key=video, Body=jpeg_plain)
+
+    result = handler_module.handler(s3_event(video, len(jpeg_plain)))
+
+    assert result["results"][0]["status"] == "skipped"
+    assert result["results"][0]["reason"] == "not a photo original"
+    assert exists(s3, video)
+    assert not exists(s3, THUMB)
+    item = dynamodb.get_item(TableName=TABLE, Key=PHOTO_KEY, ConsistentRead=True)["Item"]
+    assert item["status"]["S"] == "pending"
+
+
 def test_url_encoded_key_is_decoded(aws: tuple[Any, Any], jpeg_plain: bytes) -> None:
     s3, dynamodb = aws
     put_pending(dynamodb)

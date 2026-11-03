@@ -2,8 +2,9 @@ import { DeleteCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 import { log } from "../lib/log";
 import {
   TRASH_RETENTION_DAYS,
-  type AllowedContentType,
+  type MediaType,
   type Page,
+  type PhotoContentType,
   type PhotoSort,
   type PhotoStatus,
 } from "@photo-app/shared";
@@ -44,12 +45,20 @@ export interface PhotoRecord {
   photoId: string;
   status: PhotoStatus;
   fileName: string;
-  contentType: AllowedContentType;
+  contentType: PhotoContentType;
   sizeBytes: number;
   originalKey: string;
   uploadedAt: string;
   /** Provisional = uploadedAt while pending; EXIF date once the thumbnail Lambda is done. */
   takenAt: string;
+  /**
+   * Videos (§8.2, FR-VID-*): missing = photo, so items from before videos need no backfill. The
+   * video service sets duration, codec and `playable` once processed (14.3).
+   */
+  mediaType?: MediaType;
+  durationMs?: number;
+  videoCodec?: string;
+  playable?: boolean;
   width?: number;
   height?: number;
   processedAt?: string;
@@ -103,7 +112,7 @@ export interface NewPhoto {
   userId: string;
   photoId: string;
   fileName: string;
-  contentType: AllowedContentType;
+  contentType: PhotoContentType;
   sizeBytes: number;
   originalKey: string;
   uploadedAt: string;

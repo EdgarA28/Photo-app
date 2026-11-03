@@ -56,7 +56,7 @@
 | Web app / PWA | `apps/web` | ✅ (dev) | 8.1 scaffold: Vite + React, file routes of spec §12.1 (placeholder pages), Query client, Zod-validated gallery search, `/api` dev proxy. 8.2 Tailwind CSS 4 + shadcn/ui (D-3). 8.3 login (oidc-client-ts, PKCE, refresh, guard, logout). 8.4 API client (bearer, Zod, 401 retry); settings shows `GET /me`. 8.5 app shell (side rail / bottom tab bar, full-screen viewer, system dark mode). 8.6 gallery (infinite query, virtualized justified rows, album/sort filters in the URL). 8.7 processing/failed tiles + polling while photos process. 8.8 full-screen viewer (preview, prev/next through the gallery list, arrow keys, Escape, swipe). 8.9 download original + delete with confirmation in the viewer. 8.10 upload queue (IndexedDB, picker / drag & drop / camera, 3 parallel, progress, automatic retry, one uploading tab, gallery tiles + nav badge). 8.11 albums (list, create, rename, delete, album view, select mode, add/remove photos, cover; album actions in the viewer). 8.12 sharing (share dialog by email or @username, revoke, "Shared with me", read-only shared album view, "Shared by" in the viewer). 8.13 settings (account, quota bar, username set/change, logout clearing the upload queue and Query cache). 8.14 storage-full handling (space warning, grouped banner, Retry all), session-expired and offline messages. 8.15 "choose a username" prompt after login. **Phase 8 complete.** Thumbnails and previews show once Phase 7 serves them. 9.1 web app manifest + icons (installable metadata). 9.2 service worker caching: precached shell, offline navigation fallback, CacheFirst thumbnails. 9.4 service worker registered (`registerType: 'prompt'`) with an "Update available" prompt and hourly update checks. 9.3 Query cache saved to IndexedDB per user and restored on start; offline start with the stored session's `sub`. 9.5 Background Sync: the service worker uploads the queue after the app is closed or frozen (Chromium); refresh token now in IndexedDB. 9.6 Android share target: photos shared to the app land in the upload queue. Later (all on dev): month sections (8.16), viewer zoom (8.17), sticky header (8.18/8.19), invitations (8.20), branded login (8.21), public photo links (8.22/8.23), upload reliability (8.24), faster start (8.25), save shared photos (8.26), collaborative albums (8.28), shared locations (8.29), photos shown once ready (8.32), trash (13.3), place search + `/map` (13.2), bulk / folder upload (13.1-0/a–f/j/l: scalable queue, folders, large in-tab batches, skipped-files summary, space check, whole-queue progress / pause / cancel, continue interrupted batches, less polling during uploads, mobile data warning + phone hint). Status: ✅ except the iOS test (9.7, Phase 11) and open user checks in `PROGRESS.md` |
 | Thumbnail queue (SQS) | `infra/modules/thumbnails`, `services/thumbnails` | ✅ (dev) | 13.6 (spec v0.30 §10, B-11): S3 → EventBridge rule (originals only, `users/*/originals/*`) → SQS `photo-app-{env}-thumbnails` → thumbnail Lambda (event source mapping, batch 5, maximum concurrency 5, `ReportBatchItemFailures`, redrive to the existing DLQ after 5 receives, EventCount metrics on the mapping). Applied to dev from local 2026-11-01. Two bulk tests (530 photos each) lost invocations to Lambda's recursive loop detection; fixed by the EventBridge trigger; third bulk test 2026-11-02 (533 photos) passed: all ready, nothing dropped, concurrency ≤ 5. DLQ purged 2026-11-03 (19 messages left over from the 2nd test). Costs: spec v0.43 §16 (free tier) |
 | Import from Google Photos | `apps/api` (routes + worker), `infra/modules/api`, `apps/web` | 📋 | Planned (13.5, spec v0.24 §6.9): Picker API, `/imports` routes, SQS import queue + DLQ, import worker Lambda; nothing built yet (§10.8) |
-| Videos | `packages/shared`, `apps/api`, `services/thumbnails`, `infra/modules/{thumbnails,storage,frontend}`, `apps/web` | 📋 | Planned (Phase 14, spec v0.41 §6.10 FR-VID-*, §10.2): second media type of the Photo item; multipart upload routes, video Lambda (ffmpeg poster + metadata) with its own queue, S3 routing by suffix, bucket CORS `PUT` + `ETag`, `<video>` viewer; V2 playback copy. Nothing built |
+| Videos | `packages/shared`, `apps/api`, `services/thumbnails`, `infra/modules/{thumbnails,storage,frontend}`, `apps/web` | 🚧 | Planned (Phase 14, spec v0.41 §6.10 FR-VID-*, §10.2): second media type of the Photo item; multipart upload routes, video Lambda (ffmpeg poster + metadata) with its own queue, S3 routing by suffix, bucket CORS `PUT` + `ETag`, `<video>` viewer; V2 playback copy. **Built (14.1, not deployed, nothing user-visible):** shared contracts (§7: video content types, size/part constants, `mediaType`/`durationMs`/`videoCodec`/`playable` on `Photo`, `/videos/*` schemas, `playbackKey`, key vectors with `mp4`/`mov`); the API passes the optional video attributes through; the thumbnail Lambda skips video originals. Next 14.2 API routes |
 | CI/CD workflows | `.github/workflows` | 🚧 | `ci.yml` (10.1: checks, build, dev `tofu plan` + PR comment; pull requests and pushes to `main`); `deploy.yml` (10.2: dev deploy after CI passes on `main`; running since `87fbe5c`). Prod job (10.3): Phase 11 |
 
 ---
@@ -264,7 +264,7 @@ Photo-app/
 │       │   ├── constants.ts     limits, content types, TTLs, image sizes
 │       │   ├── ids.ts           ULID generation & ID validators
 │       │   ├── s3Keys.ts        S3 key builders/parser
-│       │   ├── schemas/         Zod: common, errors, photos, albums, account
+│       │   ├── schemas/         Zod: common, errors, photos, videos (14.1), albums, account, places, links
 │       │   └── *.test.ts        Vitest suites
 │       └── test-vectors/
 │           └── s3-keys.json     cross-language key contract (TS + Python)
@@ -404,9 +404,17 @@ Root commands: `pnpm lint`, `pnpm format[:check]`, `pnpm typecheck`, `pnpm test`
 
 | Constant | Value | Spec ref |
 |---|---|---|
-| `CONTENT_TYPE_EXTENSIONS` | `image/jpeg→jpg`, `image/png→png`, `image/heic→heic`, `image/heif→heif`, `image/webp→webp` | FR-UP-2 |
-| `ALLOWED_CONTENT_TYPES` / `ORIGINAL_EXTENSIONS` | derived from the map above | FR-UP-2 |
-| `MAX_UPLOAD_BYTES` | 50 MiB | FR-UP-3 |
+| `PHOTO_CONTENT_TYPE_EXTENSIONS` | `image/jpeg→jpg`, `image/png→png`, `image/heic→heic`, `image/heif→heif`, `image/webp→webp` | FR-UP-2 |
+| `VIDEO_CONTENT_TYPE_EXTENSIONS` | `video/mp4→mp4`, `video/quicktime→mov` | FR-VID-1 |
+| `CONTENT_TYPE_EXTENSIONS` | both maps (every original) | §8.1 |
+| `PHOTO_CONTENT_TYPES` / `VIDEO_CONTENT_TYPES` / `MEDIA_CONTENT_TYPES` | derived; photo-only places (upload-url, share target, import) use `PHOTO_CONTENT_TYPES` (types `PhotoContentType` / `VideoContentType` / `MediaContentType`; `ALLOWED_CONTENT_TYPES` / `AllowedContentType` were renamed in 14.1) | FR-UP-2, FR-VID-1 |
+| `PHOTO_EXTENSIONS` / `VIDEO_EXTENSIONS` / `ORIGINAL_EXTENSIONS` | derived; `ORIGINAL_EXTENSIONS` = both | §8.1 |
+| `MEDIA_TYPES` / `MediaType` | `photo` \| `video` | §8.2 |
+| `MAX_UPLOAD_BYTES` | 50 MiB (photos) | FR-UP-3 |
+| `MAX_VIDEO_BYTES` | 2 GiB (below S3's 5 GB single-CopyObject limit, which save-to-gallery uses) | FR-VID-1 |
+| `MULTIPART_PART_BYTES` / `MAX_VIDEO_PARTS` | 16 MiB / 128 | FR-VID-2 |
+| `MAX_PARTS_PER_SIGN_REQUEST` | 100 part URLs per `POST /videos/{id}/parts` | §9 |
+| `MAX_SHARED_VIDEO_BYTES` | 200 MiB (share target) | FR-VID-9 |
 | `MAX_FILE_NAME_LENGTH` | 255 | — |
 | `PAGE_LIMIT_DEFAULT` / `PAGE_LIMIT_MAX` | 60 / 200 | §9 |
 | `MAX_ALBUM_NAME_LENGTH` | 100 | — |
@@ -421,7 +429,7 @@ Root commands: `pnpm lint`, `pnpm format[:check]`, `pnpm typecheck`, `pnpm test`
 | `DOWNLOAD_URL_TTL_SECONDS` | 300 (5 min) | §9 |
 | `SHARED_IMAGE_URL_TTL_SECONDS` | 900 (15 min) | §9 |
 | `MEDIA_COOKIE_TTL_SECONDS` | 28 800 (8 h) | §9 |
-| `THUMB_MAX_EDGE` / `PREVIEW_MAX_EDGE` | 400 / 1600 px | §10 |
+| `THUMB_MAX_EDGE` / `PREVIEW_MAX_EDGE` | 400 / 1600 px (also a video's poster frame) | §10, §10.2 |
 
 Per-environment settings (e.g. default quota 2 GB dev / 10 GB prod) are deployment config, not shared constants.
 
@@ -439,11 +447,15 @@ Per-environment settings (e.g. default quota 2 GB dev / 10 GB prod) are deployme
 | `originalKey(userId, photoId, ext)` | `users/{userId}/originals/{photoId}.{ext}` | Throws on invalid IDs |
 | `thumbKey(userId, photoId)` | `users/{userId}/thumbs/{photoId}.jpg` | Throws on invalid IDs |
 | `previewKey(userId, photoId)` | `users/{userId}/previews/{photoId}.jpg` | Throws on invalid IDs |
+| `playbackKey(userId, photoId)` | `users/{userId}/playback/{photoId}.mp4` | A video's playback copy (B-7 V2, nothing writes it yet); throws on invalid IDs |
 | `userPrefix(userId)` | `users/{userId}/` | Scope of the user's media cookie |
-| `extensionFor(contentType)` | `jpg` / `png` / `heic` / `heif` / `webp` | — |
-| `parseOriginalKey(key)` | `{userId, photoId, ext}` or `null` | Strict: anything that is not a well-formed original → `null` (thumbnail loop protection) |
+| `extensionFor(contentType)` | `jpg` / `png` / `heic` / `heif` / `webp` / `mp4` / `mov` | — |
+| `mediaTypeOfExtension(ext)` | `photo` / `video` | — |
+| `parseOriginalKey(key)` | `{userId, photoId, ext, mediaType}` or `null` | Strict: anything that is not a well-formed original → `null` (thumbnail loop protection); `mediaType` says which service processes it (the thumbnail Lambda skips `video`) |
 
-**Cross-language contract:** `test-vectors/s3-keys.json` holds 5 valid key sets and 17 invalid original keys (wrong folder, uppercase UUID, lowercase/invalid ULID, `.jpeg`/`.JPG`, nested paths, leading slash, double extension, empty…). Vitest and the Python mirror (6.6, pytest) both run against it.
+Videos use the same `originals/` prefix (`.mp4` / `.mov`) and their poster frame the same `thumbs/` + `previews/` JPEGs (§8.1).
+
+**Cross-language contract:** `test-vectors/s3-keys.json` holds 7 valid key sets (5 photo extensions + `mp4` + `mov`, each with `mediaType` and `playback`) and 23 invalid original keys (wrong folder, a playback key, uppercase UUID, lowercase/invalid ULID, `.jpeg`/`.JPG`/`.MP4`/`.MOV`/`.m4v`/`.qt`, nested paths, leading slash, double extension, empty…). Vitest and the Python mirror (6.6, pytest) both run against it.
 
 ### 7.4 API schemas (`schemas/`)
 
@@ -481,22 +493,37 @@ All request/response bodies of §9 as Zod schemas with inferred TS types.
 | Schema | Shape |
 |---|---|
 | `photoStatusSchema` | `pending` \| `ready` \| `failed` |
-| `contentTypeSchema` | enum of `ALLOWED_CONTENT_TYPES` |
-| `photoSchema` / `Photo` | `photoId, status, fileName, contentType, sizeBytes, width\|null, height\|null, takenAt, uploadedAt, place\|null, thumbUrl\|null, previewUrl\|null, trashedAt\|null, purgeAt\|null, ownerId\|null, ownerUsername\|null`. URLs are null until `ready`; the trash dates are set only while the photo is in the trash (FR-DEL-3), missing reads as null. `ownerId` = whose photo it is (always set by the API; collaborative albums mix people's photos, FR-SHR-11); `ownerUsername` only in album photo lists and `GET /photos/{id}?albumId` (who added it), else null. |
+| `photoContentTypeSchema` / `videoContentTypeSchema` / `mediaContentTypeSchema` | enums of `PHOTO_CONTENT_TYPES` / `VIDEO_CONTENT_TYPES` / `MEDIA_CONTENT_TYPES` (replace `contentTypeSchema`, 14.1) |
+| `mediaTypeSchema` | `photo` \| `video` |
+| `fileNameSchema` | trimmed, 1–255 (upload-url and video uploads) |
+| `photoSchema` / `Photo` | `photoId, status, fileName, mediaType (default photo), contentType (any media type), sizeBytes, width\|null, height\|null, durationMs\|null, videoCodec\|null, playable\|null, takenAt, uploadedAt, place\|null, thumbUrl\|null, previewUrl\|null, trashedAt\|null, purgeAt\|null, ownerId\|null, ownerUsername\|null`. URLs are null until `ready`; the trash dates are set only while the photo is in the trash (FR-DEL-3), missing reads as null. `ownerId` = whose photo it is (always set by the API; collaborative albums mix people's photos, FR-SHR-11); `ownerUsername` only in album photo lists and `GET /photos/{id}?albumId` (who added it), else null. Video fields (FR-VID-4/5): missing reads as a photo / null; `playable` = every browser plays the codec (H.264 true, HEVC false). |
 | `trashListSchema` / `TrashList` | `{items: Photo[]}` (GET /trash, one response) |
 | `saveSharedPhotosRequestSchema` | `{photoIds: Id[1..10]}` (POST /shared-albums/{id}/save, FR-SHR-10) |
 | `saveSharedPhotosResponseSchema` | `{items: [{photoId, result: saved \| already-saved \| unavailable \| quota-exceeded, savedPhotoId\|null, inTrash}]}`, request order |
 | `photoLinkTokenSchema` | 22 base64url characters (128 random bits) (FR-SHR-8) |
 | `createPhotoLinkRequestSchema` | `{photoIds: Id[1..100]}` (POST /links) |
 | `photoLinkSchema` / `PhotoLink` | `{token, path: "/s/{token}", expiresAt, photoCount}` (POST /links) |
-| `linkedPhotoSchema` / `LinkedPhoto` | `{photoId, thumbUrl, previewUrl, width\|null, height\|null}` |
+| `linkedPhotoSchema` / `LinkedPhoto` | `{photoId, mediaType (default photo), durationMs\|null, videoUrl\|null, thumbUrl, previewUrl, width\|null, height\|null}`; `videoUrl` = signed URL of a video's original (FR-VID-8; the API sends null until 14.2) |
 | `sharedLinkSchema` / `SharedLink` | `{photos: LinkedPhoto[], expiresAt}` (public GET /links/{token}) |
 | `photoSortSchema` | `taken-desc` (default) \| `taken-asc` |
 | `listPhotosQuerySchema` | page query + `sort` |
 | `photoPageSchema` | `Page<Photo>` |
-| `uploadUrlRequestSchema` | `{ fileName (trimmed, 1–255), contentType, sizeBytes (1 … 50 MiB) }` |
+| `uploadUrlRequestSchema` | `{ fileName (trimmed, 1–255), contentType (photo types only), sizeBytes (1 … 50 MiB) }` |
 | `uploadUrlResponseSchema` | `{ photoId, upload: { url, fields: Record<string,string> } }` (pre-signed POST) |
 | `downloadUrlResponseSchema` | `{ url, expiresAt }` |
+
+**Videos (`videos.ts`, FR-VID-1–3, routes in 14.2)**
+
+| Schema | Shape |
+|---|---|
+| `videoPartCount(sizeBytes)` | `ceil(sizeBytes / 16 MiB)` |
+| `partNumberSchema` | integer 1–128 (`MAX_VIDEO_PARTS`) |
+| `startVideoUploadRequestSchema` | `{ fileName, contentType (mp4 \| quicktime), sizeBytes (1 … 2 GiB) }` (POST /videos/uploads) |
+| `startVideoUploadResponseSchema` | `{ photoId, uploadId (S3 multipart upload ID), partBytes, partCount }` (201) |
+| `videoPartsRequestSchema` | `{ partNumbers: 1–100 distinct part numbers }` (POST /videos/{id}/parts) |
+| `videoPartsResponseSchema` | `{ parts: [{partNumber, url}], expiresAt }` (pre-signed `PUT`s, request order) |
+| `completeVideoUploadRequestSchema` | `{ parts: [{partNumber, etag (1–256)}], 1–128, distinct part numbers, any order }` (POST /videos/{id}/complete) |
+| `completeVideoUploadResponseSchema` | `{ photoId }` (200; the item stays `pending` until the video service) |
 
 **Albums & sharing (`albums.ts`)**
 
@@ -528,9 +555,9 @@ All request/response bodies of §9 as Zod schemas with inferred TS types.
 
 | Suite | Covers |
 |---|---|
-| `s3Keys.test.ts` | builders and parser against the shared vectors; invalid IDs throw; `extensionFor` |
+| `s3Keys.test.ts` | builders (incl. `playbackKey`) and parser against the shared vectors, which cover every original extension; invalid IDs throw; `extensionFor`, `mediaTypeOfExtension` |
 | `ids.test.ts` | 1000 IDs valid/unique/sorted; embedded timestamp; validators |
-| `schemas/schemas.test.ts` | defaults & coercion, limits, pending photo shape, album rules, email normalisation, error envelope |
+| `schemas/schemas.test.ts` | defaults & coercion, limits, pending photo shape (video fields default to photo), a processed video, video upload schemas (sizes, part counts, part lists), linked videos, album rules, email normalisation, error envelope |
 
 ---
 
@@ -775,7 +802,7 @@ Failure paths: corrupt/unsupported → `status: failed`, no retry; transient →
 | Aspect | Implementation |
 |---|---|
 | Entry / config | `thumbnails.handler.handler`; env `TABLE_NAME`; bucket and key from the event (key URL-decoded). 13.6b: SQS events (all records `eventSource = aws:sqs`) → each message body is an EventBridge `Object Created` event (`source = aws.s3`, `detail.bucket/object`, turned into the notification shape by `_s3_records`) or an S3 notification event (`Records`: the daily sweep's retries, messages from before the EventBridge switch); `s3:TestEvent` (no `Records`) ignored; response is only `{batchItemFailures}`; with < 20 s left (`MIN_REMAINING_MS`) the rest of the batch is returned unprocessed. Direct S3 events still accepted (cut-over) and return `{results}` |
-| Loop protection | Only exact original keys are processed; thumbs/previews/anything else → `skipped` |
+| Loop protection | Only exact original keys are processed; thumbs/previews/anything else → `skipped`; video originals (`.mp4`/`.mov`) → `skipped` "not a photo original" before the item lookup (14.1; they belong to the video service, §10.2) |
 | Idempotency | Photo item read with `ConsistentRead`; final write is conditional on `status = pending`, so duplicate S3 events and Lambda retries never double-count |
 | Places (13.2) | With EXIF GPS (`imaging._gps`: DMS + refs, 0/0, out-of-range and malformed → none): `places.lookup` (data loaded lazily on the first photo with GPS, ~0.4 s, 1° grid cells, winner = smallest distance / reach, reach = 1.5 km × √(population/1000) clamped to 1.5–30 km, so a spot in a big city is that city, not a nearer small town; numbered districts like "Paris 16 Passy" and `PPLX` sections dropped at build). The `ready` transaction also sets `latitude`/`longitude` (even without a town), `place`, `placeIds`, and per place (town, region if named, country) updates the place list entry (`ADD photoCount 1`, name, context) and upserts the place photo item (an `Update`: the role has GetItem/UpdateItem only). Atomic with `ready`, so retries never double-count |
 | Album order (§12.3) | After `ready`: re-reads the item (consistent) and sets `GSI1PK`/`GSI1SK` on each membership in `albumIds` to the final takenAt (`UpdateItem`, condition `attribute_exists(PK)`, so a membership removed meanwhile isn't recreated) |
@@ -1320,3 +1347,4 @@ Target design: spec §12 (TanStack Router file routes with an authenticated layo
 | 2026-11-03 | 13.6 done: thumbnail queue component no longer "bulk test pending"; DLQ purged (19 leftover 2nd-test messages, all from 2026-11-01 22:21 UTC); SQS + EventBridge costs added to spec §16 (v0.43). |
 | 2026-11-03 | **13.1i adaptive upload concurrency (spec v0.44 §12.4):** `src/upload/concurrency.ts` (start 3, +1 per round of successes, halve on temporary failure, 1–6, one cut per burst, reset on start / `online`); `AttemptResult.transient` (network, 5xx, 429, S3 0/403/5xx; not 401 or permanent errors); `postToS3` stall timeout 45 s; Background Sync stays at 3. Deployed to dev by hand 2026-11-03 together with the `/upload` change (`b676b06`, not pushed); bulk test passed (530 photos in 104 s, ~30 % faster than with a fixed 3, no errors), confirmed by the user. |
 | 2026-11-03 | `/upload` without the list of files (user request): only the batch header with its overall progress bar, plus one "Something went wrong" alert (failures grouped by reason, Remove / Retry) and a "Connection problem … retried shortly" note (spec v0.45 §12.4). |
+| 2026-11-03 | **14.1 shared video contracts (not deployed, nothing user-visible):** photo/video/media content types (`ALLOWED_CONTENT_TYPES` → `PHOTO_CONTENT_TYPES`, `AllowedContentType` → `PhotoContentType`), `MAX_VIDEO_BYTES`, multipart constants, `mediaType`/`durationMs`/`videoCodec`/`playable` on `Photo`, video fields on `LinkedPhoto`, `schemas/videos.ts`, `playbackKey`, `mediaType` from `parseOriginalKey`, key vectors with `mp4`/`mov` (§1, §7); Python mirror likewise, the thumbnail Lambda skips video originals before any item lookup (so a video is never deleted as an orphan); `PhotoRecord` gets the optional video attributes and `toPhoto` / `GET /links/{token}` pass them through (`videoUrl` null until 14.2). |

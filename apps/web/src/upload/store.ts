@@ -1,4 +1,4 @@
-import type { AllowedContentType } from "@photo-app/shared";
+import type { PhotoContentType } from "@photo-app/shared";
 import type { ClientErrorCode } from "@/api/errors";
 import { done, promisify } from "@/lib/idb";
 
@@ -16,7 +16,7 @@ export interface UploadItem {
   /** The bytes, until uploaded; then dropped, as they are in S3. */
   file: Blob | null;
   fileName: string;
-  contentType: AllowedContentType;
+  contentType: PhotoContentType;
   sizeBytes: number;
   /** Set by the first upload-url response and sent on every retry (5.6a), so no duplicates. */
   photoId: string | null;

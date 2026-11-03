@@ -1,7 +1,10 @@
 import { z } from "zod";
 import {
-  ALLOWED_CONTENT_TYPES,
   MAX_FILE_NAME_LENGTH,
+  MEDIA_CONTENT_TYPES,
+  MEDIA_TYPES,
+  PHOTO_CONTENT_TYPES,
+  VIDEO_CONTENT_TYPES,
   MAX_PHOTOS_PER_SAVE_REQUEST,
   MAX_UPLOAD_BYTES,
 } from "../constants";
@@ -11,18 +14,39 @@ import { photoPlaceSchema } from "./places";
 export const photoStatusSchema = z.enum(["pending", "ready", "failed"]);
 export type PhotoStatus = z.infer<typeof photoStatusSchema>;
 
-export const contentTypeSchema = z.enum(ALLOWED_CONTENT_TYPES);
+/** Types a photo upload may have (FR-UP-2). */
+export const photoContentTypeSchema = z.enum(PHOTO_CONTENT_TYPES);
+/** Types a video upload may have (FR-VID-1). */
+export const videoContentTypeSchema = z.enum(VIDEO_CONTENT_TYPES);
+/** The type of any stored original, photo or video. */
+export const mediaContentTypeSchema = z.enum(MEDIA_CONTENT_TYPES);
 
-/** A photo as returned by the API. Image URLs are null until the photo is `ready`. */
+export const mediaTypeSchema = z.enum(MEDIA_TYPES);
+
+/**
+ * A photo or video as returned by the API (videos are Photo items too, §8.2). Image URLs are null
+ * until it is `ready`; a video's are its poster frame.
+ */
 export const photoSchema = z.object({
   photoId: idSchema,
   status: photoStatusSchema,
   fileName: z.string(),
-  contentType: contentTypeSchema,
+  /** Missing (an API from before videos, or an item from before them) reads as a photo. */
+  mediaType: mediaTypeSchema.default("photo"),
+  contentType: mediaContentTypeSchema,
   sizeBytes: z.number().int().nonnegative(),
   width: z.number().int().positive().nullable(),
   height: z.number().int().positive().nullable(),
-  /** EXIF DateTimeOriginal, falling back to upload time (§8.2). */
+  /**
+   * Videos once processed (FR-VID-4, FR-VID-5): length, codec of the video stream as ffprobe
+   * names it (e.g. `h264`, `hevc`), and whether every browser can play it (H.264 → true; HEVC
+   * plays in Safari only, so false: other browsers try and fall back to the download). Null for
+   * photos and for videos not processed yet.
+   */
+  durationMs: z.number().int().nonnegative().nullable().default(null),
+  videoCodec: z.string().nullable().default(null),
+  playable: z.boolean().nullable().default(null),
+  /** EXIF DateTimeOriginal (a video's `creation_time`), falling back to upload time (§8.2). */
   takenAt: isoDateTimeSchema,
   uploadedAt: isoDateTimeSchema,
   /**
@@ -75,10 +99,13 @@ export const emptyTrashResultSchema = z.object({
 });
 export type EmptyTrashResult = z.infer<typeof emptyTrashResultSchema>;
 
-/** POST /photos/upload-url (FR-UP-2, FR-UP-3, NFR-SEC-6) */
+/** An original's file name as kept in metadata (trimmed, not empty). */
+export const fileNameSchema = z.string().trim().min(1).max(MAX_FILE_NAME_LENGTH);
+
+/** POST /photos/upload-url (FR-UP-2, FR-UP-3, NFR-SEC-6): photos only; videos: `/videos/uploads`. */
 export const uploadUrlRequestSchema = z.object({
-  fileName: z.string().trim().min(1).max(MAX_FILE_NAME_LENGTH),
-  contentType: contentTypeSchema,
+  fileName: fileNameSchema,
+  contentType: photoContentTypeSchema,
   sizeBytes: z.number().int().positive().max(MAX_UPLOAD_BYTES),
   /**
    * Retry of an earlier upload (5.6a): re-sign for this still-pending photo instead of creating a

@@ -1,5 +1,5 @@
-/** Supported upload content types and the file extension used for the original in S3 (FR-UP-2). */
-export const CONTENT_TYPE_EXTENSIONS = {
+/** Supported photo content types and the file extension of the original in S3 (FR-UP-2). */
+export const PHOTO_CONTENT_TYPE_EXTENSIONS = {
   "image/jpeg": "jpg",
   "image/png": "png",
   "image/heic": "heic",
@@ -7,21 +7,86 @@ export const CONTENT_TYPE_EXTENSIONS = {
   "image/webp": "webp",
 } as const;
 
-export type AllowedContentType = keyof typeof CONTENT_TYPE_EXTENSIONS;
-export type OriginalExtension = (typeof CONTENT_TYPE_EXTENSIONS)[AllowedContentType];
+/** Supported video content types and the file extension of the original in S3 (FR-VID-1). */
+export const VIDEO_CONTENT_TYPE_EXTENSIONS = {
+  "video/mp4": "mp4",
+  "video/quicktime": "mov",
+} as const;
 
-export const ALLOWED_CONTENT_TYPES = Object.keys(CONTENT_TYPE_EXTENSIONS) as [
-  AllowedContentType,
-  ...AllowedContentType[],
+/** Every original: photos and videos share the Photo item and the `originals/` prefix (§8.1). */
+export const CONTENT_TYPE_EXTENSIONS = {
+  ...PHOTO_CONTENT_TYPE_EXTENSIONS,
+  ...VIDEO_CONTENT_TYPE_EXTENSIONS,
+} as const;
+
+export type PhotoContentType = keyof typeof PHOTO_CONTENT_TYPE_EXTENSIONS;
+export type VideoContentType = keyof typeof VIDEO_CONTENT_TYPE_EXTENSIONS;
+export type MediaContentType = PhotoContentType | VideoContentType;
+
+export type PhotoExtension = (typeof PHOTO_CONTENT_TYPE_EXTENSIONS)[PhotoContentType];
+export type VideoExtension = (typeof VIDEO_CONTENT_TYPE_EXTENSIONS)[VideoContentType];
+export type OriginalExtension = PhotoExtension | VideoExtension;
+
+/** What a Photo item holds (§8.2, FR-VID-*); a missing `mediaType` is a photo. */
+export const MEDIA_TYPES = ["photo", "video"] as const;
+export type MediaType = (typeof MEDIA_TYPES)[number];
+
+/** Photo upload types (`POST /photos/upload-url`, share target, Google Photos import). */
+export const PHOTO_CONTENT_TYPES = Object.keys(PHOTO_CONTENT_TYPE_EXTENSIONS) as [
+  PhotoContentType,
+  ...PhotoContentType[],
+];
+/** Video upload types (`POST /videos/uploads`, FR-VID-1). */
+export const VIDEO_CONTENT_TYPES = Object.keys(VIDEO_CONTENT_TYPE_EXTENSIONS) as [
+  VideoContentType,
+  ...VideoContentType[],
+];
+/** Any original's type, as stored on the item and returned by the API. */
+export const MEDIA_CONTENT_TYPES = [...PHOTO_CONTENT_TYPES, ...VIDEO_CONTENT_TYPES] as [
+  MediaContentType,
+  ...MediaContentType[],
 ];
 
-export const ORIGINAL_EXTENSIONS = [...new Set(Object.values(CONTENT_TYPE_EXTENSIONS))] as [
+export const PHOTO_EXTENSIONS = [...new Set(Object.values(PHOTO_CONTENT_TYPE_EXTENSIONS))] as [
+  PhotoExtension,
+  ...PhotoExtension[],
+];
+export const VIDEO_EXTENSIONS = [...new Set(Object.values(VIDEO_CONTENT_TYPE_EXTENSIONS))] as [
+  VideoExtension,
+  ...VideoExtension[],
+];
+export const ORIGINAL_EXTENSIONS = [...PHOTO_EXTENSIONS, ...VIDEO_EXTENSIONS] as [
   OriginalExtension,
   ...OriginalExtension[],
 ];
 
 /** Max size of a single uploaded photo (FR-UP-3). */
 export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Max size of a single video (FR-VID-1, 14.0): 2 GB. Below S3's 5 GB limit for one CopyObject,
+ * which saving a shared video to one's gallery relies on (FR-SHR-10).
+ */
+export const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
+
+/**
+ * Part size of a video's multipart upload (FR-VID-2): 16 MB, so 2 GB is 128 parts (S3 allows
+ * 10,000, each part except the last at least 5 MB). Small enough that a dropped connection
+ * repeats little.
+ */
+export const MULTIPART_PART_BYTES = 16 * 1024 * 1024;
+
+/** Most parts a video can have: `MAX_VIDEO_BYTES / MULTIPART_PART_BYTES`. */
+export const MAX_VIDEO_PARTS = Math.ceil(MAX_VIDEO_BYTES / MULTIPART_PART_BYTES);
+
+/** Part URLs signed per `POST /videos/{photoId}/parts` request (§9). */
+export const MAX_PARTS_PER_SIGN_REQUEST = 100;
+
+/**
+ * Biggest video accepted through the share target (FR-VID-9): the service worker keeps shared
+ * files in IndexedDB until the app picks them up.
+ */
+export const MAX_SHARED_VIDEO_BYTES = 200 * 1024 * 1024;
 
 /** Max length of an original file name kept in metadata. */
 export const MAX_FILE_NAME_LENGTH = 255;
@@ -79,6 +144,6 @@ export const DOWNLOAD_URL_TTL_SECONDS = 5 * 60;
 export const SHARED_IMAGE_URL_TTL_SECONDS = 15 * 60;
 export const MEDIA_COOKIE_TTL_SECONDS = 8 * 60 * 60;
 
-/** Derived image sizes (§10). */
+/** Derived image sizes (§10); a video's poster frame uses the same two (§10.2). */
 export const THUMB_MAX_EDGE = 400;
 export const PREVIEW_MAX_EDGE = 1600;

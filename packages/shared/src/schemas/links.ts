@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { MAX_PHOTOS_PER_LINK } from "../constants";
 import { idSchema, isoDateTimeSchema } from "./common";
+import { mediaTypeSchema } from "./photos";
 
 /**
  * Public photo links (FR-SHR-8): the owner creates a link to one or more photos that anyone can
@@ -24,9 +25,16 @@ export const photoLinkSchema = z.object({
 });
 export type PhotoLink = z.infer<typeof photoLinkSchema>;
 
-/** One photo of a link; image URLs are CloudFront signed URLs valid until the link expires. */
+/**
+ * One photo or video of a link; URLs are CloudFront signed URLs valid until the link expires. A
+ * video's images are its poster frame and `videoUrl` is the original (FR-VID-8). The video fields
+ * are missing from an API from before videos and read as a photo.
+ */
 export const linkedPhotoSchema = z.object({
   photoId: idSchema,
+  mediaType: mediaTypeSchema.default("photo"),
+  durationMs: z.number().int().nonnegative().nullable().default(null),
+  videoUrl: z.string().nullable().default(null),
   thumbUrl: z.string(),
   previewUrl: z.string(),
   width: z.number().int().positive().nullable(),

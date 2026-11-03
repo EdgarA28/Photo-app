@@ -79,6 +79,10 @@ class Processor:
         if parsed is None:
             # Loop protection (§10): our own thumbs/previews and anything unexpected.
             return Outcome("skipped", "not an original key")
+        if parsed.media_type != "photo":
+            # Videos belong to the video service (§10.2); the thumbnail trigger may still send
+            # them until the routing by suffix (14.4) is in place.
+            return Outcome("skipped", "not a photo original")
         user_id, photo_id = parsed.user_id, parsed.photo_id
         log = {"userId": user_id, "photoId": photo_id, "key": key}
 

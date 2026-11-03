@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.45 |
+| **Version** | 0.46 |
 | **Date** | 2026-11-03 |
 | **Owner** | Edgar |
 | **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5), videos (Phase 14) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
@@ -478,8 +478,8 @@ Access patterns:
 | `PUT` | `/me/username` | Set or change own username `{username}`; `409 USERNAME_TAKEN` if someone else has it |
 | `POST` | `/photos/upload-url` | Body `{fileName, contentType, sizeBytes}` → `{photoId, upload: {url, fields}}`; creates `pending` item, checks quota |
 | `POST` | `/videos/uploads` | Start a video upload (FR-VID-1–3): body `{fileName, contentType, sizeBytes}` → `201 {photoId, uploadId, partBytes, partCount}`; same quota check and `pending` item as `upload-url`, plus `CreateMultipartUpload` |
-| `POST` | `/videos/{photoId}/parts` | Body `{partNumbers}` (≤ 100) → pre-signed `UploadPart` URLs, 15 min; only for the caller's `pending` video (else 404 / 409) |
-| `POST` | `/videos/{photoId}/complete` | Body `{parts: [{partNumber, etag}]}` → `CompleteMultipartUpload`, then the stored size must equal `sizeBytes`, else the object is deleted, the photo `failed` and `400` (replaces the POST policy's size condition). `DELETE /photos/{id}` of a pending video aborts the multipart upload |
+| `POST` | `/videos/{photoId}/parts` | Body `{partNumbers}` (1–100 distinct, each 1–128) → `{parts: [{partNumber, url}], expiresAt}`: pre-signed `UploadPart` URLs, 15 min; only for the caller's `pending` video (else 404 / 409) |
+| `POST` | `/videos/{photoId}/complete` | Body `{parts: [{partNumber, etag}]}` (every part once, any order) → `200 {photoId}` (still `pending` until the video service); `CompleteMultipartUpload`, then the stored size must equal `sizeBytes`, else the object is deleted, the photo `failed` and `400` (replaces the POST policy's size condition). `DELETE /photos/{id}` of a pending video aborts the multipart upload |
 | `GET` | `/photos` | List own photos `?cursor&limit&sort` |
 | `GET` | `/photos/{photoId}` | Photo metadata; with `?albumId=` a photo of an album shared with the caller, with signed image URLs |
 | `GET` | `/photos/{photoId}/download-url` | 5-min pre-signed GET with `attachment` disposition |
@@ -897,6 +897,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.36 | 2026-11-01 | Continue an interrupted large batch by picking it again (13.1f, §12.4) |
 | 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.38 | 2026-11-01 | Less gallery polling while uploads run: 15 s instead of 3 s, refreshes during a batch only mark lists stale (13.1j, §12.4) |
+| 0.46 | 2026-11-03 | §9 video routes: response of `/videos/{id}/parts` (`{parts: [{partNumber, url}], expiresAt}`) and `/videos/{id}/complete` (`200 {photoId}`), part-number limits (14.1 shared schemas); no requirement changes |
 | 0.45 | 2026-11-03 | `/upload` without the list of files (user request): the overall progress bar only, and one message when uploads failed (grouped by reason, Remove / Retry) or wait to retry after a connection problem (§12.4) |
 | 0.44 | 2026-11-03 | Adaptive upload concurrency 1–6 (starts at 3) and a 45 s stall timeout for S3 POSTs (13.1i, §12.4) |
 | 0.43 | 2026-11-03 | §16 cost estimate: thumbnail SQS queue and EventBridge (13.6d); no requirement changes |

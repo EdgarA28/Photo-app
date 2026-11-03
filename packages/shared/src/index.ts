@@ -4,6 +4,7 @@ export * from "./s3Keys";
 export * from "./schemas/common";
 export * from "./schemas/errors";
 export * from "./schemas/photos";
+export * from "./schemas/videos";
 export * from "./schemas/albums";
 export * from "./schemas/account";
 export * from "./schemas/places";

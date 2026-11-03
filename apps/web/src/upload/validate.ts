@@ -1,13 +1,13 @@
 import {
-  ALLOWED_CONTENT_TYPES,
+  PHOTO_CONTENT_TYPES,
   MAX_FILE_NAME_LENGTH,
   MAX_UPLOAD_BYTES,
-  type AllowedContentType,
+  type PhotoContentType,
 } from "@photo-app/shared";
 import { formatBytes } from "@/lib/format";
 
 /** File extensions accepted when the browser gives no (or a generic) type, e.g. HEIC on desktop. */
-const EXTENSION_TYPES: Record<string, AllowedContentType> = {
+const EXTENSION_TYPES: Record<string, PhotoContentType> = {
   jpg: "image/jpeg",
   jpeg: "image/jpeg",
   png: "image/png",
@@ -18,15 +18,15 @@ const EXTENSION_TYPES: Record<string, AllowedContentType> = {
 
 /** `accept` for the file inputs: the types plus extensions, for browsers that don't know HEIC. */
 export const ACCEPT = [
-  ...ALLOWED_CONTENT_TYPES,
+  ...PHOTO_CONTENT_TYPES,
   ...Object.keys(EXTENSION_TYPES).map((ext) => `.${ext}`),
 ].join(",");
 
-const isAllowed = (type: string): type is AllowedContentType =>
-  (ALLOWED_CONTENT_TYPES as readonly string[]).includes(type);
+const isAllowed = (type: string): type is PhotoContentType =>
+  (PHOTO_CONTENT_TYPES as readonly string[]).includes(type);
 
 /** The upload content type of a file (FR-UP-2): its own type if supported, else by extension. */
-export function contentTypeOf(file: Pick<File, "name" | "type">): AllowedContentType | null {
+export function contentTypeOf(file: Pick<File, "name" | "type">): PhotoContentType | null {
   if (isAllowed(file.type)) return file.type;
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
   return EXTENSION_TYPES[ext] ?? null;
@@ -40,7 +40,7 @@ export function contentTypeOf(file: Pick<File, "name" | "type">): AllowedContent
 export type SkipCode = "type" | "size" | "empty" | "unreadable" | "phoneLimit";
 
 export type FileCheck =
-  | { ok: true; contentType: AllowedContentType; fileName: string }
+  | { ok: true; contentType: PhotoContentType; fileName: string }
   | { ok: false; reason: string; code: SkipCode };
 
 /**

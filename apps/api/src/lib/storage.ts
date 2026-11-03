@@ -11,7 +11,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import {
   DOWNLOAD_URL_TTL_SECONDS,
   UPLOAD_URL_TTL_SECONDS,
-  type AllowedContentType,
+  type PhotoContentType,
 } from "@photo-app/shared";
 
 export interface UploadPost {
@@ -21,7 +21,7 @@ export interface UploadPost {
 
 export interface UploadTarget {
   key: string;
-  contentType: AllowedContentType;
+  contentType: PhotoContentType;
   sizeBytes: number;
 }
 

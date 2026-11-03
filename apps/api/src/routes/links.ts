@@ -86,6 +86,10 @@ export function publicLinkRoutes(app: Hono<AppEnv>, { repos, storage, media }: D
       photos: await Promise.all(
         photos.map(async (photo) => ({
           photoId: photo.photoId,
+          mediaType: photo.mediaType ?? "photo",
+          durationMs: photo.durationMs ?? null,
+          // FR-VID-8: the signed URL of a video's original comes with the video routes (14.2).
+          videoUrl: null,
           thumbUrl: await sign(thumbKey(photo.userId, photo.photoId)),
           previewUrl: await sign(previewKey(photo.userId, photo.photoId)),
           width: photo.width ?? null,
