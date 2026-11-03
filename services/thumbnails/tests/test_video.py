@@ -163,9 +163,31 @@ def test_av1_by_its_canonical_name() -> None:
 
 
 def test_audio_track_is_not_decoded() -> None:
-    # Only the allowed video decoders open while probing (OPEN_OPTIONS): AAC isn't one.
+    # Only the allowed video decoders open while probing (_open_options): AAC isn't one.
     v = process_video(io.BytesIO(make_video(audio=True)))
     assert (v.codec, v.duration_ms) == ("h264", 2000)
+
+
+def test_ffmpeg_itself_enforces_the_frame_size_while_probing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Probing (find_stream_info) may decode frames before any Python check: FFmpeg's decoders
+    get `max_pixels` too, so they refuse to allocate a bigger picture."""
+    import av
+
+    seen: list[dict[str, str]] = []
+    real_open = av.open
+
+    def spy(*args: object, **kwargs: object) -> object:
+        seen.append(dict(kwargs["options"]))  # type: ignore[call-overload]
+        return real_open(*args, **kwargs)  # type: ignore[arg-type]
+
+    clip = make_video()  # before the spy: make_video opens a container too
+    monkeypatch.setattr(video_module.av, "open", spy)
+    process_video(io.BytesIO(clip))
+    assert seen[0]["max_pixels"] == str(video_module.MAX_PIXELS)
+    assert seen[0]["format_whitelist"] == "mov,mp4,m4a,3gp,3g2,mj2"
+    assert "aac" not in seen[0]["codec_whitelist"].split(",")
 
 
 def test_frame_size_limit(monkeypatch: pytest.MonkeyPatch) -> None:
