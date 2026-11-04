@@ -110,7 +110,7 @@ run "no_cloudfront_access_by_default" {
   }
 }
 
-run "cloudfront_reads_derived_images_only" {
+run "cloudfront_reads_derived_images_and_videos_only" {
   command = plan
 
   variables {
@@ -121,8 +121,10 @@ run "cloudfront_reads_derived_images_only" {
     condition = toset(data.aws_iam_policy_document.photos.statement[1].resources) == toset([
       "${aws_s3_bucket.photos.arn}/users/*/thumbs/*",
       "${aws_s3_bucket.photos.arn}/users/*/previews/*",
+      "${aws_s3_bucket.photos.arn}/users/*/originals/*.mp4",
+      "${aws_s3_bucket.photos.arn}/users/*/originals/*.mov",
     ])
-    error_message = "CloudFront may read thumbs/ and previews/ only, never originals (FR-DL-1)."
+    error_message = "CloudFront may read thumbs/, previews/ and video originals only, never photo originals (FR-DL-1, FR-VID-5)."
   }
 
   assert {

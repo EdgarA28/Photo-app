@@ -125,17 +125,20 @@ data "aws_iam_policy_document" "photos" {
     }
   }
 
-  # CloudFront OAC (frontend module, 7.1) may read derived images only. Originals stay reachable
-  # only through 5-minute pre-signed download URLs (FR-DL-1), even though /users/* routes here.
+  # CloudFront OAC (frontend module, 7.1) may read derived images, and video originals, which the
+  # player streams from /users/* with the same media cookie or signed URL (FR-VID-5/7/8, 14.8).
+  # Photo originals stay reachable only through 5-minute pre-signed download URLs (FR-DL-1).
   dynamic "statement" {
     for_each = var.cloudfront_distribution_arn == null ? [] : [var.cloudfront_distribution_arn]
 
     content {
-      sid     = "CloudFrontReadDerivedImages"
+      sid     = "CloudFrontReadDerivedImagesAndVideos"
       actions = ["s3:GetObject"]
       resources = [
         "${aws_s3_bucket.photos.arn}/users/*/thumbs/*",
         "${aws_s3_bucket.photos.arn}/users/*/previews/*",
+        "${aws_s3_bucket.photos.arn}/users/*/originals/*.mp4",
+        "${aws_s3_bucket.photos.arn}/users/*/originals/*.mov",
       ]
 
       principals {
