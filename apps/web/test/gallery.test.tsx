@@ -40,6 +40,7 @@ describe("Videos section (FR-VID-11)", () => {
       mediaType: "video",
       contentType: "video/mp4",
       videoUrl: `/users/u/originals/${testId(n)}.mp4`,
+      durationMs: 65_000,
     });
 
   it("lists own videos apart from the Gallery, and its tiles open the viewer in that list", async () => {
@@ -52,7 +53,9 @@ describe("Videos section (FR-VID-11)", () => {
     await renderAt("/videos", { api });
 
     expect(await screen.findByRole("heading", { name: "Videos" })).toBeTruthy();
-    const link = await screen.findByRole("link", { name: "CLIP_5.mp4" });
+    // FR-VID-4: the tile says it's a video and how long; the badge shows it.
+    const link = await screen.findByRole("link", { name: "CLIP_5.mp4, Video, 1:05" });
+    expect(link.querySelector("[data-video-badge]")?.textContent).toBe("1:05");
     expect(link.getAttribute("href")).toBe(`/photos/${testId(5)}?sort=taken-desc&mediaType=video`);
     expect(screen.queryByRole("link", { name: "IMG_0.jpg" })).toBeNull();
     expect(queriesTo(request, "/photos")).toEqual([
@@ -60,6 +63,20 @@ describe("Videos section (FR-VID-11)", () => {
     ]);
     // The map covers places; no place search here.
     expect(screen.queryByRole("combobox", { name: "Search places" })).toBeNull();
+  });
+
+  it("a video that couldn't be processed has no badge", async () => {
+    const { api } = setup({
+      "GET /photos": {
+        items: [{ ...video(5), status: "failed", durationMs: null, thumbUrl: null }],
+        nextCursor: null,
+      },
+    });
+    await renderAt("/videos", { api });
+    const link = await screen.findByRole("link", {
+      name: "CLIP_5.mp4, Video, couldn't be processed",
+    });
+    expect(link.querySelector("[data-video-badge]")).toBeNull();
   });
 
   it("an empty Videos section says so and links to the upload page", async () => {

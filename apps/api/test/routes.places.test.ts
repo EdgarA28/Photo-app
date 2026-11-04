@@ -199,6 +199,8 @@ describe("GET /places/map (13.2h, FR-SRCH-5)", () => {
         lon: -151.215,
         takenAt: "2024-06-01T10:00:00.000Z",
         thumbUrl: `/users/${user}/thumbs/${atSea}.jpg`,
+        mediaType: "photo",
+        durationMs: null,
         placeId: null,
       },
       {
@@ -207,9 +209,34 @@ describe("GET /places/map (13.2h, FR-SRCH-5)", () => {
         lon: 13.41,
         takenAt: "2024-01-01T10:00:00.000Z",
         thumbUrl: `/users/${user}/thumbs/${berlin}.jpg`,
+        mediaType: "photo",
+        durationMs: null,
         placeId: "city:2950159",
       },
     ]);
+  });
+
+  test("a video's pin says so and carries its length (FR-VID-4, 14.6)", async () => {
+    const user = newUserId();
+    const video = newPhoto(user);
+    const { photoId } = await createPending(repos, {
+      ...video,
+      contentType: "video/mp4",
+      originalKey: video.originalKey.replace(/\.jpg$/, ".mp4"),
+      mediaType: "video",
+    });
+    await markReady(db, user, photoId, 1000, "2024-01-02T10:00:00.000Z");
+    await db.client.send(
+      new UpdateCommand({
+        TableName: db.table,
+        Key: { PK: `USER#${user}`, SK: `PHOTO#${photoId}` },
+        UpdateExpression: "SET durationMs = :d",
+        ExpressionAttributeValues: { ":d": 61_500 },
+      }),
+    );
+    await setGps(user, photoId, 52.52, 13.41);
+
+    expect(await pins(user)).toMatchObject([{ photoId, mediaType: "video", durationMs: 61_500 }]);
   });
 
   test("leaves out photos that aren't ready and other users' photos", async () => {

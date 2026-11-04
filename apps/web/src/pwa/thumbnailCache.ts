@@ -9,10 +9,22 @@ export const THUMBNAIL_CACHE_LIMITS = { maxEntries: 3000, maxAgeSeconds: 30 * 24
 
 /**
  * Route match: same-origin `/users/{sub}/thumbs/{photoId}.jpg`, own (media cookie, 7.3) or
- * shared (signed URL, 7.4). Previews and originals are never cached (§12.5).
+ * shared (signed URL, 7.4). Previews and originals are never cached (§12.5); nor are range
+ * requests (14.6): video originals (`originals/{id}.mp4|mov`) play through `Range` requests and
+ * `206` answers, which no route here matches, so the browser fetches them itself, untouched.
  */
-export const isThumbnailRequest = ({ url, sameOrigin }: { url: URL; sameOrigin: boolean }) =>
-  sameOrigin && /^\/users\/[^/]+\/thumbs\/[^/]+$/.test(url.pathname);
+export const isThumbnailRequest = ({
+  url,
+  sameOrigin,
+  request,
+}: {
+  url: URL;
+  sameOrigin: boolean;
+  request?: Request;
+}) =>
+  sameOrigin &&
+  !request?.headers.has("range") &&
+  /^\/users\/[^/]+\/thumbs\/[^/]+$/.test(url.pathname);
 
 /**
  * `cacheKeyWillBeUsed` plugin: stores and looks up thumbnails without the query string. A shared

@@ -6,7 +6,10 @@ import { useEffect, useState, type ReactNode } from "react";
 import { ApiRequestError, errorMessage } from "@/api/errors";
 import { Button } from "@/components/ui/button";
 import { useImageFailed } from "@/components/useImageFailed";
+import { VideoBadge } from "@/components/VideoBadge";
 import { startDownload } from "@/lib/download";
+import { formatDuration } from "@/lib/format";
+import { VideoPlayer } from "@/viewer/VideoPlayer";
 
 // A public photo link (FR-SHR-8): anyone with it sees the photos and can download the originals
 // until the link expires (15 min), without an account. One photo shows full screen; several show
@@ -14,6 +17,19 @@ import { startDownload } from "@/lib/download";
 export const Route = createFileRoute("/s/$token")({
   component: LinkPage,
 });
+
+/** "Photo 2" / "Video 3, 1:05": how a link's item is named (FR-VID-8). */
+const itemLabel = (photo: LinkedPhoto, n: number) =>
+  photo.mediaType === "video"
+    ? `Video ${n}${photo.durationMs === null ? "" : `, ${formatDuration(photo.durationMs)}`}`
+    : `Photo ${n}`;
+
+/** "3 shared photos", "2 shared videos" or "5 shared photos and videos". */
+function sharedTitle(photos: LinkedPhoto[]): string {
+  const videos = photos.filter((photo) => photo.mediaType === "video").length;
+  const kind = videos === 0 ? "photos" : videos === photos.length ? "videos" : "photos and videos";
+  return `${photos.length} shared ${kind}`;
+}
 
 const timeFormat = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
 
@@ -70,13 +86,13 @@ function LinkPage() {
   return (
     <Shell>
       <header className="flex flex-wrap items-baseline gap-x-3 p-4 pb-2">
-        <h1 className="text-lg font-semibold">{photos.length} shared photos</h1>
+        <h1 className="text-lg font-semibold">{sharedTitle(photos)}</h1>
         <p className="text-sm text-white/70">{until}</p>
       </header>
       <ul className="grid grid-cols-3 gap-1 overflow-y-auto p-1 sm:grid-cols-4 lg:grid-cols-6">
         {photos.map((photo, i) => (
           <li key={photo.photoId}>
-            <Thumb photo={photo} label={`Photo ${i + 1}`} onOpen={() => setOpen(i)} />
+            <Thumb photo={photo} label={itemLabel(photo, i + 1)} onOpen={() => setOpen(i)} />
           </li>
         ))}
       </ul>
@@ -116,6 +132,7 @@ function Thumb({
           className="size-full object-cover"
         />
       )}
+      {photo.mediaType === "video" && <VideoBadge durationMs={photo.durationMs} />}
     </button>
   );
 }
@@ -148,6 +165,8 @@ function LargePhoto({
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      // A focused video seeks with the arrow keys (FR-VID-8).
+      if (event.target instanceof HTMLMediaElement && event.key !== "Escape") return;
       if (event.key === "ArrowLeft" && index > 0) onIndex(index - 1);
       else if (event.key === "ArrowRight" && index < photos.length - 1) onIndex(index + 1);
       else if (event.key === "Escape") onClose?.();
@@ -176,7 +195,18 @@ function LargePhoto({
         </header>
       )}
       <div className="relative flex min-h-0 flex-1 items-center justify-center">
-        {broken ? (
+        {photo.mediaType === "video" && photo.videoUrl ? (
+          // FR-VID-8: plays from its signed URL until the link expires.
+          <VideoPlayer
+            key={photo.photoId}
+            src={photo.videoUrl}
+            poster={broken ? null : photo.previewUrl}
+            videoCodec={null}
+            label={photos.length === 1 ? "Shared video" : itemLabel(photo, index + 1)}
+            onDownload={() => download.mutate(photo.photoId)}
+            downloading={download.isPending}
+          />
+        ) : broken ? (
           <Message icon>{goneText}</Message>
         ) : (
           <img
@@ -212,7 +242,7 @@ function LargePhoto({
           </Button>
         )}
       </div>
-      {!broken && (
+      {(!broken || photo.mediaType === "video") && (
         <footer className="flex flex-wrap items-center gap-3 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           <p className="mr-auto text-sm text-white/70">{until}</p>
           {download.isError && (

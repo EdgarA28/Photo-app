@@ -105,6 +105,29 @@ describe("public link page /s/$token (FR-SHR-8)", () => {
   });
   const signedOut = () => fakeAuth({ signedIn: false });
 
+  const linkedVideo = (n: number) => ({
+    ...linked(n),
+    mediaType: "video",
+    durationMs: 5_000,
+    videoUrl: `/users/u/originals/${n}.mp4?Expires=1&Signature=s`,
+  });
+
+  it("a video plays from its signed URL and can be downloaded (FR-VID-8)", async () => {
+    const { api } = fakeApi({
+      [`GET /links/${TOKEN}`]: { photos: [linked(0), linkedVideo(1)], expiresAt },
+    });
+    await renderAt(`/s/${TOKEN}`, { api, auth: signedOut() });
+
+    expect(await screen.findByRole("heading", { name: "2 shared photos and videos" })).toBeTruthy();
+    const tile = screen.getByRole("button", { name: "Video 2, 0:05" });
+    expect(tile.querySelector("[data-video-badge]")?.textContent).toBe("0:05");
+    fireEvent.click(tile);
+    const video = await waitFor(() => document.querySelector("video")!);
+    expect(video.getAttribute("src")).toBe(linkedVideo(1).videoUrl);
+    expect(video.getAttribute("poster")).toBe(linkedVideo(1).previewUrl);
+    expect(screen.getByRole("button", { name: "Download original" })).toBeTruthy();
+  });
+
   it("one photo: shown full screen and downloadable, signed out", async () => {
     const { api, request } = fakeApi({
       [`GET /links/${TOKEN}`]: { photos: [linked(0)], expiresAt },

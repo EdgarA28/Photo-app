@@ -110,7 +110,10 @@ export interface PendingMarker {
  */
 const PENDING_MARKER_TTL_DAYS = 30;
 
-export type LocatedPhoto = Pick<PhotoRecord, "photoId" | "takenAt" | "placeIds"> & {
+export type LocatedPhoto = Pick<
+  PhotoRecord,
+  "photoId" | "takenAt" | "placeIds" | "mediaType" | "durationMs"
+> & {
   latitude: number;
   longitude: number;
 };
@@ -328,7 +331,8 @@ export function photosRepo(db: Db) {
         KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
         FilterExpression:
           "attribute_exists(latitude) AND #status = :ready AND attribute_not_exists(trashedAt)",
-        ProjectionExpression: "photoId, takenAt, latitude, longitude, placeIds",
+        ProjectionExpression:
+          "photoId, takenAt, latitude, longitude, placeIds, mediaType, durationMs",
         ExpressionAttributeNames: { "#status": "status" },
         ExpressionAttributeValues: {
           ":pk": userPk(userId),

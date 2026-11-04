@@ -4,6 +4,8 @@ import { useWindowVirtualizer } from "@tanstack/react-virtual";
 import { Check, ImageOff, LoaderCircle } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useImageFailed } from "@/components/useImageFailed";
+import { VideoBadge } from "@/components/VideoBadge";
+import { videoLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { justifyRows, type Row } from "./justify";
 import { monthSections } from "./months";
@@ -166,8 +168,15 @@ function PhotoTile({
 }) {
   const selected = selection?.selected.has(photo.photoId) ?? false;
   const failed = photo.status === "failed";
-  const label =
-    photo.status === "ready" ? photo.fileName : `${photo.fileName}, ${STATUS_LABELS[photo.status]}`;
+  const video = photo.mediaType === "video";
+  const label = [
+    photo.fileName,
+    // A video says so, with its length once processed (FR-VID-4).
+    video && videoLabel(photo.durationMs),
+    photo.status !== "ready" && STATUS_LABELS[photo.status],
+  ]
+    .filter(Boolean)
+    .join(", ");
   const className = cn(
     // A press shows nothing until it selects (no Android tap highlight), and no iOS link preview /
     // image callout, link dragging or text selection on a long press.
@@ -199,7 +208,7 @@ function PhotoTile({
       // Keeps album/sort, so the viewer's prev/next follow this list (FR-GAL-4).
       search={viewerSearch ?? ((prev) => prev)}
       aria-label={label}
-      title={failed ? "This photo couldn't be processed" : undefined}
+      title={failed ? `This ${video ? "video" : "photo"} couldn't be processed` : undefined}
       draggable={false}
       {...tile}
     >
@@ -254,6 +263,9 @@ function TileContent({ photo }: { photo: Photo }) {
           onError={onError}
           className="size-full object-cover"
         />
+      )}
+      {photo.mediaType === "video" && photo.status === "ready" && (
+        <VideoBadge durationMs={photo.durationMs} />
       )}
     </>
   );

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MEDIA_TYPES } from "../constants";
 import { idSchema, isoDateTimeSchema } from "./common";
 
 /**
@@ -48,6 +49,12 @@ export const photoLocationSchema = z.object({
   lon: z.number().min(-180).max(180),
   takenAt: isoDateTimeSchema,
   thumbUrl: z.string(),
+  /**
+   * A video's pin shows a play mark and its length (FR-VID-4, 14.6). Missing (an API from before
+   * videos) reads as a photo.
+   */
+  mediaType: z.enum(MEDIA_TYPES).default("photo"),
+  durationMs: z.number().int().nonnegative().nullable().default(null),
   /** The town it was taken in (a `city:` place); null without a town nearby. */
   placeId: placeIdSchema.nullable(),
 });

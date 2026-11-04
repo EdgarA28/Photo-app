@@ -54,6 +54,19 @@ describe("trash page (FR-DEL-3)", () => {
     expect(screen.getByRole("button", { name: "IMG_2.jpg, 12 days left" })).toBeTruthy();
   });
 
+  it("marks a trashed video with its length (FR-VID-6)", async () => {
+    const video = {
+      ...trashed(3, 1),
+      fileName: "CLIP_3.mp4",
+      mediaType: "video",
+      contentType: "video/mp4",
+      durationMs: 754_000,
+    };
+    await renderAt("/trash", { api: setup([video]).api });
+    const tile = await screen.findByRole("button", { name: /^CLIP_3\.mp4, Video, 12:34, / });
+    expect(tile.querySelector("[data-video-badge]")?.textContent).toBe("12:34");
+  });
+
   it("says when the trash is empty", async () => {
     await renderAt("/trash", { api: setup([]).api });
     expect(await screen.findByText("The trash is empty.")).toBeTruthy();

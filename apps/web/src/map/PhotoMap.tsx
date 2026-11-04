@@ -14,8 +14,9 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { VideoBadge } from "@/components/VideoBadge";
 import { cn } from "@/lib/utils";
-import { markerElement } from "./markers";
+import { markerElement, pinKind } from "./markers";
 import { mapStyleUrl } from "./style";
 
 setWorkerUrl(workerUrl);
@@ -194,11 +195,12 @@ export function PhotoMap({
               <li key={photo.photoId} className="shrink-0">
                 <button
                   type="button"
-                  aria-label={`Open photo from ${dateFormat.format(new Date(photo.takenAt))}`}
+                  aria-label={`Open ${pinKind(photo)} from ${dateFormat.format(new Date(photo.takenAt))}`}
                   onClick={() => onOpen(photo)}
-                  className="block size-16 overflow-hidden rounded-md bg-muted outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                  className="relative block size-16 overflow-hidden rounded-md bg-muted outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                 >
                   <img src={photo.thumbUrl} alt="" className="size-full object-cover" />
+                  {photo.mediaType === "video" && <VideoBadge durationMs={photo.durationMs} />}
                 </button>
               </li>
             ))}

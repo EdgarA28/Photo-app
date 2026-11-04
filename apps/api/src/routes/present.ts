@@ -65,6 +65,8 @@ export function toPhotoLocation(userId: string, record: LocatedPhoto): PhotoLoca
     lon: round(record.longitude),
     takenAt: record.takenAt,
     thumbUrl: `/${thumbKey(userId, record.photoId)}`,
+    mediaType: record.mediaType ?? "photo",
+    durationMs: record.durationMs ?? null,
     placeId: [...(record.placeIds ?? [])].find((id) => id.startsWith("city:")) ?? null,
   };
 }

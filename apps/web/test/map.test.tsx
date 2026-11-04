@@ -35,6 +35,8 @@ const pin = (n: number, lat: number, lon: number): PhotoLocation => ({
   lon,
   takenAt: `2024-0${n}-01T10:00:00.000Z`,
   thumbUrl: `/users/u/thumbs/${testId(n)}.jpg`,
+  mediaType: "photo",
+  durationMs: null,
   placeId: "city:1862627",
 });
 
@@ -99,6 +101,15 @@ describe("map pins (13.2h)", () => {
     expect(cluster.getAttribute("aria-label")).toBe("12 photos");
     expect(cluster.textContent).toBe("12");
     expect(markerElement(pin(1, 0, 0), 1500, () => {}).textContent).toBe("1k");
+  });
+
+  it("marks a single video with a play mark and its length (FR-VID-4)", () => {
+    const video = { ...pin(1, 0, 0), mediaType: "video" as const, durationMs: 65_000 };
+    const single = markerElement(video, 1, () => {});
+    expect(single.getAttribute("aria-label")).toMatch(/^Open video from /);
+    expect(single.textContent).toBe("▶ 1:05");
+    // A cluster shows its count only, whatever its cover is.
+    expect(markerElement(video, 3, () => {}).textContent).toBe("3");
   });
 
   it("follows the colour scheme", () => {

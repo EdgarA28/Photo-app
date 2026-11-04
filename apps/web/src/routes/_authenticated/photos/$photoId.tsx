@@ -64,6 +64,7 @@ import {
   shownPhotos,
 } from "@/queries/photos";
 import { saveSummary, sharedAlbumsQuery, useSaveSharedPhotos } from "@/queries/shares";
+import { VideoPlayer } from "@/viewer/VideoPlayer";
 import { ZoomableImage } from "@/viewer/ZoomableImage";
 
 /** Horizontal travel that counts as a swipe; it must also be mostly sideways. */
@@ -72,6 +73,9 @@ const SWIPE_MIN_PX = 50;
 const LOOKAHEAD_PHOTOS = 3;
 /** How far an album or place list is paged to find the photo opened (from the map, 13.2h). */
 const MAX_SEARCH_PAGES = 20;
+
+/** "photo" or "video", for the viewer's texts (FR-VID-5). */
+const kindOf = (photo: Photo) => (photo.mediaType === "video" ? "video" : "photo");
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 
@@ -169,6 +173,8 @@ function Viewer() {
     const onKey = (event: KeyboardEvent) => {
       if (confirming || overlay || event.defaultPrevented) return;
       if (event.altKey || event.ctrlKey || event.metaKey) return;
+      // A focused video seeks with the arrow keys (FR-VID-5); Escape still closes.
+      if (event.target instanceof HTMLMediaElement && event.key !== "Escape") return;
       if (event.key === "ArrowLeft") void show(prev);
       else if (event.key === "ArrowRight") void show(next);
       else if (event.key === "Escape") close();
@@ -249,8 +255,8 @@ function Viewer() {
           loadingPreview={loadingPreview}
           keys={!confirming && !overlay}
         />
-        <NavButton label="Previous photo" target={prev} side="left" />
-        <NavButton label="Next photo" target={next} side="right" />
+        <NavButton label={`Previous ${prev ? kindOf(prev) : "photo"}`} target={prev} side="left" />
+        <NavButton label={`Next ${next ? kindOf(next) : "photo"}`} target={next} side="right" />
       </div>
     </main>
   );
@@ -387,7 +393,7 @@ function PhotoActions({
           <Button
             variant="ghost"
             size="icon-lg"
-            aria-label="Delete photo"
+            aria-label={`Delete ${kindOf(photo)}`}
             onClick={() => setConfirming(true)}
             className={iconButton}
           >
@@ -395,7 +401,7 @@ function PhotoActions({
           </Button>
           <AlertDialogContent>
             <AlertDialogHeader>
-              <AlertDialogTitle>Move this photo to the trash?</AlertDialogTitle>
+              <AlertDialogTitle>Move this {kindOf(photo)} to the trash?</AlertDialogTitle>
               <AlertDialogDescription>
                 {photo.fileName} will be removed from your library and from all albums, and deleted
                 for good after {TRASH_RETENTION_DAYS} days. Until then you can restore it from the
@@ -591,19 +597,26 @@ function PhotoView({
 }) {
   const { api } = Route.useRouteContext();
   const [broken, onError] = useImageFailed(photo.previewUrl);
+  const kind = kindOf(photo);
   if (photo.status === "pending") {
     return (
       <Message icon={<LoaderCircle className="size-8 motion-safe:animate-spin" />}>
-        This photo is still processing.
+        This {kind} is still processing.
       </Message>
     );
   }
   if (photo.status === "failed") {
     return (
       <Message icon={<ImageOff className="size-8 text-red-400" />}>
-        This photo couldn't be processed. The original file is kept.
+        This {kind} couldn't be processed. The original file is kept.
       </Message>
     );
+  }
+  if (photo.mediaType === "video" && !loadingPreview) {
+    if (!photo.videoUrl) {
+      return <Message icon={<ImageOff className="size-8" />}>The video can't be shown.</Message>;
+    }
+    return <VideoView photo={photo} album={album} src={photo.videoUrl} />;
   }
   if (loadingPreview && photo.thumbUrl) {
     return (
@@ -626,6 +639,37 @@ function PhotoView({
       src={photo.previewUrl}
       keys={keys}
       onError={onError}
+    />
+  );
+}
+
+/**
+ * A video plays in the browser's player, no zoom (FR-VID-5); a codec this browser can't play
+ * offers the download of the original instead (V1 has no playback copy, B-7).
+ */
+function VideoView({
+  photo,
+  album,
+  src,
+}: {
+  photo: Photo;
+  album: string | undefined;
+  src: string;
+}) {
+  const { api } = Route.useRouteContext();
+  const download = useMutation({
+    mutationFn: () => api.photos.downloadUrl(photo.photoId, album),
+    onSuccess: ({ url }) => startDownload(url),
+  });
+  return (
+    <VideoPlayer
+      src={src}
+      poster={photo.previewUrl}
+      videoCodec={photo.videoCodec}
+      label={photo.fileName}
+      onDownload={() => download.mutate()}
+      downloading={download.isPending}
+      downloadError={download.isError ? errorMessage(download.error) : null}
     />
   );
 }

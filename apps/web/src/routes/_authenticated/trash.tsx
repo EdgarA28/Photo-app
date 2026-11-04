@@ -16,8 +16,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { useImageFailed } from "@/components/useImageFailed";
+import { VideoBadge } from "@/components/VideoBadge";
 import { SelectionBar } from "@/gallery/SelectionBar";
 import { useSelection } from "@/gallery/useSelection";
+import { videoLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
   daysLeft,
@@ -125,7 +127,13 @@ function TrashTile({
     <button
       type="button"
       aria-pressed={selected}
-      aria-label={`${photo.fileName}, ${left}`}
+      aria-label={[
+        photo.fileName,
+        photo.mediaType === "video" && videoLabel(photo.durationMs),
+        left,
+      ]
+        .filter(Boolean)
+        .join(", ")}
       onClick={onToggle}
       className="relative block aspect-square w-full overflow-hidden rounded-sm bg-muted outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
     >
@@ -146,6 +154,7 @@ function TrashTile({
       <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[0.6875rem] font-medium text-white tabular-nums">
         {left}
       </span>
+      {photo.mediaType === "video" && <VideoBadge durationMs={photo.durationMs} />}
       <span
         aria-hidden
         className={cn(

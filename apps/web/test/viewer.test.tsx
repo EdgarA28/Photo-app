@@ -392,3 +392,138 @@ describe("delete (FR-DEL-1/2)", () => {
     expect(await screen.findByRole("button", { name: "Delete photo" })).toBeTruthy();
   });
 });
+
+describe("videos in the viewer (FR-VID-5, FR-VID-7, 14.6)", () => {
+  const original = (owner: string, n: number) => `/users/${owner}/originals/${testId(n)}.mp4`;
+  const video = (n: number, overrides: Record<string, unknown> = {}) =>
+    testPhoto(n, {
+      fileName: `VID_${n}.mp4`,
+      mediaType: "video",
+      contentType: "video/mp4",
+      durationMs: 65_000,
+      videoCodec: "h264",
+      playable: true,
+      videoUrl: original("u", n),
+      ...overrides,
+    });
+  const videos = (responses: Record<string, unknown> = {}) =>
+    setup({
+      "GET /photos": (query: { mediaType?: string }) =>
+        query?.mediaType === "video"
+          ? { items: [video(0), video(1), video(2)], nextCursor: null }
+          : testPhotoPage(0, 3),
+      ...responses,
+    });
+  const player = () => document.querySelector("video");
+
+  /** jsdom plays nothing: `canPlayType` answers as a browser that decodes H.264 only would. */
+  function decodesH264Only() {
+    vi.spyOn(HTMLMediaElement.prototype, "canPlayType").mockImplementation((type: string) =>
+      type.includes("avc1") ? "probably" : "",
+    );
+  }
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("plays the original with the browser's player, the preview as its poster, no zoom", async () => {
+    decodesH264Only();
+    await renderAt(`/photos/${testId(1)}?mediaType=video`, { api: videos().api });
+    await screen.findByRole("heading", { name: "VID_1.mp4" });
+    const element = player()!;
+    expect(element.getAttribute("src")).toBe(original("u", 1));
+    expect(element.getAttribute("poster")).toBe(testPhoto(1).previewUrl);
+    expect(element.hasAttribute("controls")).toBe(true);
+    expect(element.hasAttribute("playsinline")).toBe(true);
+    expect(element.getAttribute("preload")).toBe("metadata");
+    expect(screen.queryByRole("img")).toBeNull();
+    expect(screen.getByRole("link", { name: "Next video" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Delete video" })).toBeTruthy();
+  });
+
+  it("swipes to the next video, except on the controls bar (seek)", async () => {
+    decodesH264Only();
+    await renderAt(`/photos/${testId(1)}?mediaType=video`, { api: videos().api });
+    await screen.findByRole("heading", { name: "VID_1.mp4" });
+    vi.spyOn(HTMLVideoElement.prototype, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 0, 400, 600),
+    );
+    // A drag along the bottom 64 px seeks.
+    fireEvent.pointerDown(player()!, { pointerId: 1, isPrimary: true, clientX: 300, clientY: 580 });
+    fireEvent.pointerUp(player()!, { pointerId: 1, isPrimary: true, clientX: 100, clientY: 580 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(heading()).toBe("VID_1.mp4");
+
+    swipe(player()!, -120);
+    await waitFor(() => expect(heading()).toBe("VID_2.mp4"));
+  });
+
+  it("leaves the arrow keys to a focused video, Escape still closes", async () => {
+    decodesH264Only();
+    const { router } = await renderAt(`/photos/${testId(1)}?mediaType=video`, {
+      api: videos().api,
+    });
+    await screen.findByRole("heading", { name: "VID_1.mp4" });
+    fireEvent.keyDown(player()!, { key: "ArrowRight" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(heading()).toBe("VID_1.mp4");
+    fireEvent.keyDown(player()!, { key: "Escape" });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/videos"));
+  });
+
+  it("offers the download when the browser can't decode the codec (HEVC outside Safari)", async () => {
+    decodesH264Only();
+    const clicked: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicked.push(this.href);
+    });
+    const url = "https://photos.s3.amazonaws.com/users/u/originals/x.mov?X-Amz-Signature=abc";
+    const { api } = videos({
+      "GET /photos": {
+        items: [video(0, { videoCodec: "hevc", playable: false, contentType: "video/quicktime" })],
+        nextCursor: null,
+      },
+      [`GET /photos/${testId(0)}/download-url`]: { url, expiresAt: "2026-10-24T12:05:00.000Z" },
+    });
+    await renderAt(`/photos/${testId(0)}?mediaType=video`, { api });
+    expect(await screen.findByText("This video can't play in this browser.")).toBeTruthy();
+    expect(player()).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Download to watch it" }));
+    await waitFor(() => expect(clicked).toEqual([url]));
+  });
+
+  it("falls back to the download when the video fails to load", async () => {
+    decodesH264Only();
+    await renderAt(`/photos/${testId(1)}?mediaType=video`, { api: videos().api });
+    await screen.findByRole("heading", { name: "VID_1.mp4" });
+    fireEvent.error(player()!);
+    expect(await screen.findByText("This video can't play in this browser.")).toBeTruthy();
+  });
+
+  it("plays a shared album's video from the signed URL fetched through the album (FR-VID-7)", async () => {
+    decodesH264Only();
+    const signed = `${original("owner", 50)}?Expires=1&Signature=s&Key-Pair-Id=K`;
+    const { api } = setup({
+      [`GET /albums/${album}/photos`]: {
+        items: [video(50, { previewUrl: null, videoUrl: null, ownerId: null })],
+        nextCursor: null,
+      },
+      [`GET /photos/${testId(50)}`]: video(50, { videoUrl: signed }),
+    });
+    await renderAt(`/photos/${testId(50)}?album=${album}`, { api });
+    await screen.findByRole("heading", { name: "VID_50.mp4" });
+    await waitFor(() => expect(player()?.getAttribute("src")).toBe(signed));
+  });
+
+  it("says a video is still processing", async () => {
+    const { api } = videos({
+      "GET /photos": {
+        items: [video(0, { status: "pending", videoUrl: null, durationMs: null })],
+        nextCursor: null,
+      },
+    });
+    await renderAt(`/photos/${testId(0)}?mediaType=video`, { api });
+    expect(await screen.findByText("This video is still processing.")).toBeTruthy();
+  });
+});

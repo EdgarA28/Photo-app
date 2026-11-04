@@ -23,6 +23,15 @@ describe("service worker thumbnail route (9.2, §12.5)", () => {
     expect(match("/users/abc/thumbs/x/01J9ZK.jpg")).toBe(false);
   });
 
+  it("leaves video originals and range requests to the browser (14.6, FR-VID-5)", () => {
+    expect(match("/users/abc-123/originals/01J9ZK.mp4")).toBe(false);
+    expect(match("/users/abc-123/originals/01J9ZK.mov?Expires=1&Signature=x")).toBe(false);
+    const url = new URL("/users/abc-123/thumbs/01J9ZK.jpg", origin);
+    const ranged = new Request(url, { headers: { Range: "bytes=0-" } });
+    expect(isThumbnailRequest({ url, sameOrigin: true, request: ranged })).toBe(false);
+    expect(isThumbnailRequest({ url, sameOrigin: true, request: new Request(url) })).toBe(true);
+  });
+
   it("ignores other origins", () => {
     expect(match("/users/abc-123/thumbs/01J9ZK.jpg", false)).toBe(false);
   });
