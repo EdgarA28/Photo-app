@@ -90,8 +90,8 @@ module "api" {
   issuer_url          = module.auth.issuer_url
   audience            = [module.auth.web_client_id]
 
-  # FR-ACC-2, spec §13.2: 2 GB in dev.
-  default_quota_bytes = 2 * 1024 * 1024 * 1024
+  # FR-ACC-2, spec §13.2: 5 GB in dev; one quota for photos and videos (FR-VID-3, 14.7).
+  default_quota_bytes = 5 * 1024 * 1024 * 1024
 
   # Media cookies (7.3): signed for the CloudFront origin with the frontend module's key.
   media_origin                     = module.frontend.url

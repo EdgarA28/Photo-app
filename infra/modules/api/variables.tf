@@ -69,7 +69,7 @@ variable "audience" {
 }
 
 variable "default_quota_bytes" {
-  description = "DEFAULT_QUOTA_BYTES: quota for users without an override (FR-ACC-2; spec §13.2: 2 GB dev, 10 GB prod)."
+  description = "DEFAULT_QUOTA_BYTES: quota for users without an override (FR-ACC-2; spec §13.2: 5 GB dev, 25 GB prod since 14.7)."
   type        = number
 
   validation {

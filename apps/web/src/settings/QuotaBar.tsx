@@ -7,8 +7,9 @@ const QUOTA_WARN = 0.8;
 const QUOTA_FULL = 0.95;
 
 /**
- * Storage used against the quota (FR-ACC-1). Counts stored photos (`bytesUsed`); uploads in
- * progress are reserved on the server (5.6b) but `GET /me` doesn't report them.
+ * Storage used against the quota (FR-ACC-1). Counts stored photos and videos (`bytesUsed`, one
+ * quota for both, FR-VID-3); uploads in progress are reserved on the server (5.6b) but `GET /me`
+ * doesn't report them. With videos, a line says how much of it they take (14.7).
  */
 export function QuotaBar({ usage }: { usage: Usage }) {
   const share = Math.min(usage.bytesUsed / usage.quotaBytes, 1);
@@ -22,9 +23,7 @@ export function QuotaBar({ usage }: { usage: Usage }) {
           <span className="font-medium">{formatBytes(usage.bytesUsed)}</span>
           <span className="text-muted-foreground"> of {formatBytes(usage.quotaBytes)} used</span>
         </p>
-        <p className="text-muted-foreground tabular-nums">
-          {usage.photoCount} {usage.photoCount === 1 ? "photo" : "photos"}
-        </p>
+        <p className="text-muted-foreground tabular-nums">{countText(usage)}</p>
       </div>
       <div
         role="meter"
@@ -45,9 +44,27 @@ export function QuotaBar({ usage }: { usage: Usage }) {
           style={{ width: `${usage.bytesUsed > 0 ? Math.max(percent, 1) : 0}%` }}
         />
       </div>
+      {usage.videoCount > 0 && (
+        <p className="text-sm text-muted-foreground">
+          {usage.videoCount === 1 ? "1 video uses" : `${usage.videoCount} videos use`}{" "}
+          {formatBytes(usage.videoBytes)}
+        </p>
+      )}
       {level === "full" && (
-        <p className="text-sm text-destructive">Almost full — delete photos to make room.</p>
+        <p className="text-sm text-destructive">
+          Almost full — delete {usage.videoCount > 0 ? "photos or videos" : "photos"} to make room.
+        </p>
       )}
     </div>
   );
+}
+
+/**
+ * "12 photos", or "15 photos and videos" once there are videos: `photoCount` counts both, and
+ * trashed ones too (FR-DEL-3), while `videoCount` is the Videos section only, so the photos
+ * aren't worked out by subtraction.
+ */
+function countText({ photoCount, videoCount }: Usage): string {
+  if (videoCount > 0) return `${photoCount} photos and videos`;
+  return `${photoCount} ${photoCount === 1 ? "photo" : "photos"}`;
 }

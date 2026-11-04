@@ -232,7 +232,13 @@ export const testMe = {
   name: "Test User",
   // Set, so the first-login prompt (8.15) stays out of the way; its tests use `username: null`.
   username: "test.user",
-  usage: { bytesUsed: 1536 * 1024, photoCount: 3, quotaBytes: 2 * 1024 ** 3 },
+  usage: {
+    bytesUsed: 1536 * 1024,
+    photoCount: 3,
+    quotaBytes: 2 * 1024 ** 3,
+    videoCount: 0,
+    videoBytes: 0,
+  },
 };
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";

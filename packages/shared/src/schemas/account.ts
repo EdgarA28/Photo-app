@@ -3,8 +3,16 @@ import { isoDateTimeSchema, userIdSchema, usernameSchema } from "./common";
 
 export const usageSchema = z.object({
   bytesUsed: z.number().int().nonnegative(),
+  /** Photos and videos together (§8.2: one counter). */
   photoCount: z.number().int().nonnegative(),
   quotaBytes: z.number().int().positive(),
+  /**
+   * The ready videos in the Videos section (14.7, FR-VID-3), part of `photoCount` and
+   * `bytesUsed`; videos in the trash count only in those totals (FR-DEL-3). Missing (an API from
+   * before videos) reads as none.
+   */
+  videoCount: z.number().int().nonnegative().default(0),
+  videoBytes: z.number().int().nonnegative().default(0),
 });
 export type Usage = z.infer<typeof usageSchema>;
 

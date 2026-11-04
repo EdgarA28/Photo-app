@@ -13,10 +13,11 @@ export function meRoutes(app: Hono<AppEnv>, { repos, users, config }: Deps): voi
   /** Profile, usage and quota (FR-ACC-1, FR-ACC-2), and the username if set (FR-ACC-3). */
   app.get("/me", async (c) => {
     const userId = c.get("userId");
-    const [profile, usage, appProfile] = await Promise.all([
+    const [profile, usage, appProfile, videos] = await Promise.all([
       users.getProfile(userId),
       repos.usage.get(userId),
       repos.usernames.getProfile(userId),
+      repos.photos.videoUsage(userId),
     ]);
     // A valid token for a user deleted from the pool: treat like any other bad credential.
     if (!profile) throw new AppError(401, "UNAUTHORIZED", "Authentication required");
@@ -30,6 +31,9 @@ export function meRoutes(app: Hono<AppEnv>, { repos, users, config }: Deps): voi
         bytesUsed: usage.bytesUsed,
         photoCount: usage.photoCount,
         quotaBytes: usage.quotaBytes ?? config.defaultQuotaBytes,
+        // Never more than the totals: a video counted by Usage moments after this read, say.
+        videoCount: Math.min(videos.count, usage.photoCount),
+        videoBytes: Math.min(videos.bytes, usage.bytesUsed),
       },
     };
     return c.json(body);

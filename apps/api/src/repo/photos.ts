@@ -323,6 +323,29 @@ export function photosRepo(db: Db) {
     },
 
     /**
+     * The caller's ready videos, counted and summed for GET /me (14.7, FR-VID-3): Usage keeps one
+     * `photoCount`/`bytesUsed` for both kinds (§8.2), so the videos' share is read from their own
+     * list (GSI1 `VIDEOS#{userId}`, FR-VID-11). Videos are few and large under the quota, so the
+     * query stays small. Pending and failed ones aren't counted (nor in Usage, until ready).
+     * Trashed ones have left the list but still count in Usage until purged (FR-DEL-3): this is
+     * what the Videos section holds, not every byte of video in `bytesUsed`.
+     */
+    async videoUsage(userId: string): Promise<{ count: number; bytes: number }> {
+      const items = await queryAll(db, {
+        IndexName: "GSI1",
+        KeyConditionExpression: "GSI1PK = :pk",
+        FilterExpression: "#status = :ready",
+        ProjectionExpression: "sizeBytes",
+        ExpressionAttributeNames: { "#status": "status" },
+        ExpressionAttributeValues: { ":pk": galleryPk(userId, "video"), ":ready": "ready" },
+      });
+      return {
+        count: items.length,
+        bytes: items.reduce((sum, item) => sum + Number(item.sizeBytes ?? 0), 0),
+      };
+    },
+
+    /**
      * Ready photos with GPS for the map (13.2h), newest first. Reads the user's whole photo
      * partition (bounded by the quota) and keeps only the few attributes a pin needs.
      */

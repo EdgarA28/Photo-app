@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Version** | 0.50 |
-| **Date** | 2026-11-03 |
+| **Version** | 0.51 |
+| **Date** | 2026-11-04 |
 | **Owner** | Edgar |
 | **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5), videos (Phase 14) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
 
@@ -301,7 +301,7 @@ IDs are stable — reference them in issues, PRs and tests.
 | ID | Requirement |
 |---|---|
 | FR-ACC-1 | Users can see their storage usage and quota. |
-| FR-ACC-2 | Default quota: 10 GB per user (configurable per environment and per user). |
+| FR-ACC-2 | Default quota per user, configurable per environment and per user: 5 GB dev, 25 GB prod since Phase 14 (14.7; was 2 / 10 GB), one quota for photos and videos (FR-VID-3). |
 | FR-ACC-3 | Users can choose a unique username (optional, changeable). 3–30 characters `a-z 0-9 . _`, starting and ending with a letter or digit, compared case-insensitively; reserved names are refused. A released username stays held for its former owner for 30 days (D-8). |
 
 ### 6.7 PWA
@@ -475,7 +475,7 @@ Access patterns:
 |---|---|---|
 | `POST` | `/session/media-cookie` | Set CloudFront signed cookies for `/users/{userId}/*` |
 | `DELETE` | `/session/media-cookie` | Expire the media cookies (logout); `204`, idempotent |
-| `GET` | `/me` | Profile (incl. `username`), usage and quota |
+| `GET` | `/me` | Profile (incl. `username`), usage and quota; usage counts photos and videos together, `videoCount` / `videoBytes` say how much of it is the Videos section (14.7) |
 | `PUT` | `/me/username` | Set or change own username `{username}`; `409 USERNAME_TAKEN` if someone else has it |
 | `POST` | `/photos/upload-url` | Body `{fileName, contentType, sizeBytes}` → `{photoId, upload: {url, fields}}`; creates `pending` item, checks quota |
 | `POST` | `/videos/uploads` | Start a video upload (FR-VID-1–3): body `{fileName, contentType, sizeBytes}` → `201 {photoId, uploadId, partBytes, partCount}`; same quota check and `pending` item as `upload-url`, plus `CreateMultipartUpload` |
@@ -735,7 +735,7 @@ All resources tagged `Project=photo-app`, `Environment={env}`, `ManagedBy=opento
 | | dev | prod |
 |---|---|---|
 | Domain | CloudFront default domain or `dev.photos.<domain>` | `photos.<domain>` |
-| Quota default | 2 GB (5 GB with Phase 14) | 10 GB (25 GB with Phase 14, confirmed in Phase 11) |
+| Quota default | 5 GB (since 14.7; was 2 GB) | 25 GB (since 14.7, to be confirmed in Phase 11; was 10 GB) |
 | DynamoDB PITR | off | on |
 | Photo bucket versioning | off | on (with noncurrent-version expiry) |
 | WAF | off | on |
@@ -850,7 +850,7 @@ Indicative AWS list prices (us-east-1, 2026). Small scale (≈ 10 users, ≈ 100
 | Route 53 hosted zone (if used) | $0.50 |
 | **Total** | **≈ $2–4** |
 
-Main cost driver: storage, growing roughly linearly with photos. Videos (Phase 14) grow it much faster (1080p ≈ 100 MB/min, 4K ≈ 400 MB/min): the same ~$0.0125–0.023 per GB-month; playing them uses CloudFront traffic (free up to 1 TB/month); the video Lambda needs seconds per video (within the free tier at this scale). Risks: egress of originals beyond free tiers, WAF (≈ $5+/month when enabled), CloudWatch log volume.
+Main cost driver: storage, growing roughly linearly with photos. **Videos** (Phase 14) grow it much faster (1080p ≈ 60–130 MB/min, 4K ≈ 200–400 MB/min) at the same ~$0.0125–0.023 per GB-month (a played video returns to the Frequent tier for 30 days); playing them is CloudFront traffic at the original's bitrate (free up to 1 TB/month, ≈ $0.085/GB beyond); the video Lambda takes a few seconds per video (≈ $0.0001, within the free tier here); a V2 playback copy (14.9) would cost ≈ $0.002–0.003 per minute to transcode on Lambda plus its storage. With the 14.7 defaults (5 GB dev, 25 GB prod), ~10 prod users filling their quota would store ~250 GB ≈ $3–6/month, about the $5 budget. Details and the 1M-user view: `docs/SCALING.md` §3.7. Risks: egress of originals and videos beyond free tiers, WAF (≈ $5+/month when enabled), CloudWatch log volume.
 
 ---
 
@@ -899,6 +899,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.36 | 2026-11-01 | Continue an interrupted large batch by picking it again (13.1f, §12.4) |
 | 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.38 | 2026-11-01 | Less gallery polling while uploads run: 15 s instead of 3 s, refreshes during a batch only mark lists stale (13.1j, §12.4) |
+| 0.51 | 2026-11-04 | 14.7: quota defaults 5 GB dev / 25 GB prod (FR-ACC-2, §13.2), `GET /me` usage adds `videoCount` / `videoBytes` (§9), video costs in §16 and `docs/SCALING.md` §3.7 |
 | 0.50 | 2026-11-04 | FR-VID-11 (user request): photos and videos separate in the library, Gallery = photos, new Videos section (`/videos`), albums / map / places mixed; FR-VID-4 adjusted; §8.2 `VIDEOS#{userId}` GSI1 partition; §9 `mediaType` on `/photos` and place photos; §12.1 routes |
 | 0.49 | 2026-11-03 | §10.2: the thumbnail rule keeps matching all originals (EventBridge rejected per-extension wildcards), FFmpeg whitelists + 40 MP frame limit (security review); no requirement changes |
 | 0.48 | 2026-11-03 | §10.2 video service as built (14.3): PyAV instead of ffmpeg/ffprobe executables (GPL FFmpeg build, not distributed), ranged S3 reads instead of a pre-signed URL (no `/tmp`, 256 MB read limit), codec allow-list, iPhone creation date preferred, poster at 1 s or half the length, HDR not tone-mapped, separate Lambda package; no requirement changes |

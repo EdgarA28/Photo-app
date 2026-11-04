@@ -95,7 +95,25 @@ DynamoDB limits a single partition to about 1,000 WCU/s (writes), and a throttle
 | P2 | 🔴 | Load test a mass import in dev; CloudWatch alarms on DynamoDB throttling, Lambda throttles, DLQ depth, S3 5xx | Find limits before users do |
 | P3 | 🟢 | Global uploads: S3 Transfer Acceleration or regional upload buckets | Uploads all go to us-east-1 (viewing is already served by CloudFront) |
 | P4 | 🟢 | Cross-region backup copy of originals (Glacier Instant Retrieval in the target region) | Protects against losing a region or a buggy release; ~+$40k/month at 10 PB. Business decision |
-| P5 | 🟢 | Videos: multipart upload, transcoding pipeline | A 100 GB tier attracts video; the current flow is a single 50 MB POST |
+| P5 | 🟢 | Videos: ~~multipart upload~~ (done, Phase 14 V1), playback copy / transcoding (14.9, V2), see §3.7 | A 100 GB tier attracts video; videos change storage and traffic far more than compute |
+
+### 3.7 Videos (Phase 14, added 2026-11-04 with 14.7)
+
+V1 stores the original (up to 2 GB, MP4/MOV), makes a poster frame and plays the original through CloudFront. One quota covers photos and videos (FR-VID-3): defaults **5 GB dev, 25 GB prod**. What changes:
+
+| | Photos | Videos | Note |
+|---|---|---|---|
+| Size | ~3 MB each | 1080p ≈ 60–130 MB/min (HEVC–H.264), 4K ≈ 200–400 MB/min | One minute of 4K ≈ 100 photos. Videos fill a quota fast: 25 GB ≈ 1–2 h of phone 1080p |
+| Storage | Intelligent-Tiering | Same, but a played video moves back to the Frequent tier ($0.021–0.023/GB) for 30 days | Old, unwatched videos still drop to Archive Instant Access ($0.004/GB) |
+| Monitoring fee | per object | per object | Videos are few objects: negligible |
+| Traffic (CloudFront) | ~120 MB per active user per month (thumbs + previews) | Whatever is played, at the original's bitrate: 10 min/month ≈ 1 GB | **The new cost driver.** Range requests mean only what's played is fetched (`preload="metadata"`) |
+| Processing | thumbnail Lambda ~1.5 s × 1.5 GB | video Lambda: poster + metadata, a few s × 3 GB (≈ $0.0001/video) | V1 never decodes the whole file |
+| Transcoding (V2, 14.9) | — | Lambda + FFmpeg (libx264 `veryfast`, 1080p) ≈ 0.5–1 s of 2 vCPU per second of video ≈ **$0.002–0.003 per minute**; MediaConvert ≈ $0.0075–0.015/min | Lambda's 15 min limit ≈ 15–30 min of video per run; longer ones need splitting or containers (§5) |
+| Playback copy (V2) | — | 1080p H.264 at ~5 Mbps ≈ 40 MB/min: +30–60 % of the original's storage, but less traffic than a 4K original | Counted in the quota or not: open (14.9) |
+
+**At the §4 scale (1M users),** if active users play ~10 min of video a month: ~500 TB/month through CloudFront ≈ **$15–25k/month** at volume pricing, on top of the ~$6k for images; and if a fifth of the stored bytes become video, storage costs grow by about that fifth (videos are bytes like photos). A playback copy at ~5 Mbps halves to quarters the traffic of high-bitrate originals (−$5–15k/month) for ~$0.0025 per minute transcoded once, plus its storage. HLS (adaptive streaming) only pays off for long videos watched on poor connections (14.10).
+
+**At today's scale:** dev quota 5 GB × ~10 test users ≤ 50 GB ≈ $1.15/month worst case. Prod at 25 GB × 10 users = 250 GB ≈ $3–6/month for storage alone, which reaches the **$5 organisation budget**: raise the budget or lower the prod default before Phase 11 if users actually fill it.
 
 **Suggested order:** D1, D2 (cheap now, painful later) → C1, C2, J1 → B1 → J2–J4, D3, P1, P2 → the rest.
 

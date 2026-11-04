@@ -1,6 +1,6 @@
 const UNITS = ["B", "KB", "MB", "GB", "TB"];
 
-/** 1536 → "1.5 KB" (binary units, as the quota is configured: 2 GiB dev, 10 GiB prod). */
+/** 1536 → "1.5 KB" (binary units, as the quota is configured: 5 GiB dev, 25 GiB prod). */
 export function formatBytes(bytes: number): string {
   let value = bytes;
   let unit = 0;

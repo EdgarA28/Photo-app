@@ -31,6 +31,8 @@ describe("settings: account and storage (FR-ACC-1)", () => {
     expect(within(main).getByText(testMe.email)).toBeTruthy();
     expect(main.textContent).toContain("1.5 MB of 2.0 GB used");
     expect(main.textContent).toContain("3 photos");
+    // No videos: no video line (14.7).
+    expect(main.textContent).not.toMatch(/videos? uses?/);
     const meter = screen.getByRole("meter", { name: "Storage used" });
     expect(meter.getAttribute("aria-valuenow")).toBe("0");
     expect(meter.getAttribute("data-level")).toBe("ok");
@@ -52,6 +54,43 @@ describe("settings: account and storage (FR-ACC-1)", () => {
     expect(meter.getAttribute("aria-valuenow")).toBe(percent);
     expect(meter.getAttribute("data-level")).toBe(level);
     expect(!!screen.queryByText(/Almost full/)).toBe(hint);
+  });
+});
+
+describe("settings: storage with videos (14.7, FR-VID-3)", () => {
+  it("says how much the videos take of the one quota", async () => {
+    const { api } = setup({
+      "GET /me": meWith({
+        usage: {
+          bytesUsed: 3 * GiB,
+          photoCount: 42,
+          quotaBytes: 5 * GiB,
+          videoCount: 3,
+          videoBytes: 2.5 * GiB,
+        },
+      }),
+    });
+    await renderAt("/settings", { api });
+    const main = await screen.findByRole("main");
+    await waitFor(() => expect(main.textContent).toContain("3.0 GB of 5.0 GB used"));
+    expect(main.textContent).toContain("42 photos and videos");
+    expect(main.textContent).toContain("3 videos use 2.5 GB");
+  });
+
+  it("names one video in the singular", async () => {
+    const { api } = setup({
+      "GET /me": meWith({
+        usage: {
+          bytesUsed: GiB,
+          photoCount: 2,
+          quotaBytes: 5 * GiB,
+          videoCount: 1,
+          videoBytes: 0.5 * GiB,
+        },
+      }),
+    });
+    await renderAt("/settings", { api });
+    expect(await screen.findByText("1 video uses 512 MB")).toBeTruthy();
   });
 });
 

@@ -47,7 +47,13 @@ describe("GET /me (FR-ACC-1, FR-ACC-2)", () => {
       email: "ada@example.com",
       name: "Ada",
       username: null,
-      usage: { bytesUsed: 0, photoCount: 0, quotaBytes: TEST_DEFAULT_QUOTA },
+      usage: {
+        bytesUsed: 0,
+        photoCount: 0,
+        quotaBytes: TEST_DEFAULT_QUOTA,
+        videoCount: 0,
+        videoBytes: 0,
+      },
     });
   });
 
@@ -67,6 +73,38 @@ describe("GET /me (FR-ACC-1, FR-ACC-2)", () => {
     expect(meResponseSchema.parse(body)).toMatchObject({
       name: null,
       usage: { bytesUsed: 1234, photoCount: 1, quotaBytes: 5e9 },
+    });
+  });
+
+  test("says how much of the usage is videos (14.7, FR-VID-3)", async () => {
+    const user = newUserId();
+    profiles.set(user, { email: "cy@example.com", name: null });
+    const video = () => {
+      const photo = newPhoto(user);
+      return {
+        ...photo,
+        contentType: "video/mp4" as const,
+        originalKey: photo.originalKey.replace(/\.jpg$/, ".mp4"),
+        mediaType: "video" as const,
+      };
+    };
+    const [photoId] = await upload(user, 1);
+    await markReady(db, user, photoId!, 1000, "2025-05-05T10:00:00.000Z");
+    const { photoId: ready } = await createPending(repos, video());
+    await markReady(db, user, ready, 300_000_000, "2025-05-06T10:00:00.000Z");
+    // Still uploading: not counted, like a pending photo.
+    await createPending(repos, video());
+    // In the trash: still in Usage (FR-DEL-3), no longer in the Videos section.
+    const { photoId: trashed } = await createPending(repos, video());
+    await markReady(db, user, trashed, 5_000, "2025-05-07T10:00:00.000Z");
+    expect((await api(user, "DELETE", `/photos/${trashed}`)).status).toBe(204);
+
+    const { body } = await api(user, "GET", "/me");
+    expect(meResponseSchema.parse(body).usage).toMatchObject({
+      photoCount: 3,
+      bytesUsed: 300_006_000,
+      videoCount: 1,
+      videoBytes: 300_000_000,
     });
   });
 

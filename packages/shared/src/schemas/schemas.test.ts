@@ -22,6 +22,7 @@ import {
   createShareRequestSchema,
   downloadUrlQuerySchema,
   meResponseSchema,
+  usageSchema,
   userIdSchema,
   setUsernameRequestSchema,
   usernameSchema,
@@ -361,9 +362,14 @@ describe("userIdSchema (Cognito sub)", () => {
       email: "user@example.com",
       name: null,
       username: null,
-      usage: { bytesUsed: 0, photoCount: 0, quotaBytes: 1 },
+      usage: { bytesUsed: 0, photoCount: 0, quotaBytes: 1, videoCount: 0, videoBytes: 0 },
     };
     expect(meResponseSchema.parse(me)).toEqual(me);
+  });
+
+  test("usage from an API before videos reads as no videos (14.7)", () => {
+    const usage = { bytesUsed: 5, photoCount: 1, quotaBytes: 10 };
+    expect(usageSchema.parse(usage)).toEqual({ ...usage, videoCount: 0, videoBytes: 0 });
   });
 
   test("rejects anything that isn't a lowercase UUID", () => {
