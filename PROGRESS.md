@@ -644,6 +644,7 @@ Moved to the end by the user (2026-10-27): everything about prod and iOS waits u
 
 | Date | Summary |
 |---|---|
+| 2026-11-04 | Bucket policy fix (`7d044c2`) applied to dev **from local** (user: deploy, don't push): 2 changed (photo bucket policy; video Lambda code hash only, same code rebuilt). Dev videos: 2 × H.264 (should play now), 1 × HEVC (`766556d4-…_25847.mp4`, 21 s: plays only where the browser decodes HEVC, else the download fallback). Local `main` ahead of origin; CI will apply the same on the next push. |
 | 2026-11-04 | 14.8: user's MP4s didn't play on Android. Cause: photo bucket policy granted CloudFront `thumbs/` + `previews/` only (14.4 CloudFront check never done) → 403 on the original. Fix: video originals added to the policy (storage module). |
 | 2026-11-04 | Pushed `main` (14.5–14.7) on the user's request; CI deploys to dev. |
 | 2026-11-04 | Committed 14.6 (`2b83d6f`). 14.7 done (not deployed): quota defaults 5 GiB dev / 25 GiB prod, `GET /me` `videoCount`/`videoBytes`, settings video line, `docs/SCALING.md` §3.7 + spec v0.51. Flagged: prod quota × users can reach the $5 budget. |
