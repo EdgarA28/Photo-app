@@ -41,9 +41,9 @@ variable "maximum_concurrency" {
 }
 
 variable "memory_size" {
-  description = "Video Lambda memory in MB (spec §10.2, 14.9): CPU scales with it (10,240 MB = 6 vCPUs, for the playback copy)."
+  description = "Video Lambda memory in MB (spec §10.2, 14.9): CPU scales with it (3008 MB ≈ 2 vCPUs; 10,240 MB = 6 vCPUs encodes the playback copy ~3× faster)."
   type        = number
-  default     = 10240
+  default     = 3008
 
   validation {
     condition     = var.memory_size >= 3008 && var.memory_size <= 10240

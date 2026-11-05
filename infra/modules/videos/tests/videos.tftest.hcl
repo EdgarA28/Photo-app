@@ -62,8 +62,8 @@ run "function_matches_spec" {
   }
 
   assert {
-    condition     = aws_lambda_function.videos.memory_size == 10240 && aws_lambda_function.videos.timeout == 900
-    error_message = "10,240 MB (6 vCPUs), 15 min for the playback copy (spec §10.2, 14.9)."
+    condition     = aws_lambda_function.videos.memory_size == 3008 && aws_lambda_function.videos.timeout == 900
+    error_message = "3008 MB (2 vCPUs), 15 min for the playback copy (spec §10.2, 14.9)."
   }
 
   assert {

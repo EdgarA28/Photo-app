@@ -173,8 +173,8 @@ resource "aws_lambda_function" "videos" {
   runtime       = "python3.13"
   architectures = ["arm64"]
   handler       = "thumbnails.video_handler.handler"
-  # Spec §10.2: memory buys CPU (10,240 MB = 6 vCPUs) for decoding HEVC/4K and encoding the
-  # playback copy (14.9); billed only while a video is processed.
+  # Spec §10.2: memory buys CPU (3008 MB ≈ 2 vCPUs, user's choice 2026-11-05; up to 10,240 MB =
+  # 6 vCPUs encodes the playback copy ~3× faster, 14.9); billed only while a video is processed.
   memory_size = var.memory_size
   timeout     = local.timeout_seconds
 
