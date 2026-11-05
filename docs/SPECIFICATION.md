@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Version** | 0.51 |
-| **Date** | 2026-11-04 |
+| **Version** | 0.52 |
+| **Date** | 2026-11-05 |
 | **Owner** | Edgar |
 | **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5), videos (Phase 14) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
 
@@ -68,7 +68,7 @@ A private photo storage and gallery app, similar in spirit to Google Photos, bui
 ### 2.2 Out of scope for v1
 
 - Automatic camera-roll backup (not possible in a PWA, see §12.6)
-- Video transcoding / a playback copy for browsers that can't play the original (later, B-7 V2), video streaming (HLS), video editing, Live Photos, videos in the Google Photos import
+- Adaptive video streaming (HLS), video editing, Live Photos, videos in the Google Photos import
 - Public share links for people without an account
 - Album download as ZIP
 - Search other than by place (dates, tags), face/object recognition
@@ -336,7 +336,7 @@ IDs are stable — reference them in issues, PRs and tests.
 
 ### 6.10 Videos (planned, Phase 14)
 
-Decided 2026-11-01 (user, the proposed defaults of task 14.0). V1 plays the original; a playback copy for every browser is B-7 V2.
+Decided 2026-11-01 (user, the proposed defaults of task 14.0). V1 plays the original; a playback copy for every browser is B-7 V2 (14.9, decided 2026-11-05: 720p, made in the video Lambda, not counted in the quota, for every video up to 20 min).
 
 | ID | Requirement |
 |---|---|
@@ -344,7 +344,7 @@ Decided 2026-11-01 (user, the proposed defaults of task 14.0). V1 plays the orig
 | FR-VID-2 | Video uploads go directly to S3 as a **multipart upload** (parts of 16 MB, several in parallel); a dropped connection repeats only the failed part. Videos are uploaded by the tab that picked them (like a large batch, FR-UP-5): they survive connection loss, not closing or reloading the tab, and the app asks before the tab is closed. On phones videos count towards the 1 GB per pick. |
 | FR-VID-3 | Videos count against the same storage quota as photos (FR-UP-7, FR-ACC-2); the quota is reserved when the upload starts. |
 | FR-VID-4 | Videos appear in the **Videos section** (FR-VID-11), albums, places and the map like photos, sorted by their recording date (video metadata `creation_time`, else the upload time), with a **poster frame** and a play icon with the **duration**. A video with GPS in its metadata gets a place (FR-SRCH-1). |
-| FR-VID-5 | The viewer **plays the original** with the browser's player (play/pause, seek, full screen, sound). When the browser can't play it (e.g. HEVC outside Safari), the viewer says so and offers the download. |
+| FR-VID-5 | The viewer plays the video with the browser's player (play/pause, seek, full screen, sound): its **playback copy** (H.264/AAC MP4, at most 720p, made after upload, not counted in the quota) once it exists, the original until then and for videos over 20 min. When the browser can't play what it gets (e.g. an HEVC original outside Safari), the viewer says so (or that the video is being prepared, while its copy is made) and offers the download. Download always gives the original. |
 | FR-VID-6 | Download, delete, trash and restore work as for photos (FR-DL-*, FR-DEL-*). |
 | FR-VID-7 | Albums and sharing work as for photos: recipients see and play videos of shared albums, can download them and save them to their gallery (FR-SHR-10). |
 | FR-VID-8 | Public links (FR-SHR-8) can contain videos: people with the link can play and download them until the link expires. |
@@ -412,7 +412,7 @@ users/{userId}/previews/{photoId}.jpg      ← max 1600 px, STANDARD
 - `photoId` = ULID (unique, time-sortable, URL-safe). Using the ID instead of the original file name avoids encoding issues and collisions; the original name is kept in DynamoDB.
 - The key format is defined **once** in `packages/shared/src/s3Keys.ts` and mirrored (with tests) in the Python service.
 - Derived images: `Cache-Control: public, max-age=31536000, immutable`.
-- Videos (§6.10): the original is `originals/{photoId}.mp4` or `.mov`; its poster frame uses the same `thumbs/` and `previews/` JPEGs, so the gallery treats it like a photo. A later playback copy (B-7 V2) would be `playback/{photoId}.mp4`.
+- Videos (§6.10): the original is `originals/{photoId}.mp4` or `.mov`; its poster frame uses the same `thumbs/` and `previews/` JPEGs, so the gallery treats it like a photo. Its playback copy (14.9) is `playback/{photoId}.mp4`, readable through CloudFront like the derived images.
 
 ### 8.2 DynamoDB — single table `photo-app-{env}`
 
@@ -435,7 +435,7 @@ Initial design; refine during implementation.
 | Username claim | `USERNAME#{username}` | `USERNAME` | — | — | userId, claimedAt; when released: releasedAt, heldUntil |
 
 
-Videos (§6.10) are Photo items with `mediaType = video` (absent = photo, so existing items need no backfill) and, once processed, `durationMs`, `videoCodec` and `playable` (the codec is one every browser plays: H.264/AAC MP4). While uploading, the item holds the multipart `uploadId`; `complete` removes it. `contentType` is `video/mp4` or `video/quicktime`. Usage keeps one `photoCount` for both media types.
+Videos (§6.10) are Photo items with `mediaType = video` (absent = photo, so existing items need no backfill) and, once processed, `durationMs`, `videoCodec` and `playable` (the codec is one every browser plays: H.264/AAC MP4), and `playbackStatus` (`pending` → `ready` with `playbackSizeBytes`, or `failed` with `playbackReason`, or `skipped` for videos over 20 min; 14.9). While uploading, the item holds the multipart `uploadId`; `complete` removes it. `contentType` is `video/mp4` or `video/quicktime`. Usage keeps one `photoCount` for both media types.
 
 Access patterns:
 
@@ -482,7 +482,7 @@ Access patterns:
 | `POST` | `/videos/{photoId}/parts` | Body `{partNumbers}` (1–100 distinct, each 1–128) → `{parts: [{partNumber, url}], expiresAt}`: pre-signed `UploadPart` URLs, 15 min; only for the caller's `pending` video (else 404 / 409) |
 | `POST` | `/videos/{photoId}/complete` | Body `{parts: [{partNumber, etag}]}` (every part once, any order) → `200 {photoId}` (still `pending` until the video service); `CompleteMultipartUpload`, then the stored size must equal `sizeBytes`, else the object and the photo are deleted (its reservation released) and `400` (a second guard: each part URL is signed with its exact `Content-Length`; together they replace the POST policy's size condition); a repeated complete → `200`, an aborted upload → `409`. `DELETE /photos/{id}` of a pending video aborts the multipart upload |
 | `GET` | `/photos` | List own photos `?cursor&limit&sort`; `?mediaType=video` lists own videos instead (FR-VID-11). `/places/{placeId}/photos` lists both unless `?mediaType=` is given |
-| `GET` | `/photos/{photoId}` | Photo metadata; with `?albumId=` a photo of an album shared with the caller, with signed image URLs. A ready video has `videoUrl` (FR-VID-5/7): the original's CloudFront path for the owner, a signed URL valid 4 h for recipients (playback needs range requests until the end) |
+| `GET` | `/photos/{photoId}` | Photo metadata; with `?albumId=` a photo of an album shared with the caller, with signed image URLs. A ready video has `videoUrl` (FR-VID-5/7) and `playbackStatus`: the playback copy's (or, without one, the original's) CloudFront path for the owner, a signed URL valid 4 h for recipients (playback needs range requests until the end) |
 | `GET` | `/photos/{photoId}/download-url` | 5-min pre-signed GET with `attachment` disposition |
 | `DELETE` | `/photos/{photoId}` | Move to the trash (FR-DEL-3): out of gallery, albums and places, files and usage stay; a `pending` upload is deleted at once (files + metadata + usage) |
 | `POST` | `/imports/google` | Start an import (FR-IMP-1): body `{code, codeVerifier, redirectUri}` (Google authorization code) → `201 {importId, pickerUri, expiresAt}`; exchanges the code server-side and creates the Picker session; `400 GOOGLE_AUTH_FAILED` when Google rejects the code |
@@ -573,7 +573,7 @@ TypeScript Lambda, arm64, in `apps/api` (same bundle as the API, own handler and
 | Limits | Timeout 120 s, memory 512 MB (everything streamed), visibility timeout 720 s; 500 photos ≈ 3 min with 3 workers, well within the token's hour |
 | Logs | Structured JSON; 30-day retention; never the token or `baseUrl` |
 
-### 10.2 Video service (planned, Phase 14)
+### 10.2 Video service (Phase 14)
 
 Second handler in `services/thumbnails` (`thumbnails.video_handler.handler`), so S3 keys, places, conflict retries and the `ready` transaction are shared with photos. Packaged separately from the thumbnail Lambda (same source; each package carries only its own native libraries, so the photo Lambda has no FFmpeg). Code done in 14.3; resources in 14.4.
 
@@ -584,9 +584,10 @@ Second handler in `services/thumbnails` (`thumbnails.video_handler.handler`), so
 | Reading | Through a seekable file object over **ranged S3 GETs** (1 MB each, pinned to the checked ETag with `If-Match`), so FFmpeg reads only the index (`moov`, at the end of most phone videos) and the frames around the poster: a 2 GB file isn't downloaded and needs no `/tmp`. More than 256 MB read for one video → `failed` (a broken index can't make it scan the whole file) |
 | Metadata | Duration, width/height (the display matrix's rotation applied), codec, date → takenAt: iPhone's `com.apple.quicktime.creationdate` (local time + offset), else `creation_time`; dates before 1971 (unset QuickTime dates) or in the future are ignored (same fallback as photos), GPS (`com.apple.quicktime.location.ISO6709` / `location`, decimal ISO 6709) → place (FR-SRCH-1) |
 | Poster | Frame at 1 s (half the length for shorter clips), turned upright, converted with the frame's colour space → the same thumb (400 px, q75) and preview (1600 px, q82) JPEGs as photos. HDR videos (HLG/PQ) are not tone-mapped, so their posters look flatter |
-| Done | The photos' `ready` transaction (§10) plus `durationMs`, `videoCodec`, `playable` (`mediaType` is set by the API); `ready` and `failed` also remove a leftover multipart `uploadId` |
+| Done | The photos' `ready` transaction (§10) plus `durationMs`, `videoCodec`, `playable`, `playbackStatus` (`pending`, or `skipped` over 20 min) (`mediaType` is set by the API); `ready` and `failed` also remove a leftover multipart `uploadId` |
+| Playback copy (14.9) | Right after `ready`, same invocation: the whole original is read front to back (ranged GETs of 8 MB, at most 3 × its size + 64 MB) and encoded with PyAV's libx264 (`veryfast`, CRF 23, max 3 Mbit/s, High@4.0, keyframe every 2 s) + AAC 128 kbit/s stereo 48 kHz into MP4 with `+faststart`: at most 1280×720 (720×1280 portrait), never upscaled, the rotation applied to the pixels, more than 30 fps halved to 30. Written to `/tmp` (2 GB), uploaded to `playback/{id}.mp4` (`video/mp4`, immutable cache), then `playbackStatus = ready` + `playbackSizeBytes`, conditional on the same `ready` video and original. Not counted in Usage. Unreadable → `failed`; less than 45 s left of the invocation → stop, `failed` ("would not finish in time"); the original keeps playing either way. A message for a video already `ready` whose copy is `pending` or missing (retry, backfill of older videos) makes only the copy. Replaced originals (12.2b) and deletes remove the copy with the other derived objects. HDR is converted without tone mapping |
 | Errors | Not a video / unreadable / no video stream → `failed`, no retry; transient → batch item failure → DLQ after 5 receives (14 days) |
-| Limits | Memory ~3008 MB, timeout ~5 min, visibility timeout 6 × the timeout; skip sources over `MAX_VIDEO_BYTES` |
+| Limits | Memory 10,240 MB (6 vCPUs, for the copy), timeout 15 min, `/tmp` 2 GB, visibility timeout 6 × the timeout; skip sources over `MAX_VIDEO_BYTES`; copies only for videos up to `MAX_PLAYBACK_DURATION_MS` (20 min) |
 | Logs | Structured JSON; 30-day retention |
 
 ---
@@ -850,7 +851,7 @@ Indicative AWS list prices (us-east-1, 2026). Small scale (≈ 10 users, ≈ 100
 | Route 53 hosted zone (if used) | $0.50 |
 | **Total** | **≈ $2–4** |
 
-Main cost driver: storage, growing roughly linearly with photos. **Videos** (Phase 14) grow it much faster (1080p ≈ 60–130 MB/min, 4K ≈ 200–400 MB/min) at the same ~$0.0125–0.023 per GB-month (a played video returns to the Frequent tier for 30 days); playing them is CloudFront traffic at the original's bitrate (free up to 1 TB/month, ≈ $0.085/GB beyond); the video Lambda takes a few seconds per video (≈ $0.0001, within the free tier here); a V2 playback copy (14.9) would cost ≈ $0.002–0.003 per minute to transcode on Lambda plus its storage. With the 14.7 defaults (5 GB dev, 25 GB prod), ~10 prod users filling their quota would store ~250 GB ≈ $3–6/month, about the $5 budget. Details and the 1M-user view: `docs/SCALING.md` §3.7. Risks: egress of originals and videos beyond free tiers, WAF (≈ $5+/month when enabled), CloudWatch log volume.
+Main cost driver: storage, growing roughly linearly with photos. **Videos** (Phase 14) grow it much faster (1080p ≈ 60–130 MB/min, 4K ≈ 200–400 MB/min) at the same ~$0.0125–0.023 per GB-month (a played video returns to the Frequent tier for 30 days); playing them is CloudFront traffic at the original's bitrate (free up to 1 TB/month, ≈ $0.085/GB beyond); the video Lambda takes a few seconds per video (≈ $0.0001, within the free tier here); the 14.9 playback copy costs ≈ $0.003–0.005 per minute of video to make (10 GB Lambda, within the free tier at our volume) and ≈ 19 MB per minute of storage (not counted in the quota), and plays at ≤ 3 Mbit/s instead of the original's bitrate. With the 14.7 defaults (5 GB dev, 25 GB prod), ~10 prod users filling their quota would store ~250 GB ≈ $3–6/month, about the $5 budget. Details and the 1M-user view: `docs/SCALING.md` §3.7. Risks: egress of originals and videos beyond free tiers, WAF (≈ $5+/month when enabled), CloudWatch log volume.
 
 ---
 
@@ -866,7 +867,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | B-4 | More login providers | Apple, Microsoft — no backend changes needed | Idea |
 | B-5 | "Available offline" albums | Cache previews of selected albums in the service worker | Idea |
 | B-6 | Public share links | Time-limited CloudFront signed URLs for people without an account | Idea |
-| B-7 | Video support | Needs transcoding (e.g. MediaConvert) and different storage/egress planning. V1 specified (§6.10 FR-VID-*, §9, §10.2, Phase 14 in `PROGRESS.md`): multipart upload, ffmpeg poster + metadata, play the original. V2 (a playback copy: H.264 MP4 ≤ 1080p, faststart, via MediaConvert or ffmpeg) is an idea | Planned (Phase 14) |
+| B-7 | Video support | Needs transcoding (e.g. MediaConvert) and different storage/egress planning. V1 specified (§6.10 FR-VID-*, §9, §10.2, Phase 14 in `PROGRESS.md`): multipart upload, ffmpeg poster + metadata, play the original. V2 (14.9, spec v0.52): a playback copy, H.264/AAC MP4 ≤ 720p, faststart, made by the video Lambda with PyAV, not counted in the quota, videos up to 20 min; MediaConvert or containers only if longer videos become common | Phase 14 |
 | B-8 | Search & metadata | Date ranges, tags (places and map done: §6.8); location off switch | Idea |
 | B-9 | On-the-fly image resizing | Only if many sizes are needed; current fixed sizes are simpler | Idea |
 | B-11 | SQS queue in front of the thumbnail Lambda | S3 → SQS → thumbnail Lambda with an event source maximum concurrency (e.g. 5), so big upload bursts can't use up the account's Lambda capacity and throttle the API. Only if raising the concurrency quota (12.3a) and reserved concurrency on the thumbnail Lambda aren't enough. Costs: new queue (redrives to the existing DLQ), S3 notification target changes, handler reads SQS records | Done in dev (13.6, §10) |
@@ -899,6 +900,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.36 | 2026-11-01 | Continue an interrupted large batch by picking it again (13.1f, §12.4) |
 | 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.38 | 2026-11-01 | Less gallery polling while uploads run: 15 s instead of 3 s, refreshes during a batch only mark lists stale (13.1j, §12.4) |
+| 0.52 | 2026-11-05 | 14.9 playback copy (user decision): FR-VID-5 plays the copy, scope (§2), `playback/` key (§8.1), `playbackStatus` (§8.2, §9), §10.2 playback copy + limits (10 GB, 15 min, 2 GB `/tmp`), §16 cost, B-7 |
 | 0.51 | 2026-11-04 | 14.7: quota defaults 5 GB dev / 25 GB prod (FR-ACC-2, §13.2), `GET /me` usage adds `videoCount` / `videoBytes` (§9), video costs in §16 and `docs/SCALING.md` §3.7 |
 | 0.50 | 2026-11-04 | FR-VID-11 (user request): photos and videos separate in the library, Gallery = photos, new Videos section (`/videos`), albums / map / places mixed; FR-VID-4 adjusted; §8.2 `VIDEOS#{userId}` GSI1 partition; §9 `mediaType` on `/photos` and place photos; §12.1 routes |
 | 0.49 | 2026-11-03 | §10.2: the thumbnail rule keeps matching all originals (EventBridge rejected per-extension wildcards), FFmpeg whitelists + 40 MP frame limit (security review); no requirement changes |

@@ -5,7 +5,7 @@ Both implementations are tested against packages/shared/test-vectors/s3-keys.jso
     users/{userId}/originals/{photoId}.{ext}   photo or video (FR-VID-1: mp4, mov)
     users/{userId}/thumbs/{photoId}.jpg        a video's poster frame too (§10.2)
     users/{userId}/previews/{photoId}.jpg
-    users/{userId}/playback/{photoId}.mp4      a video's playback copy (B-7 V2, later)
+    users/{userId}/playback/{photoId}.mp4      a video's playback copy (14.9, video Lambda)
 """
 
 import re

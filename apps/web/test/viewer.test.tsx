@@ -493,6 +493,44 @@ describe("videos in the viewer (FR-VID-5, FR-VID-7, 14.6)", () => {
     await waitFor(() => expect(clicked).toEqual([url]));
   });
 
+  it("plays an HEVC video's H.264 playback copy (14.9)", async () => {
+    decodesH264Only();
+    const copy = `/users/u/playback/${testId(0)}.mp4`;
+    const { api } = videos({
+      "GET /photos": {
+        items: [
+          video(0, {
+            videoCodec: "hevc",
+            playable: false,
+            playbackStatus: "ready",
+            videoUrl: copy,
+          }),
+        ],
+        nextCursor: null,
+      },
+    });
+    await renderAt(`/photos/${testId(0)}?mediaType=video`, { api });
+    await screen.findByRole("heading", { name: "VID_0.mp4" });
+    expect(player()?.getAttribute("src")).toBe(copy);
+  });
+
+  it("says an HEVC video is being prepared while its copy is made (14.9)", async () => {
+    decodesH264Only();
+    const { api } = videos({
+      "GET /photos": {
+        items: [video(0, { videoCodec: "hevc", playable: false, playbackStatus: "pending" })],
+        nextCursor: null,
+      },
+    });
+    await renderAt(`/photos/${testId(0)}?mediaType=video`, { api });
+    expect(
+      await screen.findByText(
+        "This video is being prepared for playback. Try again in a few minutes.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Download to watch it" })).toBeTruthy();
+  });
+
   it("falls back to the download when the video fails to load", async () => {
     decodesH264Only();
     await renderAt(`/photos/${testId(1)}?mediaType=video`, { api: videos().api });

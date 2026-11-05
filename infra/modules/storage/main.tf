@@ -2,6 +2,7 @@
 #   users/{userId}/originals/{photoId}.{ext}   uploaded via pre-signed POST (storage class set by the API)
 #   users/{userId}/thumbs/{photoId}.jpg        written by the thumbnail Lambda
 #   users/{userId}/previews/{photoId}.jpg      written by the thumbnail Lambda
+#   users/{userId}/playback/{photoId}.mp4      a video's playback copy, written by the video Lambda (14.9)
 #
 # Owned elsewhere (one resource per bucket, so not here):
 #   - S3 event notification → thumbnails module (Phase 6)
@@ -125,8 +126,9 @@ data "aws_iam_policy_document" "photos" {
     }
   }
 
-  # CloudFront OAC (frontend module, 7.1) may read derived images, and video originals, which the
-  # player streams from /users/* with the same media cookie or signed URL (FR-VID-5/7/8, 14.8).
+  # CloudFront OAC (frontend module, 7.1) may read derived images, playback copies (14.9) and video
+  # originals (played while a video has no copy), which the player streams from /users/* with the
+  # same media cookie or signed URL (FR-VID-5/7/8, 14.8).
   # Photo originals stay reachable only through 5-minute pre-signed download URLs (FR-DL-1).
   dynamic "statement" {
     for_each = var.cloudfront_distribution_arn == null ? [] : [var.cloudfront_distribution_arn]
@@ -137,6 +139,7 @@ data "aws_iam_policy_document" "photos" {
       resources = [
         "${aws_s3_bucket.photos.arn}/users/*/thumbs/*",
         "${aws_s3_bucket.photos.arn}/users/*/previews/*",
+        "${aws_s3_bucket.photos.arn}/users/*/playback/*",
         "${aws_s3_bucket.photos.arn}/users/*/originals/*.mp4",
         "${aws_s3_bucket.photos.arn}/users/*/originals/*.mov",
       ]

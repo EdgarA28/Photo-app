@@ -14,6 +14,14 @@ import { photoPlaceSchema } from "./places";
 export const photoStatusSchema = z.enum(["pending", "ready", "failed"]);
 export type PhotoStatus = z.infer<typeof photoStatusSchema>;
 
+/**
+ * A video's playback copy (14.9, spec §10.2): `pending` while the video service makes it,
+ * `ready` once `videoUrl` points to it, `failed` (couldn't be made) or `skipped` (longer than
+ * MAX_PLAYBACK_DURATION_MS): then the original plays, as before 14.9.
+ */
+export const playbackStatusSchema = z.enum(["pending", "ready", "failed", "skipped"]);
+export type PlaybackStatus = z.infer<typeof playbackStatusSchema>;
+
 /** Types a photo upload may have (FR-UP-2). */
 export const photoContentTypeSchema = z.enum(PHOTO_CONTENT_TYPES);
 /** Types a video upload may have (FR-VID-1). */
@@ -46,6 +54,12 @@ export const photoSchema = z.object({
   durationMs: z.number().int().nonnegative().nullable().default(null),
   videoCodec: z.string().nullable().default(null),
   playable: z.boolean().nullable().default(null),
+  /**
+   * The playback copy (14.9): null for photos, videos not processed yet and videos from before
+   * 14.9 (until the backfill). `videoCodec` / `playable` describe the original; the copy is
+   * always H.264.
+   */
+  playbackStatus: playbackStatusSchema.nullable().default(null),
   /** EXIF DateTimeOriginal (a video's `creation_time`), falling back to upload time (§8.2). */
   takenAt: isoDateTimeSchema,
   uploadedAt: isoDateTimeSchema,
@@ -58,8 +72,9 @@ export const photoSchema = z.object({
   thumbUrl: z.string().nullable(),
   previewUrl: z.string().nullable(),
   /**
-   * The video itself (FR-VID-5, FR-VID-7), once `ready`: the original's stable CloudFront path for
-   * own videos, a signed URL for shared ones (only where the preview is signed too: the viewer's
+   * The video itself (FR-VID-5, FR-VID-7), once `ready`: its playback copy once that is `ready`
+   * (14.9), the original until then; a stable CloudFront path for own videos, a signed URL for
+   * shared ones (only where the preview is signed too: the viewer's
    * GET /photos/{id}). Null for photos. Missing (an API from before videos) reads as null.
    */
   videoUrl: z.string().nullable().default(null),

@@ -65,6 +65,7 @@ import {
 } from "@/queries/photos";
 import { saveSummary, sharedAlbumsQuery, useSaveSharedPhotos } from "@/queries/shares";
 import { VideoPlayer } from "@/viewer/VideoPlayer";
+import { playingCodec } from "@/viewer/playback";
 import { ZoomableImage } from "@/viewer/ZoomableImage";
 
 /** Horizontal travel that counts as a swipe; it must also be mostly sideways. */
@@ -644,8 +645,8 @@ function PhotoView({
 }
 
 /**
- * A video plays in the browser's player, no zoom (FR-VID-5); a codec this browser can't play
- * offers the download of the original instead (V1 has no playback copy, B-7).
+ * A video plays in the browser's player, no zoom (FR-VID-5): its playback copy (14.9), or the
+ * original while there is none; an original this browser can't play offers the download instead.
  */
 function VideoView({
   photo,
@@ -665,7 +666,8 @@ function VideoView({
     <VideoPlayer
       src={src}
       poster={photo.previewUrl}
-      videoCodec={photo.videoCodec}
+      videoCodec={playingCodec(photo)}
+      preparing={photo.playbackStatus === "pending"}
       label={photo.fileName}
       onDownload={() => download.mutate()}
       downloading={download.isPending}

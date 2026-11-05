@@ -4,8 +4,8 @@
 #
 #   /api/*    → API Gateway (no caching, all viewer headers except Host)
 #   /users/*  → photo bucket via OAC (cached; the bucket policy in the storage module only grants
-#               thumbs/, previews/ and video originals (.mp4/.mov, the player, 14.8), never photo
-#               originals)
+#               thumbs/, previews/, playback copies (14.9) and video originals (.mp4/.mov, the
+#               player, 14.8), never photo originals)
 #   /*        → site bucket via OAC, SPA rewrite function for app routes
 #
 # /users/* requires a signature from the media key (media-keys.tf, 7.2).

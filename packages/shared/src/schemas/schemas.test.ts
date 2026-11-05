@@ -117,6 +117,7 @@ describe("photoSchema", () => {
       durationMs: null,
       videoCodec: null,
       playable: null,
+      playbackStatus: null,
       videoUrl: null,
       place: null,
       trashedAt: null,

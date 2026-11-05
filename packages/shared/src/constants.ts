@@ -76,6 +76,13 @@ export const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024;
  */
 export const MULTIPART_PART_BYTES = 16 * 1024 * 1024;
 
+/**
+ * Longest video that gets a playback copy (14.9, spec §10.2): the copy is made in one Lambda
+ * invocation (15 min at most). Longer ones play their original. Mirrored in
+ * services/thumbnails `video_processor.py`.
+ */
+export const MAX_PLAYBACK_DURATION_MS = 20 * 60 * 1000;
+
 /** Most parts a video can have: `MAX_VIDEO_BYTES / MULTIPART_PART_BYTES`. */
 export const MAX_VIDEO_PARTS = Math.ceil(MAX_VIDEO_BYTES / MULTIPART_PART_BYTES);
 

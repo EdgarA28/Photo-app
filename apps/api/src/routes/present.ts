@@ -9,6 +9,7 @@ import {
   type SharedAlbum,
 } from "@photo-app/shared";
 import type { MediaSigner } from "../lib/media";
+import { videoKey } from "../lib/objects";
 import type { AlbumRecord, LocatedPhoto, PhotoRecord, ShareRecord } from "../repo";
 
 /**
@@ -30,6 +31,7 @@ export function toPhoto(record: PhotoRecord): Photo {
     durationMs: record.durationMs ?? null,
     videoCodec: record.videoCodec ?? null,
     playable: record.playable ?? null,
+    playbackStatus: record.mediaType === "video" ? (record.playbackStatus ?? null) : null,
     takenAt: record.takenAt,
     uploadedAt: record.uploadedAt,
     place: record.place
@@ -42,8 +44,8 @@ export function toPhoto(record: PhotoRecord): Photo {
     // Derived images exist only once the thumbnail Lambda is done (FR-GAL-5).
     thumbUrl: ready ? `/${thumbKey(record.userId, record.photoId)}` : null,
     previewUrl: ready ? `/${previewKey(record.userId, record.photoId)}` : null,
-    // The original itself, through the same media cookie (FR-VID-5).
-    videoUrl: ready && record.mediaType === "video" ? `/${record.originalKey}` : null,
+    // The playback copy or the original, through the same media cookie (FR-VID-5, 14.9).
+    videoUrl: ready && record.mediaType === "video" ? `/${videoKey(record)}` : null,
     trashedAt: record.trashedAt ?? null,
     purgeAt: record.purgeAt ?? null,
     ownerId: record.userId,

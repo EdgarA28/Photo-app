@@ -27,7 +27,8 @@ export type PhotoLink = z.infer<typeof photoLinkSchema>;
 
 /**
  * One photo or video of a link; URLs are CloudFront signed URLs valid until the link expires. A
- * video's images are its poster frame and `videoUrl` is the original (FR-VID-8). The video fields
+ * video's images are its poster frame and `videoUrl` is its playback copy, or the original without
+ * one (FR-VID-8, 14.9). The video fields
  * are missing from an API from before videos and read as a photo.
  */
 export const linkedPhotoSchema = z.object({

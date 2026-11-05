@@ -19,6 +19,18 @@ export function objectKeys(
 }
 
 /**
+ * The file a video plays from (FR-VID-5, 14.9): its playback copy once the video service made it,
+ * the original otherwise (copy pending, failed or skipped, or a video from before 14.9).
+ */
+export function videoKey(
+  record: Pick<PhotoRecord, "userId" | "photoId" | "originalKey" | "playbackStatus">,
+): string {
+  return record.playbackStatus === "ready"
+    ? playbackKey(record.userId, record.photoId)
+    : record.originalKey;
+}
+
+/**
  * Stops a video upload still in progress (FR-VID-2), before the photo is deleted: its parts go,
  * and no part URL handed out earlier can add to it. Photos and finished uploads have none.
  */

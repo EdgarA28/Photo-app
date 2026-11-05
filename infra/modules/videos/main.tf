@@ -1,5 +1,5 @@
 # Video Lambda (spec §10.2, §13.1, 14.4): video originals → SQS → poster thumb + preview and
-# metadata → DynamoDB `ready`/`failed`. Code: services/thumbnails (`thumbnails.video_handler`),
+# metadata → DynamoDB `ready`/`failed`, then the playback copy (14.9: 720p H.264 → playback/). Code: services/thumbnails (`thumbnails.video_handler`),
 # packaged into dist-video/ by `pnpm build:py` (Pillow + PyAV, 14.3) and zipped here.
 #
 # Same pattern as the thumbnails module, which owns the bucket's notification (S3 → EventBridge):
@@ -8,13 +8,18 @@
 locals {
   name = "photo-app-${var.environment}-videos"
 
-  # Spec §10.2: probing reads a few MB, but a 4K HEVC poster or a big index takes a while; 5 min
-  # leaves room for slow S3 reads. The queue's visibility timeout derives from it.
-  timeout_seconds = 300
+  # Spec §10.2: Lambda's maximum. The poster takes seconds; the playback copy (14.9) encodes the
+  # whole video (up to 20 min long, MAX_PLAYBACK_DURATION_MS) and stops itself 45 s before this.
+  # The queue's visibility timeout derives from it.
+  timeout_seconds = 900
 
   # Key layout from packages/shared s3Keys.ts; VIDEO_EXTENSIONS in constants.ts.
-  originals_arn    = "${var.bucket_arn}/users/*/originals/*"
-  derived_arns     = ["${var.bucket_arn}/users/*/thumbs/*", "${var.bucket_arn}/users/*/previews/*"]
+  originals_arn = "${var.bucket_arn}/users/*/originals/*"
+  derived_arns = [
+    "${var.bucket_arn}/users/*/thumbs/*",
+    "${var.bucket_arn}/users/*/previews/*",
+    "${var.bucket_arn}/users/*/playback/*",
+  ]
   video_extensions = ["mp4", "mov"]
 }
 
@@ -117,10 +122,11 @@ data "aws_iam_policy_document" "videos" {
     resources = [var.bucket_arn]
   }
 
-  # Poster thumb and preview; deleted again if the video was deleted meanwhile (race).
+  # Poster thumb and preview, playback copy (multipart upload above 8 MB, aborted on errors);
+  # deleted again if the video was deleted meanwhile (race).
   statement {
     sid       = "Derived"
-    actions   = ["s3:PutObject", "s3:DeleteObject"]
+    actions   = ["s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"]
     resources = local.derived_arns
   }
 
@@ -167,9 +173,16 @@ resource "aws_lambda_function" "videos" {
   runtime       = "python3.13"
   architectures = ["arm64"]
   handler       = "thumbnails.video_handler.handler"
-  # Spec §10.2: ~3008 MB; memory buys CPU for decoding the poster (HEVC/4K).
-  memory_size = 3008
+  # Spec §10.2: memory buys CPU (10,240 MB = 6 vCPUs) for decoding HEVC/4K and encoding the
+  # playback copy (14.9); billed only while a video is processed.
+  memory_size = var.memory_size
   timeout     = local.timeout_seconds
+
+  # The playback copy is written to /tmp before upload (faststart rewrites the file): 20 min at
+  # ≤ 3.1 Mbit/s is ≤ 470 MB.
+  ephemeral_storage {
+    size = 2048
+  }
 
   environment {
     variables = {

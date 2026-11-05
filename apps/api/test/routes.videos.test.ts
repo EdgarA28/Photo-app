@@ -18,6 +18,7 @@ import {
   thumbKey,
   videoPartsResponseSchema,
 } from "@photo-app/shared";
+import { UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { beforeEach, describe, expect, test } from "vitest";
 import { STALE_PENDING_AFTER_MS, sweepStalePending } from "../src/lib/pending";
 import { deleteTrashedPhoto } from "../src/lib/trash";
@@ -398,6 +399,61 @@ describe("playing a video (FR-VID-5, FR-VID-7, FR-VID-8)", () => {
       items: unknown[];
     };
     expect(photoSchema.parse(page.items[0]).videoUrl).toBeNull();
+  });
+
+  /** What the video service writes once the playback copy is stored (14.9). */
+  async function markPlayback(user: string, photoId: string, status: string) {
+    await t.db.client.send(
+      new UpdateCommand({
+        TableName: t.db.table,
+        Key: { PK: `USER#${user}`, SK: `PHOTO#${photoId}` },
+        UpdateExpression: "SET playbackStatus = :s",
+        ExpressionAttributeValues: { ":s": status },
+      }),
+    );
+  }
+
+  test("playback copy (14.9): videoUrl moves to it once ready, the original until then", async () => {
+    const user = newUserId();
+    const photoId = await readyVideo(user);
+    const get = async () =>
+      photoSchema.parse((await t.api(user, "GET", `/photos/${photoId}`)).body);
+    expect(await get()).toMatchObject({ playbackStatus: null });
+
+    for (const status of ["pending", "failed", "skipped"]) {
+      await markPlayback(user, photoId, status);
+      expect(await get()).toMatchObject({
+        playbackStatus: status,
+        videoUrl: `/${originalOf(user, photoId)}`,
+      });
+    }
+    await markPlayback(user, photoId, "ready");
+    expect(await get()).toMatchObject({
+      playbackStatus: "ready",
+      videoUrl: `/${playbackKey(user, photoId)}`,
+    });
+
+    // Shared albums and public links sign the copy too.
+    const link = (await t.api(user, "POST", "/links", { photoIds: [photoId] })).body as {
+      token: string;
+    };
+    const shared = sharedLinkSchema.parse((await t.api(null, "GET", `/links/${link.token}`)).body);
+    verifySignedUrl(shared.photos[0]!.videoUrl!, `/${playbackKey(user, photoId)}`);
+  });
+
+  test("photos have no playback status", async () => {
+    const user = newUserId();
+    const upload = await t.api(user, "POST", "/photos/upload-url", {
+      fileName: "a.jpg",
+      contentType: "image/jpeg",
+      sizeBytes: 1000,
+    });
+    const { photoId } = upload.body as { photoId: string };
+    expect(photoSchema.parse((await t.api(user, "GET", `/photos/${photoId}`)).body)).toMatchObject({
+      mediaType: "photo",
+      playbackStatus: null,
+      videoUrl: null,
+    });
   });
 
   test("public link: the video's original, signed until the link expires", async () => {

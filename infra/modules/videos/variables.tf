@@ -39,3 +39,14 @@ variable "maximum_concurrency" {
     error_message = "maximum_concurrency must be between 2 and 1000."
   }
 }
+
+variable "memory_size" {
+  description = "Video Lambda memory in MB (spec §10.2, 14.9): CPU scales with it (10,240 MB = 6 vCPUs, for the playback copy)."
+  type        = number
+  default     = 10240
+
+  validation {
+    condition     = var.memory_size >= 3008 && var.memory_size <= 10240
+    error_message = "memory_size must be between 3008 and 10240 MB."
+  }
+}

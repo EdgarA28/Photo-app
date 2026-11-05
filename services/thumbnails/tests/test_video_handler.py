@@ -14,7 +14,7 @@ from conftest import make_video
 from moto import mock_aws
 from PIL import Image
 
-from thumbnails import video_handler
+from thumbnails import video_handler, video_processor
 from thumbnails.base import DERIVED_CACHE_CONTROL
 from thumbnails.s3_range import ReadLimitExceeded, S3RangeFile
 
@@ -26,6 +26,7 @@ UPLOADED_AT = "2026-10-19T08:00:00.000Z"
 ORIGINAL = f"users/{USER}/originals/{VIDEO}.mov"
 THUMB = f"users/{USER}/thumbs/{VIDEO}.jpg"
 PREVIEW = f"users/{USER}/previews/{VIDEO}.jpg"
+PLAYBACK = f"users/{USER}/playback/{VIDEO}.mp4"
 ITEM_KEY = {"PK": {"S": f"USER#{USER}"}, "SK": {"S": f"PHOTO#{VIDEO}"}}
 USAGE_KEY = {"PK": {"S": f"USER#{USER}"}, "SK": {"S": "USAGE"}}
 
@@ -305,6 +306,8 @@ def test_a_big_video_is_not_downloaded(
     tracked: list[S3RangeFile] = []
     monkeypatch.setattr(S3RangeFile, "__init__", tracking_init)
 
+    # No copy here: this test is about the poster's reads (the copy reads everything, 14.9).
+    monkeypatch.setattr(video_processor, "MAX_PLAYBACK_DURATION_MS", 1)
     assert video_handler.handler(upload(s3, data))["results"][0]["status"] == "ready"
     (source,) = tracked
     assert source.bytes_read < len(data) / 4
@@ -339,3 +342,162 @@ def test_range_file_read_limit(aws: tuple[Any, Any]) -> None:
     assert f.read(40) == b"x" * 40
     with pytest.raises(ReadLimitExceeded):
         f.read(20)
+
+
+# --- Playback copy (14.9) ---------------------------------------------------------------------
+
+
+def playback_of(s3: Any, key: str = PLAYBACK) -> Any:
+    import av
+
+    obj = s3.get_object(Bucket=BUCKET, Key=key)
+    container = av.open(io.BytesIO(obj["Body"].read()))
+    return obj, container
+
+
+def test_ready_video_gets_a_playback_copy(aws: tuple[Any, Any], mov_hevc_portrait: bytes) -> None:
+    s3, dynamodb = aws
+    put_pending_video(dynamodb, declared=len(mov_hevc_portrait))
+
+    assert video_handler.handler(upload(s3, mov_hevc_portrait))["results"][0]["status"] == "ready"
+
+    item = get(dynamodb, ITEM_KEY)
+    assert item is not None
+    assert item["playbackStatus"]["S"] == "ready"
+    obj, container = playback_of(s3)
+    assert obj["ContentType"] == "video/mp4"
+    assert obj["CacheControl"] == DERIVED_CACHE_CONTROL
+    assert item["playbackSizeBytes"]["N"] == str(obj["ContentLength"])
+    with container:
+        stream = container.streams.video[0]
+        # HEVC portrait → H.264 that every browser plays, already upright.
+        assert stream.codec_context.name == "h264"
+        assert (stream.width, stream.height) == (240, 320)
+    # The app's own file: not counted (FR-ACC-2).
+    usage = get(dynamodb, USAGE_KEY)
+    assert usage is not None
+    assert usage["bytesUsed"]["N"] == str(len(mov_hevc_portrait))
+
+
+def test_long_videos_get_no_copy(
+    aws: tuple[Any, Any], mp4_h264: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s3, dynamodb = aws
+    monkeypatch.setattr(video_processor, "MAX_PLAYBACK_DURATION_MS", 1000)
+    put_pending_video(dynamodb, declared=len(mp4_h264))
+
+    video_handler.handler(upload(s3, mp4_h264))
+
+    item = get(dynamodb, ITEM_KEY)
+    assert item is not None
+    assert (item["status"]["S"], item["playbackStatus"]["S"]) == ("ready", "skipped")
+    assert not exists(s3, PLAYBACK)
+
+
+def test_videos_from_before_the_copy_get_one(aws: tuple[Any, Any], mp4_h264: bytes) -> None:
+    """The backfill: a message for a `ready` video without `playbackStatus` makes only the copy."""
+    s3, dynamodb = aws
+    put_pending_video(dynamodb, declared=len(mp4_h264))
+    event = upload(s3, mp4_h264)
+    video_handler.handler(event)
+    dynamodb.update_item(
+        TableName=TABLE,
+        Key=ITEM_KEY,
+        UpdateExpression="REMOVE playbackStatus, playbackSizeBytes, playbackAt",
+    )
+    s3.delete_object(Bucket=BUCKET, Key=PLAYBACK)
+
+    result = video_handler.handler(as_sqs(event))
+
+    assert result == {"batchItemFailures": []}
+    item = get(dynamodb, ITEM_KEY)
+    assert item is not None
+    assert item["playbackStatus"]["S"] == "ready"
+    assert exists(s3, PLAYBACK)
+    usage = get(dynamodb, USAGE_KEY)
+    assert usage is not None
+    assert usage["photoCount"]["N"] == "1"
+
+
+def test_copy_that_runs_out_of_time_fails_alone(
+    aws: tuple[Any, Any], mp4_h264: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s3, dynamodb = aws
+    monkeypatch.setattr("thumbnails.transcode.DEADLINE_CHECK_FRAMES", 1)
+    put_pending_video(dynamodb, declared=len(mp4_h264))
+
+    class Context:
+        remaining = 600_000
+
+        def get_remaining_time_in_millis(self) -> int:
+            # Plenty at the start; then the clock "jumps" while the copy is encoded.
+            self.remaining -= 300_000
+            return self.remaining
+
+    result = video_handler.handler(as_sqs(upload(s3, mp4_h264)), Context())
+
+    # The message is done: the video is ready and plays its original.
+    assert result == {"batchItemFailures": []}
+    item = get(dynamodb, ITEM_KEY)
+    assert item is not None
+    assert (item["status"]["S"], item["playbackStatus"]["S"]) == ("ready", "failed")
+    assert "in time" in item["playbackReason"]["S"]
+    assert not exists(s3, PLAYBACK)
+
+
+def test_s3_error_during_the_copy_is_retried(
+    aws: tuple[Any, Any], mp4_h264: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s3, dynamodb = aws
+    put_pending_video(dynamodb, declared=len(mp4_h264))
+    event = as_sqs(upload(s3, mp4_h264))
+    processor = video_handler._processor()
+    real_upload = processor._s3.upload_file
+
+    def down(*_args: Any, **_kwargs: Any) -> Any:
+        raise ClientError({"Error": {"Code": "SlowDown", "Message": "slow down"}}, "PutObject")
+
+    monkeypatch.setattr(processor._s3, "upload_file", down)
+    assert video_handler.handler(event) == {"batchItemFailures": [{"itemIdentifier": "msg-0"}]}
+    item = get(dynamodb, ITEM_KEY)
+    assert item is not None
+    assert (item["status"]["S"], item["playbackStatus"]["S"]) == ("ready", "pending")
+
+    # The retry finds the video ready and makes only the copy.
+    monkeypatch.setattr(processor._s3, "upload_file", real_upload)
+    assert video_handler.handler(event) == {"batchItemFailures": []}
+    item = get(dynamodb, ITEM_KEY)
+    assert item is not None
+    assert item["playbackStatus"]["S"] == "ready"
+
+
+def test_copy_of_a_video_deleted_meanwhile_is_removed(
+    aws: tuple[Any, Any], mp4_h264: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s3, dynamodb = aws
+    put_pending_video(dynamodb, declared=len(mp4_h264))
+    processor = video_handler._processor()
+    real_upload = processor._s3.upload_file
+
+    def upload_then_delete(*args: Any, **kwargs: Any) -> Any:
+        real_upload(*args, **kwargs)
+        dynamodb.delete_item(TableName=TABLE, Key=ITEM_KEY)  # the user deleted it for good
+
+    monkeypatch.setattr(processor._s3, "upload_file", upload_then_delete)
+    video_handler.handler(upload(s3, mp4_h264))
+    assert not exists(s3, PLAYBACK)
+
+
+def test_replaced_original_loses_its_copy(aws: tuple[Any, Any], mp4_h264: bytes) -> None:
+    """12.2b: other bytes under the same key after processing → failed, derived objects go."""
+    s3, dynamodb = aws
+    put_pending_video(dynamodb, declared=len(mp4_h264))
+    video_handler.handler(upload(s3, mp4_h264))
+    assert exists(s3, PLAYBACK)
+
+    other = make_video(seconds=3)
+    result = video_handler.handler(upload(s3, other))
+
+    assert result["results"][0]["status"] == "failed"
+    assert not exists(s3, PLAYBACK)
+    assert not exists(s3, THUMB)

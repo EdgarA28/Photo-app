@@ -62,8 +62,13 @@ run "function_matches_spec" {
   }
 
   assert {
-    condition     = aws_lambda_function.videos.memory_size == 3008 && aws_lambda_function.videos.timeout == 300
-    error_message = "3008 MB, 5 min (spec §10.2)."
+    condition     = aws_lambda_function.videos.memory_size == 10240 && aws_lambda_function.videos.timeout == 900
+    error_message = "10,240 MB (6 vCPUs), 15 min for the playback copy (spec §10.2, 14.9)."
+  }
+
+  assert {
+    condition     = one(aws_lambda_function.videos.ephemeral_storage).size == 2048
+    error_message = "2 GB /tmp for the playback copy before upload (14.9)."
   }
 
   assert {
@@ -83,10 +88,10 @@ run "queue_then_dlq" {
   assert {
     condition = (
       aws_sqs_queue.videos.name == "photo-app-test-videos" &&
-      aws_sqs_queue.videos.visibility_timeout_seconds == 1800 &&
+      aws_sqs_queue.videos.visibility_timeout_seconds == 5400 &&
       aws_sqs_queue.videos.sqs_managed_sse_enabled == true
     )
-    error_message = "Queue photo-app-{env}-videos: visibility 6 × the 5 min timeout, encrypted (spec §10.2)."
+    error_message = "Queue photo-app-{env}-videos: visibility 6 × the 15 min timeout, encrypted (spec §10.2)."
   }
 
   assert {
@@ -178,13 +183,14 @@ run "least_privilege" {
 
   assert {
     condition = (
-      toset(data.aws_iam_policy_document.videos.statement[2].actions) == toset(["s3:PutObject", "s3:DeleteObject"]) &&
+      toset(data.aws_iam_policy_document.videos.statement[2].actions) == toset(["s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"]) &&
       toset(data.aws_iam_policy_document.videos.statement[2].resources) == toset([
         "arn:aws:s3:::photo-app-photos-test-123456789012/users/*/thumbs/*",
         "arn:aws:s3:::photo-app-photos-test-123456789012/users/*/previews/*",
+        "arn:aws:s3:::photo-app-photos-test-123456789012/users/*/playback/*",
       ])
     )
-    error_message = "Poster thumbs and previews: write + delete only."
+    error_message = "Poster thumbs, previews and playback copies (14.9): write + delete only."
   }
 
   assert {

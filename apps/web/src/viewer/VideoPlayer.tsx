@@ -7,10 +7,11 @@ import { cannotPlay } from "./playback";
 const CONTROLS_PX = 64;
 
 /**
- * The browser's own player for a video's original (FR-VID-5, 14.6): play/pause, seek, full screen
- * and sound; the poster frame shows until it plays. Only metadata is fetched up front (range
- * requests from there on). When the codec can't play here (e.g. HEVC outside Safari) or the video
- * fails to load, it says so and offers the download instead.
+ * The browser's own player for a video (FR-VID-5, 14.6): its playback copy (14.9) or, without one,
+ * the original. Play/pause, seek, full screen and sound; the poster frame shows until it plays.
+ * Only metadata is fetched up front (range requests from there on). When the codec can't play
+ * here (e.g. an HEVC original outside Safari) or the video fails to load, it says so and offers
+ * the download instead; `preparing` (copy still being made) says it will play soon.
  */
 export function VideoPlayer({
   src,
@@ -20,6 +21,7 @@ export function VideoPlayer({
   onDownload,
   downloading = false,
   downloadError = null,
+  preparing = false,
 }: {
   src: string;
   poster: string | null;
@@ -28,6 +30,7 @@ export function VideoPlayer({
   onDownload: () => void;
   downloading?: boolean;
   downloadError?: string | null;
+  preparing?: boolean;
 }) {
   const [failed, setFailed] = useState(() => cannotPlay(videoCodec));
 
@@ -38,7 +41,11 @@ export function VideoPlayer({
         className="flex flex-col items-center gap-3 px-6 text-center text-white/70"
       >
         <VideoOff aria-hidden className="size-8" />
-        <p className="text-sm">This video can&apos;t play in this browser.</p>
+        <p className="text-sm">
+          {preparing
+            ? "This video is being prepared for playback. Try again in a few minutes."
+            : "This video can't play in this browser."}
+        </p>
         <Button variant="secondary" disabled={downloading} onClick={onDownload}>
           {downloading ? (
             <LoaderCircle aria-hidden className="motion-safe:animate-spin" />
@@ -70,8 +77,8 @@ export function VideoPlayer({
       controls
       playsInline
       preload="metadata"
-      // The original is already in the user's hands (download button); no "Download" in Chrome's
-      // menu with an expiring signed URL.
+      // The original is one tap away (download button); no "Download" in Chrome's menu, which
+      // would save the playback copy from an expiring signed URL.
       controlsList="nodownload"
       onError={() => setFailed(true)}
       onPointerDown={keepFromSwipe}

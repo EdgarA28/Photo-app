@@ -21,6 +21,17 @@ export function codecProbe(videoCodec: string | null): string | null {
   }
 }
 
+/**
+ * The codec of what `videoUrl` plays (14.9): the playback copy is always H.264; without one it is
+ * the original's.
+ */
+export function playingCodec(video: {
+  playbackStatus: string | null;
+  videoCodec: string | null;
+}): string | null {
+  return video.playbackStatus === "ready" ? "h264" : video.videoCodec;
+}
+
 /** Whether this browser can't decode the codec at all (then the player isn't even tried). */
 export function cannotPlay(videoCodec: string | null): boolean {
   const probe = codecProbe(videoCodec);

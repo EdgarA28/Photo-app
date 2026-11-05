@@ -15,6 +15,7 @@ import type { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../env";
 import { AppError } from "../lib/errors";
+import { videoKey } from "../lib/objects";
 import { validate } from "../lib/validation";
 import type { LinkRecord, PhotoRecord, Repositories } from "../repo";
 import type { Deps } from ".";
@@ -88,9 +89,9 @@ export function publicLinkRoutes(app: Hono<AppEnv>, { repos, storage, media }: D
           photoId: photo.photoId,
           mediaType: photo.mediaType ?? "photo",
           durationMs: photo.durationMs ?? null,
-          // FR-VID-8: a video plays from its original, signed until the link expires like the
-          // images. (Only ready photos are linkable, so the original is there.)
-          videoUrl: photo.mediaType === "video" ? await sign(photo.originalKey) : null,
+          // FR-VID-8: a video plays from its playback copy (or original, 14.9), signed until the
+          // link expires like the images. (Only ready photos are linkable, so it is there.)
+          videoUrl: photo.mediaType === "video" ? await sign(videoKey(photo)) : null,
           thumbUrl: await sign(thumbKey(photo.userId, photo.photoId)),
           previewUrl: await sign(previewKey(photo.userId, photo.photoId)),
           width: photo.width ?? null,

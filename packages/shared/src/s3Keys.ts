@@ -5,7 +5,7 @@
  *   users/{userId}/originals/{photoId}.{ext}   photo or video (FR-VID-1: mp4, mov)
  *   users/{userId}/thumbs/{photoId}.jpg        a video's poster frame too (§10.2)
  *   users/{userId}/previews/{photoId}.jpg
- *   users/{userId}/playback/{photoId}.mp4      a video's playback copy (B-7 V2, later)
+ *   users/{userId}/playback/{photoId}.mp4      a video's playback copy (14.9, video Lambda)
  */
 import {
   CONTENT_TYPE_EXTENSIONS,
@@ -56,7 +56,7 @@ export function previewKey(userId: string, photoId: string): string {
   return `users/${userId}/previews/${photoId}.jpg`;
 }
 
-/** The playback copy of a video (B-7 V2): H.264 MP4, written by the video service later. */
+/** The playback copy of a video (14.9): 720p H.264/AAC MP4, written by the video service. */
 export function playbackKey(userId: string, photoId: string): string {
   assertIds(userId, photoId);
   return `users/${userId}/playback/${photoId}.mp4`;

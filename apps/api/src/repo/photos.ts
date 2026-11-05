@@ -7,6 +7,7 @@ import {
   type Page,
   type PhotoSort,
   type PhotoStatus,
+  type PlaybackStatus,
 } from "@photo-app/shared";
 import {
   batchGet,
@@ -60,6 +61,9 @@ export interface PhotoRecord {
   durationMs?: number;
   videoCodec?: string;
   playable?: boolean;
+  /** The playback copy (14.9), set by the video service; missing before it ran. */
+  playbackStatus?: PlaybackStatus;
+  playbackSizeBytes?: number;
   /**
    * S3's multipart upload ID while a video is being uploaded (FR-VID-2); removed once
    * `POST /videos/{id}/complete` stored the original. (Not the client queue ID that

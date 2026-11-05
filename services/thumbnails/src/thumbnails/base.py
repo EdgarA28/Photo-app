@@ -190,9 +190,7 @@ class BaseProcessor:
         if not updated:
             # Lost a race: the photo was deleted (or processed by a duplicate event) meanwhile.
             if self._get_photo(user_id, photo_id) is None:
-                self._s3.delete_objects(
-                    Bucket=bucket, Delete={"Objects": [{"Key": thumb}, {"Key": preview}]}
-                )
+                self._delete_derived(bucket, user_id, photo_id)
             return Outcome("skipped", "photo changed during processing")
 
         self._sync_memberships(user_id, photo_id)
@@ -285,17 +283,19 @@ class BaseProcessor:
             if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
                 return Outcome("skipped", "photo changed")
             raise
-        self._s3.delete_objects(
-            Bucket=bucket,
-            Delete={
-                "Objects": [
-                    {"Key": thumb_key(user_id, photo_id)},
-                    {"Key": preview_key(user_id, photo_id)},
-                ]
-            },
-        )
+        self._delete_derived(bucket, user_id, photo_id)
         logger.warning("Original replaced after processing", extra=log)
         return Outcome("failed", reason)
+
+    def _derived_keys(self, user_id: str, photo_id: str) -> list[str]:
+        """Every object this processor makes for one original (a video adds its playback copy)."""
+        return [thumb_key(user_id, photo_id), preview_key(user_id, photo_id)]
+
+    def _delete_derived(self, bucket: str, user_id: str, photo_id: str) -> None:
+        self._s3.delete_objects(
+            Bucket=bucket,
+            Delete={"Objects": [{"Key": k} for k in self._derived_keys(user_id, photo_id)]},
+        )
 
     def _place_writes(
         self,
