@@ -91,3 +91,43 @@ def test_deadline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("thumbnails.transcode.DEADLINE_CHECK_FRAMES", 1)
     with pytest.raises(OutOfTime):
         transcode(io.BytesIO(make_video()), str(tmp_path / "c.mp4"), lambda: 10_000, 45_000)
+
+
+def test_audio_before_the_first_video_frame(tmp_path: Path) -> None:
+    """Dev 2026-11-05: an iPhone HEVC video whose file starts with audio crashed the process
+    (a stream added to the output after the first packet was written)."""
+    from fractions import Fraction
+
+    from conftest import two_tone
+
+    source = tmp_path / "audio_first.mp4"
+    with av.open(str(source), mode="w") as container:
+        sound = container.add_stream("aac", rate=48000, layout="stereo")
+        video = container.add_stream("libx264", rate=10)
+        video.width, video.height = 320, 240
+        video.pix_fmt = "yuv420p"
+        video.time_base = Fraction(1, 10)
+        # 1 s of audio, then the video starts at 0.5 s.
+        for i in range(47):
+            samples = av.AudioFrame(format="fltp", layout="stereo", samples=1024)
+            for plane in samples.planes:
+                plane.update(bytes(plane.buffer_size))
+            samples.sample_rate = 48000
+            samples.pts = i * 1024
+            for packet in sound.encode(samples):
+                container.mux(packet)
+        image = two_tone((320, 240))
+        for i in range(5, 25):
+            frame = av.VideoFrame.from_image(image)
+            frame.pts = i
+            for packet in video.encode(frame):
+                container.mux(packet)
+        for packet in [*sound.encode(), *video.encode()]:
+            container.mux(packet)
+    with av.open(str(source)) as check:
+        first = next(check.demux())
+        assert first.stream.type == "audio"
+
+    _, copy = copy_of(source.read_bytes(), tmp_path)
+    assert copy.has_audio  # type: ignore[attr-defined]
+    assert copy.frames == 20  # type: ignore[attr-defined]

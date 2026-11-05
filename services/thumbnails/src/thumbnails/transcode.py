@@ -83,6 +83,8 @@ AUDIO_DECODERS = (
 )
 # Reads of the source per transcode = buffer size (`S3RangeFile`: one ranged GET each).
 READ_BUFFER_BYTES = 8 * 1024 * 1024
+# Audio frames (~21 ms each at 48 kHz) held back until the first video frame: ~40 s.
+MAX_EARLY_AUDIO_FRAMES = 2000
 # How often (frames) the deadline is checked.
 DEADLINE_CHECK_FRAMES = 30
 
@@ -169,15 +171,31 @@ def _transcode(
     with av.open(out_path, mode="w", format="mp4", options={"movflags": "+faststart"}) as out:
         video = _VideoPipeline(in_video, out)
         audio = _AudioPipeline(in_audio, out) if in_audio is not None else None
+        # The video stream is added to the output with the first video frame (its size and
+        # rotation decide the output size). Audio that comes first waits: the muxer writes the
+        # header with the first packet, and a stream added after that crashes FFmpeg (SIGFPE,
+        # an iPhone HEVC video on dev 2026-11-05).
+        early_audio: list[av.AudioFrame] = []
         for packet in container.demux(streams):
             if packet.stream is in_video:
                 for frame in _decode(packet):
                     video.add(frame)
+                    if early_audio and audio is not None:
+                        for waiting in early_audio:
+                            audio.add(waiting)
+                        early_audio.clear()
                     if video.frames % DEADLINE_CHECK_FRAMES == 0:
                         _check_deadline(time_left_ms, min_time_left_ms)
             elif audio is not None:
                 for frame in _decode(packet):
-                    audio.add(frame)
+                    if video.started:
+                        audio.add(frame)
+                    elif len(early_audio) < MAX_EARLY_AUDIO_FRAMES:
+                        early_audio.append(frame)
+                    else:
+                        raise PermanentVideoError("no video frame near the start")
+        if not video.started:
+            raise PermanentVideoError("no decodable video frame")
         video.flush()
         if audio is not None:
             audio.flush()
@@ -225,6 +243,11 @@ class _VideoPipeline:
         self.width = 0
         self.height = 0
 
+    @property
+    def started(self) -> bool:
+        """Whether the output has its video stream (set up from the first frame)."""
+        return self._graph is not None
+
     def add(self, frame: av.VideoFrame) -> None:
         if self._graph is None:
             self._setup(frame)
@@ -263,6 +286,10 @@ class _VideoPipeline:
         self.width, self.height = target_size(*upright)
 
         rate = self._in.average_rate or self._in.guessed_rate
+        if rate is not None:
+            # Phones report averages like 55620000/1913201 (≈ 29.07 fps): only the encoder's
+            # nominal rate, so a simple fraction; timestamps keep the source's time base.
+            rate = Fraction(rate).limit_denominator(1001)
         capped = rate is not None and rate > MAX_FPS + 1
         time_base = Fraction(1, MAX_FPS) if capped else self._in.time_base
         if time_base is None:
