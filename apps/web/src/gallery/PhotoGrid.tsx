@@ -11,10 +11,9 @@ import { justifyRows, type Row } from "./justify";
 import { monthSections } from "./months";
 import type { GallerySearch } from "./search";
 import { TILE_ATTRIBUTE, useDragSelect } from "./useDragSelect";
+import { rowHeightFor, useGridZoom, type ZoomFocus } from "./useGridZoom";
 
 const GAP = 4;
-/** Row height to aim for; full rows end up a little taller or shorter to fill the width. */
-const targetHeightFor = (width: number) => (width < 640 ? 112 : 192);
 /** Start loading the next page this many rows before the end (FR-GAL-2). */
 const LOOKAHEAD_ROWS = 6;
 /** Height of a month heading above its rows, the gap after the previous row included. */
@@ -51,7 +50,8 @@ interface PhotoGridProps {
 /**
  * Virtualized justified grid (§12.3, FR-GAL-2, NFR-PERF-3): only the rows near the viewport are in
  * the DOM, scrolled with the page so the browser's own scrolling, the router's scroll restoration
- * and the mobile address bar behave normally.
+ * and the mobile address bar behave normally. Pinch (or a trackpad pinch) changes the tile size in
+ * steps (FR-GAL-8, `useGridZoom`).
  */
 export function PhotoGrid({
   photos,
@@ -65,9 +65,20 @@ export function PhotoGrid({
 }: PhotoGridProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { width, top } = useElementBox(ref);
+  // Pinch to resize the tiles (FR-GAL-8): the tile under the fingers keeps its place on screen.
+  const anchor = useRef<{ photoId: string; top: number } | null>(null);
+  const zoom = useGridZoom(ref, (focus: ZoomFocus) => {
+    // Optional call: jsdom (tests) has no elementFromPoint.
+    const tile = document
+      .elementFromPoint?.(focus.x, focus.y)
+      ?.closest(`[${TILE_ATTRIBUTE}]`) as HTMLElement | null;
+    const photoId = tile?.getAttribute(TILE_ATTRIBUTE);
+    anchor.current = photoId ? { photoId, top: tile!.getBoundingClientRect().top } : null;
+  });
   const items = useMemo((): GridItem[] => {
     if (width <= 0) return [];
-    const options = { containerWidth: width, targetHeight: targetHeightFor(width), gap: GAP };
+    // Row height to aim for; full rows end up a little taller or shorter to fill the width.
+    const options = { containerWidth: width, targetHeight: rowHeightFor(width, zoom), gap: GAP };
     const rowsOf = (list: Photo[]): GridItem[] =>
       justifyRows(list, aspectOf, options).map((row) => ({
         kind: "row",
@@ -80,7 +91,22 @@ export function PhotoGrid({
       { kind: "month", label, height: MONTH_HEADING_HEIGHT } as const,
       ...rowsOf(items),
     ]);
-  }, [photos, width, months]);
+  }, [photos, width, months, zoom]);
+
+  // After a zoom step: scroll so the anchored tile's row is where the tile was.
+  useLayoutEffect(() => {
+    const target = anchor.current;
+    anchor.current = null;
+    if (!target) return;
+    let start = top;
+    for (const item of items) {
+      if (item.kind === "row" && item.row.tiles.some((t) => t.item.photoId === target.photoId)) {
+        window.scrollTo({ top: Math.max(0, start - target.top), behavior: "instant" });
+        return;
+      }
+      start += item.height;
+    }
+  }, [items, top]);
 
   const photoIds = useMemo(() => photos.map((photo) => photo.photoId), [photos]);
   const dragStartedInSelect = useDragSelect({
@@ -108,7 +134,12 @@ export function PhotoGrid({
   }, [hasNextPage, isFetchingNextPage, fetchNextPage, lastIndex, items.length]);
 
   return (
-    <div ref={ref} className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+    <div
+      ref={ref}
+      // Two-finger pinch resizes the tiles instead of zooming the page (useGridZoom).
+      className="relative w-full touch-pan-x touch-pan-y"
+      style={{ height: virtualizer.getTotalSize() }}
+    >
       {virtualRows.map((virtualRow) => {
         const item = items[virtualRow.index]!;
         const translate = `translateY(${virtualRow.start - virtualizer.options.scrollMargin}px)`;

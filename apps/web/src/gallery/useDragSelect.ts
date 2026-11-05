@@ -137,7 +137,12 @@ export function useDragSelect({
     }
 
     function onDown(event: PointerEvent) {
-      if (!event.isPrimary || event.button !== 0 || !latest.current.onChange) return;
+      // A second finger is a pinch (tile size, useGridZoom): no press then.
+      if (!event.isPrimary) {
+        if (drag && !drag.active) end();
+        return;
+      }
+      if (event.button !== 0 || !latest.current.onChange) return;
       const photoId = (event.target as Element).closest(`[${TILE_ATTRIBUTE}]`);
       if (!photoId) return;
       end();

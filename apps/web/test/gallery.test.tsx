@@ -726,3 +726,109 @@ describe("changes made on another device", () => {
     expect(photoCalls()).toBe(before);
   });
 });
+
+describe("pinch to resize the tiles (FR-GAL-8)", () => {
+  // 1000 px wide in jsdom (setup.ts): the wider screens' heights; a 4:3 tile alone in its row is
+  // 4/3 × the target height.
+  const tileWidth = async () =>
+    parseFloat((await screen.findByRole("link", { name: "IMG_0.jpg" })).style.width);
+  const grid = () => screen.getByRole("link", { name: "IMG_0.jpg" }).closest(".touch-pan-y")!;
+  const one = () => setup({ "GET /photos": { items: [testPhoto(0)], nextCursor: null } });
+
+  /** Two fingers `from` px apart, moved to each of `to` (px apart), then lifted. */
+  function pinch(from: number, ...to: number[]) {
+    const fingers = (d: number) => ({
+      touches: [
+        { clientX: 500 - d / 2, clientY: 50 },
+        { clientX: 500 + d / 2, clientY: 50 },
+      ],
+    });
+    fireEvent.touchStart(grid(), fingers(from));
+    const moves = to.map((d) => {
+      const event = new Event("touchmove", { bubbles: true, cancelable: true });
+      Object.assign(event, fingers(d));
+      act(() => void grid().dispatchEvent(event));
+      return event;
+    });
+    fireEvent.touchEnd(grid(), { touches: [] });
+    return moves;
+  }
+
+  afterEach(() => {
+    localStorage.clear();
+    Reflect.deleteProperty(document, "elementFromPoint");
+    vi.restoreAllMocks();
+  });
+
+  it("fingers apart make the tiles bigger, a step per 25 %, several in one gesture", async () => {
+    await renderAt("/gallery", { api: one().api });
+    expect(await tileWidth()).toBe(256); // 192 px rows
+
+    const [first] = pinch(100, 120, 130);
+    expect(await tileWidth()).toBeCloseTo((272 * 4) / 3); // 130 / 100 ≥ 1.25: one step
+    // The browser doesn't zoom the page meanwhile.
+    expect(first!.defaultPrevented).toBe(true);
+
+    pinch(100, 130, 170); // 1.3, then 170 / 130 ≈ 1.31 from there: two steps
+    expect(await tileWidth()).toBeCloseTo((520 * 4) / 3);
+    pinch(100, 200); // already the largest
+    expect(await tileWidth()).toBeCloseTo((520 * 4) / 3);
+  });
+
+  it("fingers together make them smaller, and the size is remembered", async () => {
+    await renderAt("/gallery", { api: one().api });
+    await tileWidth();
+    pinch(200, 150);
+    expect(await tileWidth()).toBeCloseTo((136 * 4) / 3);
+    expect(localStorage.getItem("photo-app.gridZoom")).toBe("1");
+
+    cleanup();
+    await renderAt("/videos", { api: one().api });
+    await screen.findByRole("heading", { name: "Videos" });
+    cleanup();
+    await renderAt("/gallery", { api: one().api });
+    expect(await tileWidth()).toBeCloseTo((136 * 4) / 3);
+  });
+
+  it("a trackpad pinch (Ctrl + wheel) steps too; a plain wheel scrolls", async () => {
+    await renderAt("/gallery", { api: one().api });
+    await tileWidth();
+    const plain = fireEvent.wheel(grid(), { deltaY: -100 });
+    expect(plain).toBe(true);
+    expect(await tileWidth()).toBe(256);
+    const pinched = fireEvent.wheel(grid(), { deltaY: -100, ctrlKey: true });
+    expect(pinched).toBe(false); // the page doesn't zoom
+    expect(await tileWidth()).toBeCloseTo((272 * 4) / 3);
+  });
+
+  it("keeps the photo under the fingers where it was", async () => {
+    const scroll = vi.spyOn(window, "scrollTo");
+    await renderAt("/gallery", { api: setup({ "GET /photos": testPhotoPage(0, 30) }).api });
+    await tileWidth();
+    const target = screen.getByRole("link", { name: "IMG_9.jpg" });
+    document.elementFromPoint = () => target;
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 120, 100, 100));
+    scroll.mockClear();
+    pinch(100, 130);
+    await waitFor(() => expect(scroll).toHaveBeenCalled());
+    // 4:3 tiles at 272 px rows: 3 per 1000 px row, so IMG_9 is in the 4th row (3 rows above,
+    // under the 44 px month heading); its row lands where the tile was (120 px from the top).
+    const [options] = scroll.mock.calls.at(-1)! as unknown as [ScrollToOptions];
+    const rowHeight = (1000 - 2 * 4) / (3 * (4 / 3));
+    expect(options.top).toBeCloseTo(44 + 3 * (rowHeight + 4) - 120);
+  });
+
+  it("a second finger cancels a press-to-select", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await renderAt("/gallery", { api: setup({ "GET /photos": testPhotoPage(0, 3) }).api });
+      const tile = await screen.findByRole("link", { name: "IMG_0.jpg" });
+      fireEvent.pointerDown(tile, { pointerId: 1, isPrimary: true, button: 0, clientX: 10 });
+      fireEvent.pointerDown(tile, { pointerId: 2, isPrimary: false, button: 0, clientX: 90 });
+      act(() => vi.advanceTimersByTime(LONG_PRESS_MS + 50));
+      expect(screen.queryByRole("toolbar")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
