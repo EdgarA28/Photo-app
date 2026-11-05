@@ -86,6 +86,9 @@ READ_BUFFER_BYTES = 8 * 1024 * 1024
 # Decoded audio held back until the first video frame, by bytes (a crafted file can make single
 # frames huge: many channels, big PCM packets): 40 s of 48 kHz stereo float is ~15 MB.
 MAX_EARLY_AUDIO_BYTES = 32 * 1024 * 1024
+# ...and by count (each held frame has its own overhead; tiny frames would slip under the byte
+# cap): 4000 AAC frames of 1024 samples are ~85 s at 48 kHz.
+MAX_EARLY_AUDIO_FRAMES = 4000
 # How often (frames) the deadline is checked.
 DEADLINE_CHECK_FRAMES = 30
 
@@ -198,7 +201,10 @@ def _transcode(
                         audio.add(frame)
                         continue
                     early_bytes += sum(plane.buffer_size for plane in frame.planes)
-                    if early_bytes > MAX_EARLY_AUDIO_BYTES:
+                    if (
+                        early_bytes > MAX_EARLY_AUDIO_BYTES
+                        or len(early_audio) >= MAX_EARLY_AUDIO_FRAMES
+                    ):
                         raise PermanentVideoError("no video frame near the start")
                     early_audio.append(frame)
         if not video.started:

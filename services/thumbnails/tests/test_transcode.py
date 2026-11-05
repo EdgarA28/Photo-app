@@ -141,3 +141,10 @@ def test_early_audio_is_capped_by_bytes(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr("thumbnails.transcode.MAX_EARLY_AUDIO_BYTES", 16 * 1024)
     with pytest.raises(PermanentVideoError, match="no video frame near the start"):
         copy_of(write_audio_first(tmp_path / "audio_first.mp4"), tmp_path)
+
+
+def test_early_audio_is_capped_by_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """...and by frame count, so many tiny frames can't slip under the byte cap."""
+    monkeypatch.setattr("thumbnails.transcode.MAX_EARLY_AUDIO_FRAMES", 5)
+    with pytest.raises(PermanentVideoError, match="no video frame near the start"):
+        copy_of(write_audio_first(tmp_path / "audio_first.mp4"), tmp_path)
