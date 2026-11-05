@@ -93,22 +93,20 @@ def test_deadline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         transcode(io.BytesIO(make_video()), str(tmp_path / "c.mp4"), lambda: 10_000, 45_000)
 
 
-def test_audio_before_the_first_video_frame(tmp_path: Path) -> None:
-    """Dev 2026-11-05: an iPhone HEVC video whose file starts with audio crashed the process
-    (a stream added to the output after the first packet was written)."""
+def write_audio_first(path: Path, audio_frames: int = 47) -> bytes:
+    """Audio from 0 s (1024-sample frames at 48 kHz), the video only from 0.5 s: the file starts
+    with audio packets, like some iPhone videos."""
     from fractions import Fraction
 
     from conftest import two_tone
 
-    source = tmp_path / "audio_first.mp4"
-    with av.open(str(source), mode="w") as container:
+    with av.open(str(path), mode="w") as container:
         sound = container.add_stream("aac", rate=48000, layout="stereo")
         video = container.add_stream("libx264", rate=10)
         video.width, video.height = 320, 240
         video.pix_fmt = "yuv420p"
         video.time_base = Fraction(1, 10)
-        # 1 s of audio, then the video starts at 0.5 s.
-        for i in range(47):
+        for i in range(audio_frames):
             samples = av.AudioFrame(format="fltp", layout="stereo", samples=1024)
             for plane in samples.planes:
                 plane.update(bytes(plane.buffer_size))
@@ -124,10 +122,22 @@ def test_audio_before_the_first_video_frame(tmp_path: Path) -> None:
                 container.mux(packet)
         for packet in [*sound.encode(), *video.encode()]:
             container.mux(packet)
-    with av.open(str(source)) as check:
-        first = next(check.demux())
-        assert first.stream.type == "audio"
+    with av.open(str(path)) as check:
+        assert next(check.demux()).stream.type == "audio"
+    return path.read_bytes()
 
-    _, copy = copy_of(source.read_bytes(), tmp_path)
+
+def test_audio_before_the_first_video_frame(tmp_path: Path) -> None:
+    """Dev 2026-11-05: an iPhone HEVC video whose file starts with audio crashed the process
+    (a stream added to the output after the first packet was written)."""
+    _, copy = copy_of(write_audio_first(tmp_path / "audio_first.mp4"), tmp_path)
     assert copy.has_audio  # type: ignore[attr-defined]
     assert copy.frames == 20  # type: ignore[attr-defined]
+
+
+def test_early_audio_is_capped_by_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Audio waiting for the first video frame is bounded by its decoded size (a crafted file
+    can make decoded frames huge), not by a frame count."""
+    monkeypatch.setattr("thumbnails.transcode.MAX_EARLY_AUDIO_BYTES", 16 * 1024)
+    with pytest.raises(PermanentVideoError, match="no video frame near the start"):
+        copy_of(write_audio_first(tmp_path / "audio_first.mp4"), tmp_path)

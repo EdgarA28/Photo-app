@@ -83,8 +83,9 @@ AUDIO_DECODERS = (
 )
 # Reads of the source per transcode = buffer size (`S3RangeFile`: one ranged GET each).
 READ_BUFFER_BYTES = 8 * 1024 * 1024
-# Audio frames (~21 ms each at 48 kHz) held back until the first video frame: ~40 s.
-MAX_EARLY_AUDIO_FRAMES = 2000
+# Decoded audio held back until the first video frame, by bytes (a crafted file can make single
+# frames huge: many channels, big PCM packets): 40 s of 48 kHz stereo float is ~15 MB.
+MAX_EARLY_AUDIO_BYTES = 32 * 1024 * 1024
 # How often (frames) the deadline is checked.
 DEADLINE_CHECK_FRAMES = 30
 
@@ -176,6 +177,8 @@ def _transcode(
         # header with the first packet, and a stream added after that crashes FFmpeg (SIGFPE,
         # an iPhone HEVC video on dev 2026-11-05).
         early_audio: list[av.AudioFrame] = []
+        early_bytes = 0
+        audio_frames = 0
         for packet in container.demux(streams):
             if packet.stream is in_video:
                 for frame in _decode(packet):
@@ -188,12 +191,16 @@ def _transcode(
                         _check_deadline(time_left_ms, min_time_left_ms)
             elif audio is not None:
                 for frame in _decode(packet):
+                    audio_frames += 1
+                    if audio_frames % DEADLINE_CHECK_FRAMES == 0:
+                        _check_deadline(time_left_ms, min_time_left_ms)
                     if video.started:
                         audio.add(frame)
-                    elif len(early_audio) < MAX_EARLY_AUDIO_FRAMES:
-                        early_audio.append(frame)
-                    else:
+                        continue
+                    early_bytes += sum(plane.buffer_size for plane in frame.planes)
+                    if early_bytes > MAX_EARLY_AUDIO_BYTES:
                         raise PermanentVideoError("no video frame near the start")
+                    early_audio.append(frame)
         if not video.started:
             raise PermanentVideoError("no decodable video frame")
         video.flush()
