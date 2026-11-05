@@ -85,13 +85,16 @@ export function useGridZoom(
       };
     };
 
+    // `touches` can be missing on synthetic events (other gestures' tests dispatch plain ones).
+    const count = (event: TouchEvent) => event.touches?.length ?? 0;
+
     function onTouchStart(event: TouchEvent) {
-      if (event.touches.length === 2) startDistance = fingers(event).distance;
+      if (count(event) === 2) startDistance = fingers(event).distance;
     }
 
     // Not passive: only a blocking listener can keep the browser from zooming the page.
     function onTouchMove(event: TouchEvent) {
-      if (event.touches.length !== 2 || startDistance <= 0) return;
+      if (count(event) !== 2 || startDistance <= 0) return;
       if (event.cancelable) event.preventDefault();
       const { distance, focus } = fingers(event);
       const ratio = distance / startDistance;
@@ -102,7 +105,7 @@ export function useGridZoom(
     }
 
     function onTouchEnd(event: TouchEvent) {
-      if (event.touches.length < 2) startDistance = 0;
+      if (count(event) < 2) startDistance = 0;
     }
 
     let wheel = 0;
