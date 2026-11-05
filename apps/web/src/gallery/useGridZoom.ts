@@ -11,10 +11,17 @@ export const WIDE_ROW_HEIGHTS = [96, 136, 192, 272, 384, 520] as const;
 export const DEFAULT_ZOOM = 2;
 export const MAX_ZOOM = PHONE_ROW_HEIGHTS.length - 1;
 
-/** Fingers this much further apart (or this much closer, inverted) make one step. */
-const PINCH_STEP_RATIO = 1.25;
-/** Trackpad pinch (Ctrl + wheel) delta per step. */
-const WHEEL_STEP = 60;
+/** How far past the smallest / largest step the live scale may go (it springs back). */
+const OVERSHOOT = 1.15;
+/** Trackpad pinch: scale per wheel delta (e^(-delta × this)); a mouse notch counts as at most
+ * `MAX_WHEEL_DELTA`, so Ctrl + a mouse wheel moves about one step per notch. */
+const WHEEL_SCALE = 0.01;
+const MAX_WHEEL_DELTA = 25;
+/** A trackpad pinch has no "fingers lifted": it ends this long after the last wheel event. */
+const WHEEL_END_MS = 180;
+/** The settle after release: the new layout eases from the size shown to its own. */
+export const SETTLE_MS = 220;
+const SETTLE_EASING = "cubic-bezier(0.2, 0.8, 0.2, 1)";
 const STORAGE_KEY = "photo-app.gridZoom";
 
 export const rowHeightFor = (width: number, zoom: number) =>
@@ -22,17 +29,27 @@ export const rowHeightFor = (width: number, zoom: number) =>
 
 const clampZoom = (zoom: number) => Math.min(MAX_ZOOM, Math.max(0, Math.round(zoom)));
 
-/** Where a step was made: the grid keeps whatever is under this point (viewport coordinates). */
+/** The gesture's centre in viewport coordinates. */
 export interface ZoomFocus {
   x: number;
   y: number;
 }
 
+/** The step whose row height is nearest (on a log scale, as zoom is felt) to `height`. */
+export function nearestZoom(height: number, heightOf: (zoom: number) => number): number {
+  let best = 0;
+  for (let zoom = 1; zoom <= MAX_ZOOM; zoom++) {
+    if (Math.abs(Math.log(heightOf(zoom) / height)) < Math.abs(Math.log(heightOf(best) / height)))
+      best = zoom;
+  }
+  return best;
+}
+
 // Per-viewer convenience only (it may come back empty or throw: private mode, blocked storage).
 function readZoom(): number {
   try {
-    const stored = Number(localStorage.getItem(STORAGE_KEY));
-    return localStorage.getItem(STORAGE_KEY) === null ? DEFAULT_ZOOM : clampZoom(stored);
+    const stored = localStorage.getItem(STORAGE_KEY);
+    return stored === null ? DEFAULT_ZOOM : clampZoom(Number(stored));
   } catch {
     return DEFAULT_ZOOM;
   }
@@ -46,37 +63,141 @@ function writeZoom(zoom: number) {
   }
 }
 
-/**
- * Pinch on the grid to make tiles bigger (fingers apart) or smaller (together), one step per
- * `PINCH_STEP_RATIO`, several steps in one gesture; a trackpad pinch (Ctrl + wheel) does the same.
- * The browser's own page zoom is kept off the grid meanwhile. `onStep` gets the gesture's centre,
- * so the grid can keep the photo under the fingers in place.
- */
-export function useGridZoom(
-  container: RefObject<HTMLElement | null>,
-  onStep?: (focus: ZoomFocus) => void,
-) {
-  const [zoom, setZoom] = useState(readZoom);
-  const latest = useRef({ zoom, onStep });
-  // Read by the listeners and `step`; refreshed after each render.
-  useLayoutEffect(() => {
-    latest.current = { zoom, onStep };
-  });
+const reducedMotion = () =>
+  typeof window.matchMedia === "function" &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  const step = useCallback((direction: 1 | -1, focus: ZoomFocus) => {
-    const next = clampZoom(latest.current.zoom + direction);
-    if (next === latest.current.zoom) return;
-    latest.current.zoom = next;
-    latest.current.onStep?.(focus);
-    writeZoom(next);
-    setZoom(next);
+interface ZoomCallbacks {
+  /** Row height of a step at the grid's current width. */
+  heightOf: (zoom: number) => number;
+  /** A gesture starts at `focus`: the grid notes what is under it (before any transform). */
+  onStart?: (focus: ZoomFocus) => void;
+  /** The gesture ended on another step: the grid keeps what it noted in place, then calls
+   * `settle()` once it has re-laid out and scrolled. */
+  onCommit?: () => void;
+}
+
+/**
+ * Pinch on the grid to resize the tiles, continuously (FR-GAL-8): while the fingers move, the
+ * grid itself is scaled around the gesture's centre (a CSS transform, no re-layout per frame);
+ * on release it snaps to the nearest step: the new layout appears at the size that was shown and
+ * eases to its own (`settle`), or eases back when the step didn't change. A trackpad pinch (Ctrl +
+ * wheel) does the same. The browser's own page zoom is kept off the grid meanwhile.
+ *
+ * Returns the step, whether a gesture or its settle is under way (the grid renders more rows
+ * then, as scaling down shows more), and `settle`.
+ */
+export function useGridZoom(container: RefObject<HTMLElement | null>, callbacks: ZoomCallbacks) {
+  const [zoom, setZoom] = useState(readZoom);
+  const [pinching, setPinching] = useState(false);
+  const latest = useRef({ zoom, callbacks });
+  // Read by the listeners; refreshed after each render.
+  useLayoutEffect(() => {
+    latest.current = { zoom, callbacks };
+  });
+  /** Set when a gesture committed a new step: what `settle` animates from. */
+  const pending = useRef<{ scale: number; focus: ZoomFocus } | null>(null);
+  const settleTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  /** Eases the grid from a scale to its real size (set by the effect, which owns the element). */
+  const ease = useRef<((scale: number, focus: ZoomFocus) => void) | null>(null);
+
+  /** Called by the grid after it re-laid out (and re-anchored) for a committed step. */
+  const settle = useCallback(() => {
+    const from = pending.current;
+    pending.current = null;
+    if (from) ease.current?.(from.scale, from.focus);
   }, []);
 
   useEffect(() => {
     const element = container.current;
     if (!element) return;
-    let startDistance = 0;
+    /** The gesture under way: its centre and origin at the start, the live scale. */
+    let gesture: { focus: ZoomFocus; origin: string; scale: number; startDistance: number } | null =
+      null;
+    let frame = 0;
+    let wheelTimer: ReturnType<typeof setTimeout> | undefined;
 
+    ease.current = (scale, focus) => {
+      clearTimeout(settleTimer.current);
+      const done = () => {
+        element.style.transition = "";
+        element.style.transform = "";
+        element.style.transformOrigin = "";
+        element.style.willChange = "";
+        setPinching(false);
+      };
+      if (reducedMotion() || Math.abs(scale - 1) < 0.001) return done();
+      element.style.transition = "none";
+      element.style.transform = "";
+      const box = element.getBoundingClientRect();
+      element.style.transformOrigin = `${focus.x - box.left}px ${focus.y - box.top}px`;
+      element.style.transform = `scale(${scale})`;
+      void element.offsetWidth; // start the transition from this scale
+      element.style.transition = `transform ${SETTLE_MS}ms ${SETTLE_EASING}`;
+      element.style.transform = "scale(1)";
+      // A timer rather than `transitionend`, which doesn't come if the transition is skipped.
+      settleTimer.current = setTimeout(done, SETTLE_MS + 30);
+    };
+
+    function start(focus: ZoomFocus, startDistance = 0) {
+      clearTimeout(settleTimer.current);
+      element!.style.transition = "none";
+      element!.style.transform = "";
+      latest.current.callbacks.onStart?.(focus);
+      const box = element!.getBoundingClientRect();
+      gesture = {
+        focus,
+        origin: `${focus.x - box.left}px ${focus.y - box.top}px`,
+        scale: 1,
+        startDistance,
+      };
+      element!.style.transformOrigin = gesture.origin;
+      element!.style.willChange = "transform";
+      setPinching(true);
+    }
+
+    function scaleTo(raw: number) {
+      if (!gesture) return;
+      const { zoom, callbacks } = latest.current;
+      const current = callbacks.heightOf(zoom);
+      const min = callbacks.heightOf(0) / current / OVERSHOOT;
+      const max = (callbacks.heightOf(MAX_ZOOM) / current) * OVERSHOOT;
+      gesture.scale = Math.min(max, Math.max(min, raw));
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (gesture) element!.style.transform = `scale(${gesture.scale})`;
+      });
+    }
+
+    function end() {
+      cancelAnimationFrame(frame);
+      const ended = gesture;
+      gesture = null;
+      if (!ended) return;
+      const { zoom, callbacks } = latest.current;
+      const current = callbacks.heightOf(zoom);
+      const next = nearestZoom(current * ended.scale, callbacks.heightOf);
+      if (next === zoom) {
+        // Back to the size it had.
+        element!.style.transform = `scale(${ended.scale})`;
+        ease.current?.(ended.scale, ended.focus);
+        return;
+      }
+      // The new layout will be `heightOf(next) / current` times this one: it starts at the
+      // scale shown, relative to its own size.
+      pending.current = {
+        scale: ended.scale / (callbacks.heightOf(next) / current),
+        focus: ended.focus,
+      };
+      latest.current.zoom = next;
+      callbacks.onCommit?.();
+      writeZoom(next);
+      setZoom(next);
+    }
+
+    // `touches` can be missing on synthetic events (other gestures' tests dispatch plain ones).
+    const count = (event: TouchEvent) => event.touches?.length ?? 0;
     const fingers = (event: TouchEvent) => {
       const [a, b] = [event.touches[0]!, event.touches[1]!];
       return {
@@ -85,39 +206,32 @@ export function useGridZoom(
       };
     };
 
-    // `touches` can be missing on synthetic events (other gestures' tests dispatch plain ones).
-    const count = (event: TouchEvent) => event.touches?.length ?? 0;
-
     function onTouchStart(event: TouchEvent) {
-      if (count(event) === 2) startDistance = fingers(event).distance;
+      if (count(event) !== 2) return;
+      const { distance, focus } = fingers(event);
+      if (distance > 0) start(focus, distance);
     }
 
     // Not passive: only a blocking listener can keep the browser from zooming the page.
     function onTouchMove(event: TouchEvent) {
-      if (count(event) !== 2 || startDistance <= 0) return;
+      if (count(event) !== 2 || !gesture || gesture.startDistance <= 0) return;
       if (event.cancelable) event.preventDefault();
-      const { distance, focus } = fingers(event);
-      const ratio = distance / startDistance;
-      if (ratio >= PINCH_STEP_RATIO || ratio <= 1 / PINCH_STEP_RATIO) {
-        step(ratio > 1 ? 1 : -1, focus);
-        startDistance = distance; // the next step counts from here
-      }
+      scaleTo(fingers(event).distance / gesture.startDistance);
     }
 
     function onTouchEnd(event: TouchEvent) {
-      if (count(event) < 2) startDistance = 0;
+      if (count(event) < 2 && gesture?.startDistance) end();
     }
 
-    let wheel = 0;
     function onWheel(event: WheelEvent) {
       // Browsers report a trackpad pinch as a wheel with Ctrl.
       if (!event.ctrlKey) return;
       event.preventDefault();
-      wheel += event.deltaY;
-      if (Math.abs(wheel) >= WHEEL_STEP) {
-        step(wheel < 0 ? 1 : -1, { x: event.clientX, y: event.clientY });
-        wheel = 0;
-      }
+      if (!gesture) start({ x: event.clientX, y: event.clientY });
+      const delta = Math.max(-MAX_WHEEL_DELTA, Math.min(MAX_WHEEL_DELTA, event.deltaY));
+      scaleTo(gesture!.scale * Math.exp(-delta * WHEEL_SCALE));
+      clearTimeout(wheelTimer);
+      wheelTimer = setTimeout(end, WHEEL_END_MS);
     }
 
     element.addEventListener("touchstart", onTouchStart, { passive: true });
@@ -126,13 +240,18 @@ export function useGridZoom(
     element.addEventListener("touchcancel", onTouchEnd);
     element.addEventListener("wheel", onWheel, { passive: false });
     return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(wheelTimer);
+      ease.current = null;
       element.removeEventListener("touchstart", onTouchStart);
       element.removeEventListener("touchmove", onTouchMove);
       element.removeEventListener("touchend", onTouchEnd);
       element.removeEventListener("touchcancel", onTouchEnd);
       element.removeEventListener("wheel", onWheel);
     };
-  }, [container, step]);
+  }, [container]);
 
-  return zoom;
+  useEffect(() => () => clearTimeout(settleTimer.current), []);
+
+  return { zoom, pinching, settle };
 }

@@ -65,15 +65,25 @@ export function PhotoGrid({
 }: PhotoGridProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { width, top } = useElementBox(ref);
-  // Pinch to resize the tiles (FR-GAL-8): the tile under the fingers keeps its place on screen.
-  const anchor = useRef<{ photoId: string; top: number } | null>(null);
-  const zoom = useGridZoom(ref, (focus: ZoomFocus) => {
-    // Optional call: jsdom (tests) has no elementFromPoint.
-    const tile = document
-      .elementFromPoint?.(focus.x, focus.y)
-      ?.closest(`[${TILE_ATTRIBUTE}]`) as HTMLElement | null;
-    const photoId = tile?.getAttribute(TILE_ATTRIBUTE);
-    anchor.current = photoId ? { photoId, top: tile!.getBoundingClientRect().top } : null;
+  // Pinch to resize the tiles (FR-GAL-8): the tile under the fingers at the start keeps its place
+  // once the new step is laid out; `settle` then eases from the size shown to the new one.
+  type Anchor = { photoId: string; top: number };
+  const noted = useRef<Anchor | null>(null);
+  const anchor = useRef<Anchor | null>(null);
+  const { zoom, pinching, settle } = useGridZoom(ref, {
+    heightOf: (step) => rowHeightFor(width, step),
+    onStart: (focus: ZoomFocus) => {
+      // Optional call: jsdom (tests) has no elementFromPoint.
+      const tile = document
+        .elementFromPoint?.(focus.x, focus.y)
+        ?.closest(`[${TILE_ATTRIBUTE}]`) as HTMLElement | null;
+      const photoId = tile?.getAttribute(TILE_ATTRIBUTE);
+      noted.current = photoId ? { photoId, top: tile!.getBoundingClientRect().top } : null;
+    },
+    onCommit: () => {
+      anchor.current = noted.current;
+      noted.current = null;
+    },
   });
   const items = useMemo((): GridItem[] => {
     if (width <= 0) return [];
@@ -93,20 +103,23 @@ export function PhotoGrid({
     ]);
   }, [photos, width, months, zoom]);
 
-  // After a zoom step: scroll so the anchored tile's row is where the tile was.
+  // After a zoom step, before paint: scroll so the anchored tile's row is where the tile was,
+  // then let the grid ease from the size the gesture showed.
   useLayoutEffect(() => {
     const target = anchor.current;
     anchor.current = null;
-    if (!target) return;
-    let start = top;
-    for (const item of items) {
-      if (item.kind === "row" && item.row.tiles.some((t) => t.item.photoId === target.photoId)) {
-        window.scrollTo({ top: Math.max(0, start - target.top), behavior: "instant" });
-        return;
+    if (target) {
+      let start = top;
+      for (const item of items) {
+        if (item.kind === "row" && item.row.tiles.some((t) => t.item.photoId === target.photoId)) {
+          window.scrollTo({ top: Math.max(0, start - target.top), behavior: "instant" });
+          break;
+        }
+        start += item.height;
       }
-      start += item.height;
     }
-  }, [items, top]);
+    settle();
+  }, [items, top, settle]);
 
   const photoIds = useMemo(() => photos.map((photo) => photo.photoId), [photos]);
   const dragStartedInSelect = useDragSelect({
@@ -119,11 +132,13 @@ export function PhotoGrid({
   const virtualizer = useWindowVirtualizer({
     count: items.length,
     estimateSize: (index) => items[index]!.height,
-    overscan: 4,
+    // More rows while pinching: scaling the grid down shows more of it.
+    overscan: pinching ? 16 : 4,
     scrollMargin: top,
   });
-  // Heights are computed, not measured: drop cached sizes when the layout changes.
-  useEffect(() => virtualizer.measure(), [virtualizer, items]);
+  // Heights are computed, not measured: drop cached sizes when the layout changes (before paint,
+  // so a zoom step never shows rows at their old offsets).
+  useLayoutEffect(() => virtualizer.measure(), [virtualizer, items]);
 
   const virtualRows = virtualizer.getVirtualItems();
   const lastIndex = virtualRows.at(-1)?.index ?? -1;

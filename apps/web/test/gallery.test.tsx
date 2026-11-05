@@ -728,21 +728,22 @@ describe("changes made on another device", () => {
 });
 
 describe("pinch to resize the tiles (FR-GAL-8)", () => {
-  // 1000 px wide in jsdom (setup.ts): the wider screens' heights; a 4:3 tile alone in its row is
-  // 4/3 × the target height.
+  // 1000 px wide in jsdom (setup.ts): the wider screens' heights (96, 136, 192, 272, 384, 520);
+  // a 4:3 tile alone in its row is 4/3 × the target height.
   const tileWidth = async () =>
     parseFloat((await screen.findByRole("link", { name: "IMG_0.jpg" })).style.width);
-  const grid = () => screen.getByRole("link", { name: "IMG_0.jpg" }).closest(".touch-pan-y")!;
+  const grid = () =>
+    screen.getByRole("link", { name: "IMG_0.jpg" }).closest<HTMLElement>(".touch-pan-y")!;
   const one = () => setup({ "GET /photos": { items: [testPhoto(0)], nextCursor: null } });
 
-  /** Two fingers `from` px apart, moved to each of `to` (px apart), then lifted. */
-  function pinch(from: number, ...to: number[]) {
-    const fingers = (d: number) => ({
-      touches: [
-        { clientX: 500 - d / 2, clientY: 50 },
-        { clientX: 500 + d / 2, clientY: 50 },
-      ],
-    });
+  const fingers = (d: number) => ({
+    touches: [
+      { clientX: 500 - d / 2, clientY: 50 },
+      { clientX: 500 + d / 2, clientY: 50 },
+    ],
+  });
+  /** Two fingers `from` px apart, moved to each of `to` (px apart); `lift` ends the gesture. */
+  function pinch(from: number, to: number[], { lift = true } = {}) {
     fireEvent.touchStart(grid(), fingers(from));
     const moves = to.map((d) => {
       const event = new Event("touchmove", { bubbles: true, cancelable: true });
@@ -750,7 +751,7 @@ describe("pinch to resize the tiles (FR-GAL-8)", () => {
       act(() => void grid().dispatchEvent(event));
       return event;
     });
-    fireEvent.touchEnd(grid(), { touches: [] });
+    if (lift) act(() => void fireEvent.touchEnd(grid(), { touches: [] }));
     return moves;
   }
 
@@ -760,45 +761,64 @@ describe("pinch to resize the tiles (FR-GAL-8)", () => {
     vi.restoreAllMocks();
   });
 
-  it("fingers apart make the tiles bigger, a step per 25 %, several in one gesture", async () => {
+  it("follows the fingers continuously, then snaps to the nearest size", async () => {
     await renderAt("/gallery", { api: one().api });
     expect(await tileWidth()).toBe(256); // 192 px rows
 
-    const [first] = pinch(100, 120, 130);
-    expect(await tileWidth()).toBeCloseTo((272 * 4) / 3); // 130 / 100 ≥ 1.25: one step
-    // The browser doesn't zoom the page meanwhile.
-    expect(first!.defaultPrevented).toBe(true);
+    const [move] = pinch(100, [130], { lift: false });
+    // The browser doesn't zoom the page; the grid is scaled live, without a re-layout yet.
+    expect(move!.defaultPrevented).toBe(true);
+    await waitFor(() => expect(grid().style.transform).toBe("scale(1.3)"));
+    expect(await tileWidth()).toBe(256);
 
-    pinch(100, 130, 170); // 1.3, then 170 / 130 ≈ 1.31 from there: two steps
+    act(() => void fireEvent.touchEnd(grid(), { touches: [] }));
+    // 192 × 1.3 ≈ 250 px: nearest step 272 px.
+    expect(await tileWidth()).toBeCloseTo((272 * 4) / 3);
+    // The transform eases away, then is cleared.
+    await waitFor(() => expect(grid().style.transform).toBe(""), { timeout: 1000 });
+  });
+
+  it("goes as far as the fingers do, and stops at the largest size", async () => {
+    await renderAt("/gallery", { api: one().api });
+    await tileWidth();
+    pinch(100, [130, 170]); // 192 × 1.7 ≈ 326 px: nearest 384
+    expect(await tileWidth()).toBeCloseTo((384 * 4) / 3);
+    pinch(100, [300]); // way past the largest: 520
     expect(await tileWidth()).toBeCloseTo((520 * 4) / 3);
-    pinch(100, 200); // already the largest
+    pinch(100, [200]);
     expect(await tileWidth()).toBeCloseTo((520 * 4) / 3);
   });
 
-  it("fingers together make them smaller, and the size is remembered", async () => {
+  it("a small pinch springs back", async () => {
     await renderAt("/gallery", { api: one().api });
     await tileWidth();
-    pinch(200, 150);
+    pinch(100, [110]); // 211 px: still nearest 192
+    expect(await tileWidth()).toBe(256);
+    expect(localStorage.getItem("photo-app.gridZoom")).toBeNull();
+    await waitFor(() => expect(grid().style.transform).toBe(""), { timeout: 1000 });
+  });
+
+  it("fingers together make the tiles smaller, and the size is remembered", async () => {
+    await renderAt("/gallery", { api: one().api });
+    await tileWidth();
+    pinch(200, [150]); // 144 px: nearest 136
     expect(await tileWidth()).toBeCloseTo((136 * 4) / 3);
     expect(localStorage.getItem("photo-app.gridZoom")).toBe("1");
 
     cleanup();
-    await renderAt("/videos", { api: one().api });
-    await screen.findByRole("heading", { name: "Videos" });
-    cleanup();
     await renderAt("/gallery", { api: one().api });
     expect(await tileWidth()).toBeCloseTo((136 * 4) / 3);
   });
 
-  it("a trackpad pinch (Ctrl + wheel) steps too; a plain wheel scrolls", async () => {
+  it("a trackpad pinch (Ctrl + wheel) zooms too; a plain wheel scrolls", async () => {
     await renderAt("/gallery", { api: one().api });
     await tileWidth();
-    const plain = fireEvent.wheel(grid(), { deltaY: -100 });
-    expect(plain).toBe(true);
-    expect(await tileWidth()).toBe(256);
-    const pinched = fireEvent.wheel(grid(), { deltaY: -100, ctrlKey: true });
-    expect(pinched).toBe(false); // the page doesn't zoom
-    expect(await tileWidth()).toBeCloseTo((272 * 4) / 3);
+    expect(fireEvent.wheel(grid(), { deltaY: -100 })).toBe(true);
+    // A mouse notch counts as 25: e^0.25 ≈ 1.28 → 246 px, nearest 272.
+    expect(fireEvent.wheel(grid(), { deltaY: -100, ctrlKey: true })).toBe(false);
+    await waitFor(() =>
+      expect(parseFloat(grid().querySelector("a")!.style.width)).toBeCloseTo((272 * 4) / 3),
+    );
   });
 
   it("keeps the photo under the fingers where it was", async () => {
@@ -809,7 +829,7 @@ describe("pinch to resize the tiles (FR-GAL-8)", () => {
     document.elementFromPoint = () => target;
     vi.spyOn(target, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 120, 100, 100));
     scroll.mockClear();
-    pinch(100, 130);
+    pinch(100, [130]);
     await waitFor(() => expect(scroll).toHaveBeenCalled());
     // 4:3 tiles at 272 px rows: 3 per 1000 px row, so IMG_9 is in the 4th row (3 rows above,
     // under the 44 px month heading); its row lands where the tile was (120 px from the top).
