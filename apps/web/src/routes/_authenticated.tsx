@@ -75,7 +75,7 @@ function OfflineBanner() {
   return (
     <p
       role="status"
-      className="mb-4 flex items-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground"
+      className="mb-5 flex items-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground md:mb-4"
     >
       <WifiOff aria-hidden className="size-4 shrink-0" />
       You're offline. Some things won't load until you're back online.

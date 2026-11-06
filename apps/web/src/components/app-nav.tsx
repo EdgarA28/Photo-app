@@ -86,19 +86,22 @@ function ActiveFrame() {
   return <Viewfinder className="opacity-0 group-aria-[current=page]:opacity-100" />;
 }
 
-/** Bottom tab bar on small screens, clear of the home indicator in standalone mode. */
+/**
+ * Floating tab bar on small screens, clear of the home indicator in standalone mode: the photos
+ * run on around and under it, as in Google Photos.
+ */
 export function BottomNav() {
   return (
     <nav
       aria-label="Main"
-      className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/90 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+      className="fixed inset-x-3 bottom-[calc(0.5rem+env(safe-area-inset-bottom))] z-40 rounded-full border bg-background/80 shadow-lg backdrop-blur-md md:hidden"
     >
       <ul className="grid grid-cols-6">
         {NAV.map(({ to, label, icon: Icon }) => (
-          <li key={to} className="flex justify-center py-1.5">
+          <li key={to} className="flex justify-center py-1">
             <Link
               to={to}
-              className={cn(linkBase, "min-w-12 flex-col gap-0.5 px-1 py-1.5 text-[0.6875rem]")}
+              className={cn(linkBase, "min-w-12 flex-col gap-0.5 px-1 py-1 text-[0.6875rem]")}
             >
               <ActiveFrame />
               <Icon aria-hidden className="size-5" />

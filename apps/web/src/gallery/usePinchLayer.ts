@@ -7,13 +7,16 @@ import {
   gridItems,
   place,
   tileAt,
+  ZOOM_STEPS,
   type GridItem,
   type Placement,
 } from "./gridLayout";
-import { ZOOM_STEPS, type ZoomCallbacks, type ZoomFocus } from "./useGridZoom";
+import type { ZoomCallbacks, ZoomFocus } from "./useGridZoom";
 
 /** Set on the grid while the layer shows: its real rows are hidden then. */
 export const PINCHING_ATTRIBUTE = "data-pinching";
+/** Set on a step's grid once it has its first opacity: only then does opacity animate. */
+const PLACED_ATTRIBUTE = "data-placed";
 /** Tiles rendered beyond the viewport, in viewport heights (so most frames add none). */
 const RENDER_MARGIN = 0.75;
 /** How long the hand-over waits for the real rows' images (a slow one mustn't hold the layer). */
@@ -176,6 +179,12 @@ export function usePinchLayer({
       if (node) {
         node.style.transform = `translate3d(${x}px, ${top - gridTop}px, 0) scale(${zoomed})`;
         node.style.opacity = String(alpha);
+        // A new grid starts at opacity 1 (`draw` reads the layout before it gets here): were it
+        // animated from that, the next size would flash up, far too small, at each pinch's start.
+        if (!node.hasAttribute(PLACED_ATTRIBUTE)) {
+          void getComputedStyle(node).opacity;
+          node.setAttribute(PLACED_ATTRIBUTE, "");
+        }
       }
       // What the viewport shows of this grid, in its own coordinates.
       const screen = (y: number) => (y - top) / zoomed;
@@ -245,7 +254,7 @@ export function usePinchLayer({
       const heights = ZOOM_STEPS.map(heightOf);
       const { items, zoom } = current();
       const placements = ZOOM_STEPS.map((step) =>
-        place(step === zoom ? items : gridItems(photos, width, heights[step]!, months), indexOf),
+        place(step === zoom ? items : gridItems(photos, width, step, months), indexOf),
       );
       const here = placements[zoom]!;
       const x = focus.x - box.left;

@@ -29,6 +29,7 @@ import { libraryFilter, type LibraryKind } from "./library";
 import type { GallerySearch } from "./search";
 import { SelectButton } from "./SelectButton";
 import { SelectionBar } from "./SelectionBar";
+import { useHideOnScroll } from "./useHideOnScroll";
 import { useSelection } from "./useSelection";
 import { ShareLinkDialog } from "@/links/ShareLinkDialog";
 import { albumsQuery, useAddToAlbum } from "@/queries/albums";
@@ -89,11 +90,18 @@ export function Library({
   // In an album that isn't in my list (shared with me) the photos belong to someone else.
   const { data: albums } = useQuery({ ...albumsQuery(api), enabled: album !== undefined });
   const own = album === undefined || !!albums?.items.some((a) => a.albumId === album);
+  // Its buttons (Unselect all, the album being added to) stay while they're the way out.
+  const headerHidden = useHideOnScroll(!selection.active && !addTo);
 
   return (
-    <main className="space-y-5">
+    // On a phone the header takes as little room from the photos as it can: tight to the top of the
+    // page and to the grid, and out of the way while scrolling down.
+    <main className="-mt-5 space-y-1 md:mt-0 md:space-y-5">
       {/* Stays at the top while the photos scroll under it; full width over the page padding. */}
-      <div className="sticky top-0 z-20 -mx-4 space-y-3 bg-background/95 px-4 py-3 backdrop-blur md:-mx-8 md:px-8">
+      <div
+        data-hidden={headerHidden || undefined}
+        className="sticky top-0 z-20 -mx-4 space-y-2 bg-background/95 px-4 py-2 backdrop-blur transition-transform duration-200 max-md:data-hidden:not-focus-within:-translate-y-full md:-mx-8 md:space-y-3 md:px-8 md:py-3"
+      >
         {addTo ? (
           <AddToHeader api={api} albumId={addTo} kind={kind} />
         ) : (
@@ -111,7 +119,7 @@ export function Library({
                 }
               />
             )}
-            <div className="flex w-full gap-2 md:w-auto">
+            <div className="flex gap-2">
               <GalleryFilters sort={search.sort} setSearch={setSearch} />
               {(photos.length > 0 || selection.active) && (
                 <SelectButton
@@ -474,7 +482,7 @@ function GalleryFilters({
   setSearch: (change: (prev: GallerySearch) => GallerySearch) => void;
 }) {
   return (
-    <div className="flex min-w-0 flex-1 gap-2 md:flex-none">
+    <div className="flex gap-2">
       <Select
         value={sort}
         onValueChange={(value) => setSearch((prev) => ({ ...prev, sort: value as PhotoSort }))}

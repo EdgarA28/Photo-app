@@ -7,10 +7,10 @@ import { useImageFailed } from "@/components/useImageFailed";
 import { VideoBadge } from "@/components/VideoBadge";
 import { videoLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { GAP, gridItems, MONTH_HEADING_HEIGHT, type GridItem } from "./gridLayout";
+import { gridItems, MONTH_HEADING_HEIGHT, rowHeightFor, type GridItem } from "./gridLayout";
 import type { GallerySearch } from "./search";
 import { TILE_ATTRIBUTE, useDragSelect } from "./useDragSelect";
-import { rowHeightFor, useGridZoom } from "./useGridZoom";
+import { useGridZoom } from "./useGridZoom";
 import { usePinchLayer, type PinchLayerState } from "./usePinchLayer";
 
 /** Start loading the next page this many rows before the end (FR-GAL-2). */
@@ -69,7 +69,7 @@ export function PhotoGrid({
   });
   const { zoom } = useGridZoom(ref, { heightOf, ...pinch.callbacks });
   const items = useMemo(
-    () => gridItems(photos, width, rowHeightFor(width, zoom), months),
+    () => gridItems(photos, width, zoom, months),
     [photos, width, months, zoom],
   );
   useLayoutEffect(() => {
@@ -111,8 +111,9 @@ export function PhotoGrid({
   return (
     <div
       ref={ref}
-      // Two-finger pinch resizes the tiles instead of zooming the page (useGridZoom).
-      className="group relative w-full touch-pan-x touch-pan-y"
+      // Two-finger pinch resizes the tiles instead of zooming the page (useGridZoom). On a phone
+      // the grid goes over the page padding to the screen's edges, as in Google Photos.
+      className="group relative -mx-4 touch-pan-x touch-pan-y md:mx-0"
       style={{ height: totalHeight }}
     >
       {virtualRows.map((virtualRow) => {
@@ -134,7 +135,7 @@ export function PhotoGrid({
           <div
             key={virtualRow.key}
             className={cn("absolute inset-x-0 top-0 flex", HIDDEN_WHILE_PINCHING)}
-            style={{ gap: GAP, height: row.height, transform: translate }}
+            style={{ gap: item.gap, height: row.height, transform: translate }}
           >
             {row.tiles.map(({ item, width }) => (
               <PhotoTile
@@ -156,7 +157,9 @@ export function PhotoGrid({
   );
 }
 
-const HEADING_CLASS = "absolute top-0 flex items-end pb-2 text-sm font-medium text-foreground";
+// The grid has no side padding on a phone; its headings keep the page's.
+const HEADING_CLASS =
+  "absolute top-0 flex items-end px-4 pb-2 text-sm font-medium text-foreground md:px-0";
 // The pinch layer stands in for the rows while it shows (usePinchLayer's PINCHING_ATTRIBUTE;
 // a literal, for Tailwind's class scanner).
 const HIDDEN_WHILE_PINCHING = "group-data-pinching:invisible";
@@ -185,7 +188,7 @@ function PinchLayer({
           ref={stepRef(step)}
           data-pinch-step={step}
           // The dissolve takes its time however fast the fingers pass through it.
-          className="absolute top-0 left-0 h-0 w-full origin-top-left will-change-transform motion-safe:transition-opacity motion-safe:duration-200 motion-safe:ease-linear"
+          className="absolute top-0 left-0 h-0 w-full origin-top-left will-change-transform motion-safe:data-placed:transition-opacity motion-safe:data-placed:duration-200 motion-safe:data-placed:ease-linear"
         >
           {/* Solid behind the tiles: the grid below would otherwise show through the gaps while this
               one dissolves in, as flickering lines. */}

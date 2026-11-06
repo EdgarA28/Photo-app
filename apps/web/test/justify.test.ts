@@ -32,6 +32,13 @@ describe("justifyRows (§12.3)", () => {
     expect(rowWidth(last)).toBeLessThan(1000);
   });
 
+  it("closes a row at maxPerRow, growing it to fill the width", () => {
+    const [first] = justifyRows([0.75, 0.75, 0.75], byAspect, { ...options, maxPerRow: 2 });
+    expect(first!.tiles).toHaveLength(2);
+    expect(first!.height).toBeCloseTo((1000 - 4) / 1.5, 6);
+    expect(rowWidth(first!)).toBeCloseTo(1000, 6);
+  });
+
   it("clamps panoramas and very tall photos", () => {
     const [panorama] = justifyRows([10], byAspect, { ...options, containerWidth: 2000 });
     expect(panorama!.tiles[0]!.width / panorama!.height).toBe(3);

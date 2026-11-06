@@ -1,19 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { settleStep } from "./gridLayout";
-
-/**
- * Tile size of the gallery grids (FR-GAL-8, like Google Photos): the justified rows' target
- * height in steps, smallest first. Phones (< 640 px) and wider screens have their own heights;
- * the step is shared. The largest phone step shows about two photos per row (user limit). Each
- * step must be a real change of size: on a phone 160 px laid out landscape photos as 240 px does,
- * two per row, so it only reshuffled the rows.
- */
-export const PHONE_ROW_HEIGHTS = [56, 80, 112, 240] as const;
-export const WIDE_ROW_HEIGHTS = [96, 136, 192, 384] as const;
-/** The size before 8.33 (112 px phone, 192 px wider). */
-export const DEFAULT_ZOOM = 2;
-export const MAX_ZOOM = PHONE_ROW_HEIGHTS.length - 1;
-export const ZOOM_STEPS = Array.from({ length: MAX_ZOOM + 1 }, (_, step) => step);
+import { clampZoom, DEFAULT_ZOOM, MAX_ZOOM, settleStep, ZOOM_STEPS } from "./gridLayout";
 
 /** Fingers → size: the row height goes with the distance's ratio to this power, so a size takes
  * about twice the finger travel (at 1, one movement crossed all the sizes: user, "too fast"). */
@@ -29,11 +15,6 @@ const WHEEL_END_MS = 180;
 /** After release: the size eases from where the fingers left it to the nearest step. */
 export const SETTLE_MS = 420;
 const STORAGE_KEY = "photo-app.gridZoom";
-
-export const rowHeightFor = (width: number, zoom: number) =>
-  (width < 640 ? PHONE_ROW_HEIGHTS : WIDE_ROW_HEIGHTS)[clampZoom(zoom)]!;
-
-const clampZoom = (zoom: number) => Math.min(MAX_ZOOM, Math.max(0, Math.round(zoom)));
 
 /** The gesture's centre in viewport coordinates. */
 export interface ZoomFocus {

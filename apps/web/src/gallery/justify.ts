@@ -12,6 +12,8 @@ export interface JustifyOptions {
   containerWidth: number;
   targetHeight: number;
   gap: number;
+  /** Closes a row at this many tiles, even short of the width: it then grows taller to fill it. */
+  maxPerRow?: number | undefined;
 }
 
 // Panoramas and very tall photos would make a row too thin or a tile a sliver.
@@ -26,7 +28,7 @@ const MAX_ASPECT = 3;
 export function justifyRows<T>(
   items: readonly T[],
   aspectOf: (item: T) => number,
-  { containerWidth, targetHeight, gap }: JustifyOptions,
+  { containerWidth, targetHeight, gap, maxPerRow = Infinity }: JustifyOptions,
 ): Row<T>[] {
   const rows: Row<T>[] = [];
   let pending: { item: T; aspect: number }[] = [];
@@ -37,7 +39,7 @@ export function justifyRows<T>(
     pending.push({ item, aspect });
     aspectSum += aspect;
     const available = containerWidth - gap * (pending.length - 1);
-    if (aspectSum * targetHeight >= available) {
+    if (aspectSum * targetHeight >= available || pending.length >= maxPerRow) {
       const height = available / aspectSum;
       rows.push({
         height,

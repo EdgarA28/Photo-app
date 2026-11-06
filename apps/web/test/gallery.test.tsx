@@ -729,7 +729,7 @@ describe("changes made on another device", () => {
 });
 
 describe("pinch to resize the tiles (FR-GAL-8)", () => {
-  // 1000 px wide in jsdom (setup.ts): the wider screens' heights (96, 136, 192, 384);
+  // 1000 px wide in jsdom (setup.ts): the wider screens' heights (96, 136, 192, 272, 384);
   // a 4:3 tile alone in its row is 4/3 × the target height.
   const tileWidth = async () =>
     parseFloat((await screen.findByRole("link", { name: "IMG_0.jpg" })).style.width);
@@ -772,24 +772,40 @@ describe("pinch to resize the tiles (FR-GAL-8)", () => {
   /** The (only) photo's tile in the pinch layer. */
   const layerTile = () => document.querySelector<HTMLElement>("[data-pinch-tile]");
 
+  it("doesn't animate a new grid's first opacity, so the next size never flashes up", async () => {
+    await renderAt("/gallery", { api: one().api });
+    await tileWidth();
+    const computed = vi.spyOn(window, "getComputedStyle");
+    pinch(100, [110], { lift: false });
+    const step = () => document.querySelector<HTMLElement>('[data-pinch-step="3"]');
+    await waitFor(() => expect(step()?.hasAttribute("data-placed")).toBe(true));
+    // Opacity was set and applied before the transition (gated on data-placed) came on.
+    expect(step()!.style.opacity).toBe("0");
+    expect(computed).toHaveBeenCalledWith(step());
+    expect(step()!.className).toContain("motion-safe:data-placed:transition-opacity");
+    act(() => void fireEvent.touchEnd(grid(), { touches: [] }));
+    await settlesAt(256);
+  });
+
   it("moves the tiles continuously between two sizes, then settles on the nearest", async () => {
     await renderAt("/gallery", { api: one().api });
     expect(await tileWidth()).toBe(256); // 192 px rows
 
-    const [move] = pinch(100, [300], { lift: false });
-    // The browser doesn't zoom the page; the 192 and 384 px grids show, scaled to the same size
-    // (192 × √3 ≈ 333 px, as the size goes with the square root of the fingers), the larger fading in (75 % of the way on a log scale), the rows hidden.
+    const [move] = pinch(100, [190], { lift: false });
+    // The browser doesn't zoom the page; the 192 and 272 px grids show, scaled to the same size
+    // (192 × √1.9 ≈ 265 px, as the size goes with the square root of the fingers), the larger
+    // fading in (92 % of the way on a log scale), the rows hidden.
     expect(move!.defaultPrevented).toBe(true);
     await waitFor(() => expect(grid().hasAttribute("data-pinching")).toBe(true));
     const step = (n: number) => document.querySelector<HTMLElement>(`[data-pinch-step="${n}"]`)!;
     await waitFor(() => expect(step(3)).toBeTruthy());
-    const t = Math.log(Math.sqrt(3)) / Math.log(384 / 192);
+    const t = Math.log(Math.sqrt(1.9)) / Math.log(272 / 192);
     expect(Number(step(3).style.opacity)).toBeCloseTo(fadeIn(t));
     expect(step(2).style.opacity).toBe("1");
     // Nothing of the grid below shows through the gaps of the one fading in.
     expect(step(3).querySelector("[data-pinch-backdrop]")).not.toBeNull();
     const scaleOf = (n: number) => Number(/scale\((.+)\)/.exec(step(n).style.transform)![1]);
-    expect(scaleOf(2) * 192).toBeCloseTo(scaleOf(3) * 384);
+    expect(scaleOf(2) * 192).toBeCloseTo(scaleOf(3) * 272);
     // The smaller grid covers the 1000 px width.
     const leftOf = (n: number) =>
       parseFloat(/translate3d\(([^,]+),/.exec(step(n).style.transform)![1]!);
@@ -798,8 +814,8 @@ describe("pinch to resize the tiles (FR-GAL-8)", () => {
     expect(await tileWidth()).toBe(256);
 
     act(() => void fireEvent.touchEnd(grid(), { touches: [] }));
-    // Eases to the nearest step, 384 px, which the grid then lays out; the layer goes.
-    await settlesAt((384 * 4) / 3);
+    // Eases to the nearest step, 272 px, which the grid then lays out; the layer goes.
+    await settlesAt((272 * 4) / 3);
     await waitFor(() => expect(layerTile()).toBeNull());
     expect(grid().hasAttribute("data-pinching")).toBe(false);
   });
@@ -811,6 +827,8 @@ describe("pinch to resize the tiles (FR-GAL-8)", () => {
     await settlesAt((136 * 4) / 3);
     pinch(100, [150, 900]);
     await settlesAt((192 * 4) / 3);
+    pinch(100, [900]);
+    await settlesAt((272 * 4) / 3);
     pinch(100, [900]);
     await settlesAt((384 * 4) / 3);
     pinch(100, [900]); // already the largest
@@ -841,7 +859,7 @@ describe("pinch to resize the tiles (FR-GAL-8)", () => {
       expect(document.querySelector("[data-pinch-layer]")).not.toBeNull();
       expect(grid().hasAttribute("data-pinching")).toBe(true);
       act(() => finish.forEach((resolve) => resolve()));
-      await settlesAt((384 * 4) / 3);
+      await settlesAt((272 * 4) / 3);
     } finally {
       Reflect.deleteProperty(HTMLImageElement.prototype, "decode");
     }
@@ -872,11 +890,11 @@ describe("pinch to resize the tiles (FR-GAL-8)", () => {
     await renderAt("/gallery", { api: one().api });
     await tileWidth();
     expect(fireEvent.wheel(grid(), { deltaY: -100 })).toBe(true);
-    // A mouse notch counts as 25: two are e^0.5 ≈ 1.65 → 317 px, nearest 384.
+    // A mouse notch counts as 25: two are e^0.5 ≈ 1.65 → 317 px, nearest 272.
     expect(fireEvent.wheel(grid(), { deltaY: -100, ctrlKey: true })).toBe(false);
     fireEvent.wheel(grid(), { deltaY: -100, ctrlKey: true });
     await waitFor(() =>
-      expect(parseFloat(grid().querySelector("a")!.style.width)).toBeCloseTo((384 * 4) / 3),
+      expect(parseFloat(grid().querySelector("a")!.style.width)).toBeCloseTo((272 * 4) / 3),
     );
   });
 
@@ -887,7 +905,7 @@ describe("pinch to resize the tiles (FR-GAL-8)", () => {
     // The grid scrolled 300 px up the page (its top above the viewport).
     vi.spyOn(grid(), "getBoundingClientRect").mockReturnValue(new DOMRect(0, -300, 1000, 3000));
     scroll.mockClear();
-    pinch(100, [300]); // fingers at (500, 50): 350 px down the grid; 192 × √3 ≈ 333 px
+    pinch(100, [300]); // fingers at (500, 50): 350 px down the grid; the next size, 272 px
     // The page scrolls with every frame; the last one is the settled size.
     await waitFor(() => expect(document.querySelector("[data-pinch-layer]")).toBeNull());
 
@@ -896,10 +914,10 @@ describe("pinch to resize the tiles (FR-GAL-8)", () => {
     // way down it.
     const before = (1000 - 3 * 4) / (4 * (4 / 3));
     const v = (350 - 44 - (before + 4)) / before;
-    // 384 px: 2 a row, 373.5 px high; IMG_5 is last in the 3rd row. The page scrolls so that the
+    // 272 px: 3 a row, 248 px high; IMG_5 is last in the 2nd row. The page scrolls so that the
     // same point of it is under the fingers again.
-    const after = (1000 - 4) / (2 * (4 / 3));
-    const anchorY = 44 + 2 * (after + 4) + v * after;
+    const after = (1000 - 8) / (3 * (4 / 3));
+    const anchorY = 44 + after + 4 + v * after;
     const [options] = scroll.mock.calls.at(-1)! as unknown as [ScrollToOptions];
     expect(options.top).toBeCloseTo(-300 - (50 - anchorY));
   });
@@ -930,7 +948,7 @@ describe("pinch to resize the tiles (FR-GAL-8)", () => {
     const lift = new Event("touchend", { bubbles: true });
     Object.assign(lift, { touches: [] });
     act(() => void finger.dispatchEvent(lift));
-    await settlesAt((384 * 4) / 3);
+    await settlesAt((272 * 4) / 3);
   });
 
   it("a new touch ends a pinch whose fingers were lost", async () => {
@@ -944,7 +962,7 @@ describe("pinch to resize the tiles (FR-GAL-8)", () => {
     act(() => void grid().dispatchEvent(move));
     // No touchend came; the next touch is another finger altogether.
     fireEvent.touchStart(document.body, { touches: [{ clientX: 10, clientY: 10, identifier: 9 }] });
-    await settlesAt((384 * 4) / 3);
+    await settlesAt((272 * 4) / 3);
   });
 
   it("a second finger cancels a press-to-select", async () => {
