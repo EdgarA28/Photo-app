@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Version** | 0.53 |
-| **Date** | 2026-11-05 |
+| **Version** | 0.54 |
+| **Date** | 2026-11-06 |
 | **Owner** | Edgar |
 | **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5), videos (Phase 14) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
 
@@ -265,7 +265,7 @@ IDs are stable — reference them in issues, PRs and tests.
 | FR-GAL-3 | Gallery filters (album, sort order) are reflected in the URL and bookmarkable. |
 | FR-GAL-4 | Clicking a photo opens a full-screen viewer showing the preview image, with next/previous navigation. |
 | FR-GAL-7 | The viewer zooms: pinch, double tap and drag on touch; wheel or trackpad pinch, double click, drag and + / − / 0 on a computer. Zoomed past the preview's detail, the full-resolution original loads and replaces it (where the browser can show its format). |
-| FR-GAL-8 | The photo grids (Gallery, Videos, albums) change their tile size with a pinch, as in Google Photos: fingers apart → bigger tiles, together → smaller, continuously: the grid follows the fingers, and on release it settles on the nearest of 6 sizes (from small tiles to about one photo per row on a phone) with a short animation, or springs back after a small pinch; a trackpad pinch (Ctrl + wheel) does the same on a computer; with reduced motion the settle isn't animated. The photo under the fingers stays in place, the page itself doesn't zoom, and the size is remembered on the device. |
+| FR-GAL-8 | The photo grids (Gallery, Videos, albums) change their tile size with a pinch, as in Google Photos: fingers apart → bigger tiles, together → smaller, continuously: the grid follows the fingers, always covering the width, each size dissolving into the next as it is reached, and one pinch moves at most one size; on release it settles on the nearest of 4 sizes (from small tiles to about two photos per row on a phone) with a short animation, or springs back after a small pinch that hasn't shown the new layout; a trackpad pinch (Ctrl + wheel) does the same on a computer; with reduced motion the settle isn't animated. The photo under the fingers stays in place, the page itself doesn't zoom, and the size is remembered on the device. |
 | FR-GAL-5 | Photos still processing aren't shown in the gallery, albums or the viewer's previous/next; they appear once ready (the list is polled meanwhile). Photos that failed processing show an error state. |
 | FR-GAL-6 | Correct orientation for all photos (EXIF orientation applied). |
 
@@ -902,6 +902,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.38 | 2026-11-01 | Less gallery polling while uploads run: 15 s instead of 3 s, refreshes during a batch only mark lists stale (13.1j, §12.4) |
 | 0.53 | 2026-11-05 | FR-GAL-8 (user request): pinch to resize the grid tiles, continuous (live scale, settle on the nearest size) |
+| 0.54 | 2026-11-06 | FR-GAL-8 reworked after phone tests (user): the grid always covers the width, each size dissolves into the next, one size per pinch, a new layout once shown stays, 4 sizes |
 | 0.52 | 2026-11-05 | 14.9 playback copy (user decision): FR-VID-5 plays the copy, scope (§2), `playback/` key (§8.1), `playbackStatus` (§8.2, §9), §10.2 playback copy + limits (3 GB, 15 min, 2 GB `/tmp`), §16 cost, B-7 |
 | 0.51 | 2026-11-04 | 14.7: quota defaults 5 GB dev / 25 GB prod (FR-ACC-2, §13.2), `GET /me` usage adds `videoCount` / `videoBytes` (§9), video costs in §16 and `docs/SCALING.md` §3.7 |
 | 0.50 | 2026-11-04 | FR-VID-11 (user request): photos and videos separate in the library, Gallery = photos, new Videos section (`/videos`), albums / map / places mixed; FR-VID-4 adjusted; §8.2 `VIDEOS#{userId}` GSI1 partition; §9 `mediaType` on `/photos` and place photos; §12.1 routes |

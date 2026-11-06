@@ -7,25 +7,14 @@ import { useImageFailed } from "@/components/useImageFailed";
 import { VideoBadge } from "@/components/VideoBadge";
 import { videoLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { justifyRows, type Row } from "./justify";
-import { monthSections } from "./months";
+import { GAP, gridItems, MONTH_HEADING_HEIGHT, type GridItem } from "./gridLayout";
 import type { GallerySearch } from "./search";
 import { TILE_ATTRIBUTE, useDragSelect } from "./useDragSelect";
-import { rowHeightFor, useGridZoom, type ZoomFocus } from "./useGridZoom";
+import { rowHeightFor, useGridZoom } from "./useGridZoom";
+import { usePinchLayer, type PinchLayerState } from "./usePinchLayer";
 
-const GAP = 4;
 /** Start loading the next page this many rows before the end (FR-GAL-2). */
 const LOOKAHEAD_ROWS = 6;
-/** Height of a month heading above its rows, the gap after the previous row included. */
-const MONTH_HEADING_HEIGHT = 44;
-
-// Pending photos have no dimensions yet (they come from the thumbnail Lambda): square until ready.
-const aspectOf = (photo: Photo) => (photo.width && photo.height ? photo.width / photo.height : 1);
-
-/** What the virtualizer lays out: a month heading or a row of tiles. */
-type GridItem =
-  | { kind: "month"; label: string; height: number }
-  | { kind: "row"; row: Row<Photo>; height: number };
 
 /** Select mode (8.11): tiles toggle instead of opening the viewer. */
 export interface GridSelection {
@@ -65,61 +54,27 @@ export function PhotoGrid({
 }: PhotoGridProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { width, top } = useElementBox(ref);
-  // Pinch to resize the tiles (FR-GAL-8): the tile under the fingers at the start keeps its place
-  // once the new step is laid out; `settle` then eases from the size shown to the new one.
-  type Anchor = { photoId: string; top: number };
-  const noted = useRef<Anchor | null>(null);
-  const anchor = useRef<Anchor | null>(null);
-  const { zoom, pinching, settle } = useGridZoom(ref, {
-    heightOf: (step) => rowHeightFor(width, step),
-    onStart: (focus: ZoomFocus) => {
-      // Optional call: jsdom (tests) has no elementFromPoint.
-      const tile = document
-        .elementFromPoint?.(focus.x, focus.y)
-        ?.closest(`[${TILE_ATTRIBUTE}]`) as HTMLElement | null;
-      const photoId = tile?.getAttribute(TILE_ATTRIBUTE);
-      noted.current = photoId ? { photoId, top: tile!.getBoundingClientRect().top } : null;
-    },
-    onCommit: () => {
-      anchor.current = noted.current;
-      noted.current = null;
-    },
+  const heightOf = (step: number) => rowHeightFor(width, step);
+  // Pinch to resize the tiles (FR-GAL-8): `useGridZoom` reads the fingers, `usePinchLayer` shows
+  // the grid between two steps meanwhile and hands over to the new step's layout.
+  // The layout a gesture starts from (read by the listeners, refreshed after each render).
+  const current = useRef<{ items: readonly GridItem[]; zoom: number }>({ items: [], zoom: 0 });
+  const pinch = usePinchLayer({
+    grid: ref,
+    photos,
+    width,
+    months,
+    heightOf,
+    current: () => current.current,
   });
-  const items = useMemo((): GridItem[] => {
-    if (width <= 0) return [];
-    // Row height to aim for; full rows end up a little taller or shorter to fill the width.
-    const options = { containerWidth: width, targetHeight: rowHeightFor(width, zoom), gap: GAP };
-    const rowsOf = (list: Photo[]): GridItem[] =>
-      justifyRows(list, aspectOf, options).map((row) => ({
-        kind: "row",
-        row,
-        height: row.height + GAP,
-      }));
-    if (!months) return rowsOf(photos);
-    // Each month gets its own rows, so a row never mixes months (§12.3).
-    return monthSections(photos, (photo) => photo.takenAt).flatMap(({ label, items }) => [
-      { kind: "month", label, height: MONTH_HEADING_HEIGHT } as const,
-      ...rowsOf(items),
-    ]);
-  }, [photos, width, months, zoom]);
-
-  // After a zoom step, before paint: scroll so the anchored tile's row is where the tile was,
-  // then let the grid ease from the size the gesture showed.
+  const { zoom } = useGridZoom(ref, { heightOf, ...pinch.callbacks });
+  const items = useMemo(
+    () => gridItems(photos, width, rowHeightFor(width, zoom), months),
+    [photos, width, months, zoom],
+  );
   useLayoutEffect(() => {
-    const target = anchor.current;
-    anchor.current = null;
-    if (target) {
-      let start = top;
-      for (const item of items) {
-        if (item.kind === "row" && item.row.tiles.some((t) => t.item.photoId === target.photoId)) {
-          window.scrollTo({ top: Math.max(0, start - target.top), behavior: "instant" });
-          break;
-        }
-        start += item.height;
-      }
-    }
-    settle();
-  }, [items, top, settle]);
+    current.current = { items, zoom };
+  });
 
   const photoIds = useMemo(() => photos.map((photo) => photo.photoId), [photos]);
   const dragStartedInSelect = useDragSelect({
@@ -132,13 +87,18 @@ export function PhotoGrid({
   const virtualizer = useWindowVirtualizer({
     count: items.length,
     estimateSize: (index) => items[index]!.height,
-    // More rows while pinching: scaling the grid down shows more of it.
-    overscan: pinching ? 16 : 4,
+    overscan: 4,
     scrollMargin: top,
   });
   // Heights are computed, not measured: drop cached sizes when the layout changes (before paint,
-  // so a zoom step never shows rows at their old offsets).
-  useLayoutEffect(() => virtualizer.measure(), [virtualizer, items]);
+  // so a zoom step never shows rows at their old offsets); after a pinch's new step, the layer
+  // hands over (it scrolls to where it showed the grid, so the height must already be the new one).
+  const totalHeight = useMemo(() => items.reduce((sum, item) => sum + item.height, 0), [items]);
+  useLayoutEffect(() => {
+    virtualizer.measure();
+    pinch.onLayout(zoom);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [virtualizer, items]);
 
   const virtualRows = virtualizer.getVirtualItems();
   const lastIndex = virtualRows.at(-1)?.index ?? -1;
@@ -152,8 +112,8 @@ export function PhotoGrid({
     <div
       ref={ref}
       // Two-finger pinch resizes the tiles instead of zooming the page (useGridZoom).
-      className="relative w-full touch-pan-x touch-pan-y"
-      style={{ height: virtualizer.getTotalSize() }}
+      className="group relative w-full touch-pan-x touch-pan-y"
+      style={{ height: totalHeight }}
     >
       {virtualRows.map((virtualRow) => {
         const item = items[virtualRow.index]!;
@@ -162,7 +122,7 @@ export function PhotoGrid({
           return (
             <h2
               key={virtualRow.key}
-              className="absolute inset-x-0 top-0 flex items-end pb-2 text-sm font-medium text-foreground"
+              className={cn(HEADING_CLASS, "inset-x-0", HIDDEN_WHILE_PINCHING)}
               style={{ height: item.height, transform: translate }}
             >
               {item.label}
@@ -173,7 +133,7 @@ export function PhotoGrid({
         return (
           <div
             key={virtualRow.key}
-            className="absolute inset-x-0 top-0 flex"
+            className={cn("absolute inset-x-0 top-0 flex", HIDDEN_WHILE_PINCHING)}
             style={{ gap: GAP, height: row.height, transform: translate }}
           >
             {row.tiles.map(({ item, width }) => (
@@ -189,6 +149,87 @@ export function PhotoGrid({
           </div>
         );
       })}
+      {pinch.layer && (
+        <PinchLayer layer={pinch.layer} stepRef={pinch.stepRef} selection={selection} />
+      )}
+    </div>
+  );
+}
+
+const HEADING_CLASS = "absolute top-0 flex items-end pb-2 text-sm font-medium text-foreground";
+// The pinch layer stands in for the rows while it shows (usePinchLayer's PINCHING_ATTRIBUTE;
+// a literal, for Tailwind's class scanner).
+const HIDDEN_WHILE_PINCHING = "group-data-pinching:invisible";
+
+/** The grids of the steps a pinch is between (FR-GAL-8), moved as wholes by `usePinchLayer`. */
+function PinchLayer({
+  layer,
+  stepRef,
+  selection,
+}: {
+  layer: PinchLayerState;
+  stepRef: (step: number) => (node: HTMLElement | null) => void;
+  selection: GridSelection | undefined;
+}) {
+  return (
+    <div
+      aria-hidden
+      data-pinch-layer=""
+      // Clipped to the grid's top and sides (scaled up, it would cover the page around it and
+      // scroll it sideways), open at the bottom (the grid's real height is the old step's).
+      className="pointer-events-none absolute inset-0 overflow-x-clip [clip-path:inset(0_0_-100000px_0)]"
+    >
+      {layer.steps.map(({ step, placement, tiles }) => (
+        <div
+          key={step}
+          ref={stepRef(step)}
+          data-pinch-step={step}
+          // The dissolve takes its time however fast the fingers pass through it.
+          className="absolute top-0 left-0 h-0 w-full origin-top-left will-change-transform motion-safe:transition-opacity motion-safe:duration-200 motion-safe:ease-linear"
+        >
+          {/* Solid behind the tiles: the grid below would otherwise show through the gaps while this
+              one dissolves in, as flickering lines. */}
+          <div
+            data-pinch-backdrop=""
+            className="absolute inset-x-0 top-0 bg-background"
+            style={{ height: placement.height }}
+          />
+          {layer.headings.map((label, j) => (
+            <h2
+              key={label}
+              className={cn(HEADING_CLASS, "left-0 w-full")}
+              style={{
+                height: MONTH_HEADING_HEIGHT,
+                transform: `translateY(${placement.headings[j]}px)`,
+              }}
+            >
+              {label}
+            </h2>
+          ))}
+          {tiles.map((i) => {
+            const photo = layer.photos[i]!;
+            const failed = photo.status === "failed";
+            return (
+              <div
+                key={photo.photoId}
+                data-pinch-tile={photo.photoId}
+                className={cn(
+                  "absolute top-0 left-0 flex items-center justify-center overflow-hidden",
+                  failed ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground",
+                )}
+                style={{
+                  width: placement.w[i],
+                  height: placement.h[i],
+                  transform: `translate(${placement.x[i]}px, ${placement.y[i]}px)`,
+                }}
+              >
+                <TileContent photo={photo} eager />
+                {selection && <SelectMark selected={selection.selected.has(photo.photoId)} />}
+              </div>
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 }
@@ -284,7 +325,7 @@ function SelectMark({ selected }: { selected: boolean }) {
   );
 }
 
-function TileContent({ photo }: { photo: Photo }) {
+function TileContent({ photo, eager = false }: { photo: Photo; eager?: boolean }) {
   // A thumbnail that can't load keeps the placeholder (until a refetch brings a new URL).
   const [broken, onError] = useImageFailed(photo.thumbUrl);
   return (
@@ -303,7 +344,8 @@ function TileContent({ photo }: { photo: Photo }) {
         <img
           src={photo.thumbUrl}
           alt=""
-          loading="lazy"
+          // The pinch layer's copies are already loaded (or about to show): no lazy wait.
+          loading={eager ? "eager" : "lazy"}
           decoding="async"
           draggable={false}
           onError={onError}
