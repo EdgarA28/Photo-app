@@ -22,7 +22,7 @@
 
 ## Next up
 
-Everything below is on dev, deployed by CI from `main` (latest `819f712`, 2026-11-21). The user checks on dev passed 2026-11-21; next: 8.35 user check (one icon size at startup), 13.5d (import worker), Phase 12 leftovers.
+Everything below is on dev, deployed by CI from `main` (latest `e1cc543`, 2026-11-21). The user checks on dev passed 2026-11-21; next: 8.35 user check (one icon size at startup), 13.5d (import worker), Phase 12 leftovers.
 
 1. ~~**User checks on dev**~~ done 2026-11-21 (user): 8.34 phone layout, 8.33 pinch (Videos, album, select mode), 14.9 HEVC playback, 8.29–8.31, 8.26/8.27, 8.21–8.23, 13.3 trash, 13.2h map, 8.16/8.17, select mode, 9.8 share target, 12.2 CSP console check: all pass.
 2. ~~**6.11 optional look**~~ done 2026-11-03: the 03:00 UTC sweep removed `IMG_0303.jpg` and `IMG_0082.jpg` (`removed: 2`, `stuck: 0`, `failed: 0`, `cleared: 4500` old markers of photos no longer pending); both photo items gone, no `pending` photos left, `bytesReserved` = `bytesUsed` for all 7 users; 558 markers from 2026-11-02 remain (< 24 h old, next run clears them).
@@ -653,7 +653,7 @@ Moved to the end by the user (2026-10-27): everything about prod and iOS waits u
 
 | Date | Summary |
 |---|---|
-| 2026-11-21 | 13.5c import API: Google client, Import repository, `POST /imports/google`, `GET`/`DELETE /imports/{id}` (off until 13.5f sets `GOOGLE_CLIENT_ID`), spec v0.58; 50 new tests, 1238 TS pass. Not pushed. |
+| 2026-11-21 | 13.5c import API: Google client, Import repository, `POST /imports/google`, `GET`/`DELETE /imports/{id}` (off until 13.5f sets `GOOGLE_CLIENT_ID`), spec v0.58; 50 new tests, 1238 TS pass. Pushed `e1cc543`, CI + Deploy green (no change on dev: routes off). |
 | 2026-11-21 | 13.5a Google Cloud setup done by the user (Picker API, scope, redirect URIs, test users). 13.5b shared import contracts (`schemas/imports.ts`, constants, `GOOGLE_AUTH_FAILED`), spec v0.57 (`type` in queue messages); 1188 TS tests pass. Not pushed. |
 | 2026-11-21 | 8.35 launch splash icon 96 → 128 px to match Chrome's Android launch screen (user saw two icon sizes at startup). Pushed `819f712`, CI + Deploy green. |
 | 2026-11-21 | User checks on dev all passed (user): 8.16/8.17, 8.21–8.23, 8.26/8.27, 8.29–8.31, 8.33, 8.34, 9.8, 12.2 CSP console, 13.2h, 13.3, 14.9. Tasks ticked; docs only (`d78cd75`). |
