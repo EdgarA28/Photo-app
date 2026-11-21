@@ -25,6 +25,39 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   };
 }
 
+/**
+ * Import from Google Photos (13.5c, §11.5). Optional until the infra provides it (13.5f): without
+ * `GOOGLE_CLIENT_ID` the `/imports` routes aren't registered (404), and nothing else changes.
+ */
+export interface ImportConfig {
+  googleClientId: string;
+  /** SSM SecureString with the Google client secret (NFR-SEC-10). */
+  googleClientSecretParameter: string;
+  importQueueUrl: string;
+  /** App origins Google may redirect back to (`{origin}/import/google/callback`). */
+  redirectOrigins: string[];
+}
+
+export function loadImportConfig(env: NodeJS.ProcessEnv = process.env): ImportConfig | null {
+  if (!env.GOOGLE_CLIENT_ID) return null;
+  const redirectOrigins = required(env, "IMPORT_REDIRECT_ORIGINS")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  for (const value of redirectOrigins) {
+    if (!/^https?:\/\/[^/]+$/.test(value)) {
+      throw new Error("IMPORT_REDIRECT_ORIGINS must be http(s) origins without a path");
+    }
+  }
+  if (redirectOrigins.length === 0) throw new Error("IMPORT_REDIRECT_ORIGINS is empty");
+  return {
+    googleClientId: env.GOOGLE_CLIENT_ID,
+    googleClientSecretParameter: required(env, "GOOGLE_CLIENT_SECRET_PARAMETER"),
+    importQueueUrl: required(env, "IMPORT_QUEUE_URL"),
+    redirectOrigins,
+  };
+}
+
 /** The trash purge Lambda (FR-DEL-3, `purge.ts`): only the table and the photo bucket. */
 export function loadPurgeConfig(env: NodeJS.ProcessEnv = process.env): Pick<
   Config,

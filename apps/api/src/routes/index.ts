@@ -5,6 +5,7 @@ import type { PhotoStorage } from "../lib/storage";
 import type { UserDirectory } from "../lib/users";
 import type { Repositories } from "../repo";
 import { albumRoutes } from "./albums";
+import { importRoutes, type ImportDeps } from "./imports";
 import { linkRoutes, publicLinkRoutes } from "./links";
 import { meRoutes } from "./me";
 import { photoRoutes } from "./photos";
@@ -21,6 +22,8 @@ export interface Deps {
   storage: PhotoStorage;
   media: MediaSigner;
   config: { defaultQuotaBytes: number };
+  /** Import from Google Photos (13.5c); without it the `/imports` routes don't exist (404). */
+  imports?: ImportDeps;
 }
 
 /** All authenticated routes (§9), for `createApp({ routes })`. */
@@ -35,6 +38,7 @@ export function registerRoutes(deps: Deps): (app: Hono<AppEnv>) => void {
     trashRoutes(app, deps);
     linkRoutes(app, deps);
     sessionRoutes(app, deps);
+    if (deps.imports) importRoutes(app, deps, deps.imports);
   };
 }
 

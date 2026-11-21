@@ -79,6 +79,11 @@ export const uploadClaimKey = (userId: string, uploadId: string) => ({
   PK: userPk(userId),
   SK: `UPLOAD#${uploadId}`,
 });
+/** An import from Google Photos (13.5c, §8.2): under the user's partition, no GSI keys. */
+export const importKey = (userId: string, importId: string) => ({
+  PK: userPk(userId),
+  SK: `IMPORT#${importId}`,
+});
 /** An entry of the user's place list (13.2c). */
 export const placeKey = (userId: string, placeId: string) => ({
   PK: userPk(userId),

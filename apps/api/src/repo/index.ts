@@ -1,5 +1,6 @@
 import { albumsRepo } from "./albums";
 import type { Db } from "./db";
+import { importsRepo } from "./imports";
 import { linksRepo } from "./links";
 import { photosRepo } from "./photos";
 import { placesRepo } from "./places";
@@ -9,6 +10,7 @@ import { usernamesRepo } from "./usernames";
 
 export type { AlbumRecord, AlbumUpdate, MembershipRecord } from "./albums";
 export { createDocumentClient, type Db } from "./db";
+export type { ImportRecord, NewImport } from "./imports";
 export type { LinkRecord } from "./links";
 export { albumOwnerOf, type AddResult } from "./memberships";
 export type { ExpiredPhoto, LocatedPhoto, NewPhoto, PendingMarker, PhotoRecord } from "./photos";
@@ -25,6 +27,7 @@ export function createRepositories(db: Db) {
     albums: albumsRepo(db),
     places: placesRepo(db),
     links: linksRepo(db),
+    imports: importsRepo(db),
     shares: sharesRepo(db),
     usage: usageRepo(db),
     usernames: usernamesRepo(db),

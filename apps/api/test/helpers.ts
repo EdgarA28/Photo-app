@@ -1,9 +1,11 @@
 import { CreateTableCommand, DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { GetCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { newId } from "@photo-app/shared";
+import type { ImportMessage } from "@photo-app/shared";
 import { createVerify, generateKeyPairSync, randomUUID } from "node:crypto";
 import { expect, inject } from "vitest";
 import { createApp } from "../src/app";
+import { GoogleApiError, type GooglePhotos, type PickerSession } from "../src/lib/google";
 import { cloudFrontMediaSigner } from "../src/lib/media";
 import type {
   DownloadTarget,
@@ -290,6 +292,76 @@ export function verifySignedUrl(url: string, path: string): number {
   return expires;
 }
 
+/** App origin the fake setup allows as an import redirect (13.5c, §11.5). */
+export const TEST_APP_ORIGIN = "https://app.test.example";
+export const TEST_IMPORT_REDIRECT = `${TEST_APP_ORIGIN}/import/google/callback`;
+
+/**
+ * A fake Google (13.5c): codes starting with "good" give a token (`token-{n}`), anything else is
+ * rejected. Sessions live in `sessions`; tests flip `mediaItemsSet`, delete them (Google forgot
+ * them) or set `failWith` to make the next Picker call fail with that HTTP status. `calls` records
+ * every call (operation + token), so tests can count polls.
+ */
+export function fakeGoogle() {
+  let next = 0;
+  const state = {
+    sessions: new Map<string, PickerSession>(),
+    deleted: [] as string[],
+    calls: [] as { operation: string; accessToken?: string }[],
+    /** Token lifetime for new tokens, in ms. */
+    tokenLifetimeMs: 60 * 60 * 1000,
+    /** Picker session lifetime, in ms. */
+    sessionLifetimeMs: 30 * 60 * 1000,
+    /** Poll interval of new sessions; 0 lets every GET poll. */
+    pollIntervalSec: 0,
+    maxItemCounts: [] as number[],
+    failWith: null as number | null,
+  };
+  function fail(operation: string) {
+    if (state.failWith === null) return;
+    const status = state.failWith;
+    state.failWith = null;
+    throw new GoogleApiError(status, undefined, operation);
+  }
+  const google: GooglePhotos = {
+    exchangeCode: async ({ code }) => {
+      state.calls.push({ operation: "exchange" });
+      if (!code.startsWith("good")) return null;
+      return {
+        accessToken: `token-${++next}`,
+        expiresAt: new Date(Date.now() + state.tokenLifetimeMs),
+      };
+    },
+    createSession: async (accessToken, maxItemCount) => {
+      state.calls.push({ operation: "create", accessToken });
+      state.maxItemCounts.push(maxItemCount);
+      fail("create session");
+      const sessionId = `session-${++next}`;
+      const session: PickerSession = {
+        sessionId,
+        pickerUri: `https://photos.google.com/picker/${sessionId}`,
+        pollIntervalSec: state.pollIntervalSec,
+        expiresAt: new Date(Date.now() + state.sessionLifetimeMs),
+        mediaItemsSet: false,
+      };
+      state.sessions.set(sessionId, session);
+      return { ...session };
+    },
+    getSession: async (accessToken, sessionId) => {
+      state.calls.push({ operation: "get", accessToken });
+      fail("get session");
+      const session = state.sessions.get(sessionId);
+      return session ? { ...session } : null;
+    },
+    deleteSession: async (accessToken, sessionId) => {
+      state.calls.push({ operation: "delete", accessToken });
+      state.deleted.push(sessionId);
+      state.sessions.delete(sessionId);
+    },
+  };
+  return { google, state };
+}
+
 export const TEST_UPLOAD_URL = "https://photos.test.example/";
 export const TEST_DOWNLOAD_URL = "https://photos.test.example/download";
 
@@ -396,12 +468,29 @@ export async function createTestApi() {
       multipart.delete(upload.uploadId);
     },
   };
+  const google = fakeGoogle();
+  /** Messages sent to the import queue; `queueFails` makes the next send throw. */
+  const importMessages: ImportMessage[] = [];
+  const queue = { fails: false };
   const deps = {
     repos,
     users,
     storage,
     media: testMediaSigner(),
     config: { defaultQuotaBytes: TEST_DEFAULT_QUOTA },
+    imports: {
+      google: google.google,
+      queue: {
+        send: async (message: ImportMessage) => {
+          if (queue.fails) {
+            queue.fails = false;
+            throw new Error("SQS unavailable");
+          }
+          importMessages.push(message);
+        },
+      },
+      redirectOrigins: [TEST_APP_ORIGIN],
+    },
   };
   const app = createApp({ routes: registerRoutes(deps), publicRoutes: registerPublicRoutes(deps) });
 
@@ -440,6 +529,9 @@ export async function createTestApi() {
     uploadPart,
     hooks,
     storage,
+    google: google.state,
+    importMessages,
+    queue,
     app,
     api,
   };

@@ -51,6 +51,8 @@ const w = {
   albumB: "",
   albumC: "",
   malloryPhoto: "",
+  /** Alice's Google Photos import, still picking (13.5c). */
+  aliceImport: "",
   malloryAlbum: "",
   aliceCursor: "",
 };
@@ -119,6 +121,20 @@ beforeAll(async () => {
 
   w.malloryPhoto = await readyPhoto(w.mallory);
   w.malloryAlbum = await album(w.mallory, "Mine");
+  w.aliceImport = (
+    await repos.imports.create({
+      userId: w.alice,
+      importId: newId(),
+      source: "google-photos",
+      sessionId: "session-alice",
+      pickerUri: "https://photos.google.com/picker/session-alice",
+      pollIntervalSec: 0,
+      accessToken: "token-alice",
+      tokenExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      sessionExpiresAt: new Date(Date.now() + 1_800_000).toISOString(),
+      createdAt: nextIso(),
+    })
+  ).importId;
 
   // A real cursor into Alice's gallery, to replay as someone else.
   const page = photoPageSchema.parse((await t.api(w.alice, "GET", "/photos?limit=1")).body);
@@ -144,6 +160,7 @@ async function snapshot() {
     bobShared: await repos.shares.listForRecipient(w.bob, { limit: 100 }),
     malloryShared: await repos.shares.listForRecipient(w.mallory, { limit: 100 }),
     bobInvited: await repos.shares.listInvitations(w.bob, { limit: 100 }),
+    aliceImport: await repos.imports.get(w.alice, w.aliceImport),
   };
 }
 let before: Awaited<ReturnType<typeof snapshot>>;
@@ -170,6 +187,19 @@ const json = (body: unknown) => body;
 
 /** Cases for a stranger (Mallory) and for the recipient (Bob) outside his read-only access. */
 const cases: Case[] = [
+  // ---- imports (13.5c) ----
+  {
+    route: "GET /api/imports/:importId",
+    name: "stranger reads another user's import",
+    foreign: () => ({ as: w.mallory, method: "GET", path: `/imports/${w.aliceImport}` }),
+    missing: () => ({ as: w.mallory, method: "GET", path: `/imports/${id()}` }),
+  },
+  {
+    route: "DELETE /api/imports/:importId",
+    name: "stranger cancels another user's import",
+    foreign: () => ({ as: w.mallory, method: "DELETE", path: `/imports/${w.aliceImport}` }),
+    missing: () => ({ as: w.mallory, method: "DELETE", path: `/imports/${id()}` }),
+  },
   // ---- places (13.2) ----
   {
     route: "GET /api/places/:placeId/photos",
@@ -718,6 +748,7 @@ const exempt: Record<string, string> = {
   "GET /api/share-invitations": "caller's invitations; foreign cursor case below",
   "GET /api/places": "caller's own places (keyed by sub); checked below",
   "GET /api/places/map": "caller's own photos with GPS (keyed by sub); checked below",
+  "POST /api/imports/google": "creates under the caller (Google's token is the caller's own)",
   "GET /api/links/:token":
     "public by design (FR-SHR-8): an unguessable token is the only key; routes.links",
   "GET /api/links/:token/photos/:photoId/download-url":

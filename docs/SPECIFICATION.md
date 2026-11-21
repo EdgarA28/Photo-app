@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.57 |
+| **Version** | 0.58 |
 | **Date** | 2026-11-21 |
 | **Owner** | Edgar |
 | **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5), videos (Phase 14) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
@@ -429,7 +429,7 @@ Initial design; refine during implementation.
 | Usage | `USER#{userId}` | `USAGE` | — | — | bytesUsed, photoCount, quotaBytes |
 | Upload claim | `USER#{userId}` | `UPLOAD#{uploadId}` | — | — | photoId, ttl (7 days). Imports use `uploadId = gp-{importId}-{mediaItemId}`. A saved shared photo (FR-SHR-10) uses `uploadId = shared-{photoId}` (the owner's photo ID) **without ttl**: it remembers the copy; released once the copy is deleted for good |
 | Pending marker | `PENDING` | `UPLOADED#{uploadedAt}#{userId}#{photoId}` | — | — | userId, photoId, uploadedAt, ttl (30 days). Written with every `pending` photo; the daily sweep (§8.2 access patterns) removes it once the photo is no longer pending, or deletes the photo if its upload never arrived |
-| Import | `USER#{userId}` | `IMPORT#{importId}` | — | — | source (`google-photos`), status (`picking`/`listing`/`copying`/`done`/`cancelled`/`expired`), sessionId, pickerUri, pollIntervalSec, lastPolledAt, accessToken (removed when the import ends), tokenExpiresAt, total, done, failed, skipped, failedReasons (`{code: count}`), createdAt, ttl (7 days) |
+| Import | `USER#{userId}` | `IMPORT#{importId}` | — | — | source (`google-photos`), status (`picking`/`listing`/`copying`/`done`/`cancelled`/`expired`), sessionId, pickerUri, pollIntervalSec, lastPolledAt, accessToken (removed when the import ends), tokenExpiresAt, sessionExpiresAt, total, done, failed, skipped, failedReasons (`{code: count}`), createdAt, ttl (7 days) |
 | Profile | `USER#{userId}` | `PROFILE` | — | — | username, usernameChangedAt |
 | Place (list entry) | `USER#{userId}` | `PLACE#{placeId}` | — | — | kind (`city`/`region`/`country`), name, context, photoCount, trashedCount (its photos in the trash, so the entry survives for a restore) |
 | Place photo | `PLACE#{userId}#{placeId}` | `PHOTO#{photoId}` | `PLACE#{userId}#{placeId}` (removed while the photo is in the trash) | `TAKEN#{takenAt}#{photoId}` | ownerId, placeId |
@@ -902,6 +902,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.38 | 2026-11-01 | Less gallery polling while uploads run: 15 s instead of 3 s, refreshes during a batch only mark lists stale (13.1j, §12.4) |
 | 0.53 | 2026-11-05 | FR-GAL-8 (user request): pinch to resize the grid tiles, continuous (live scale, settle on the nearest size) |
+| 0.58 | 2026-11-21 | Import (13.5c): Import item gains `sessionExpiresAt`; the Picker session is created with `maxItemCount` 500 (FR-IMP-2 enforced in Google's picker); an import still listing/copying is closed as expired 3 min after the token ran out (a copy in flight may still finish) |
 | 0.57 | 2026-11-21 | §10.1: import queue messages carry `type` (`list` / `copy`) and never the Google token (13.5b) |
 | 0.56 | 2026-11-06 | FR-GAL-8: 5 sizes, with a 3-per-row layout between 4 and 2 per row on a phone (user: no layout in between) |
 | 0.55 | 2026-11-06 | Phone layout like Google Photos (user request, measured from screenshots): grids edge to edge with 1.5 px gaps, two photos per row at the largest size (FR-GAL-8), floating tab bar, gallery header on two rows that scrolls away going down and returns going up (replaces the always-visible sticky header on phones; unchanged from `md`) |
