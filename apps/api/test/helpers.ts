@@ -5,7 +5,13 @@ import type { ImportMessage } from "@photo-app/shared";
 import { createVerify, generateKeyPairSync, randomUUID } from "node:crypto";
 import { expect, inject } from "vitest";
 import { createApp } from "../src/app";
-import { GoogleApiError, type GooglePhotos, type PickerSession } from "../src/lib/google";
+import {
+  GoogleApiError,
+  type DownloadResult,
+  type GooglePhotos,
+  type PickedItem,
+  type PickerSession,
+} from "../src/lib/google";
 import { cloudFrontMediaSigner } from "../src/lib/media";
 import type {
   DownloadTarget,
@@ -316,6 +322,13 @@ export function fakeGoogle() {
     pollIntervalSec: 0,
     maxItemCounts: [] as number[],
     failWith: null as number | null,
+    /** Picked items per session, for the worker's `list` step (13.5d). */
+    picked: new Map<string, PickedItem[]>(),
+    /** Items per listed page. */
+    pageSize: 100,
+    /** What a download of a base URL gives: bytes, or `too-large` etc.; unknown URLs → not-found. */
+    files: new Map<string, DownloadResult | Error>(),
+    downloads: [] as string[],
   };
   function fail(operation: string) {
     if (state.failWith === null) return;
@@ -357,6 +370,22 @@ export function fakeGoogle() {
       state.calls.push({ operation: "delete", accessToken });
       state.deleted.push(sessionId);
       state.sessions.delete(sessionId);
+    },
+    listMediaItems: async (accessToken, sessionId, pageToken) => {
+      state.calls.push({ operation: "list", accessToken });
+      fail("list media items");
+      const all = state.picked.get(sessionId) ?? [];
+      const from = pageToken ? Number(pageToken) : 0;
+      const to = from + state.pageSize;
+      return { items: all.slice(from, to), nextPageToken: to < all.length ? String(to) : null };
+    },
+    download: async (accessToken, baseUrl) => {
+      state.calls.push({ operation: "download", accessToken });
+      state.downloads.push(baseUrl);
+      fail("download");
+      const file = state.files.get(baseUrl) ?? { kind: "not-found" };
+      if (file instanceof Error) throw file;
+      return file;
     },
   };
   return { google, state };
@@ -413,7 +442,10 @@ export async function createTestApi() {
   const hooks: {
     onDelete?: (keys: string[]) => Promise<void>;
     onCopy?: (from: string, to: string) => Promise<void>;
+    onPut?: (key: string) => Promise<void>;
   } = {};
+  /** Originals the import worker stored (`putOriginal`, 13.5d). */
+  const puts: { key: string; contentType: string; size: number; takenAt: string }[] = [];
   const storage: PhotoStorage = {
     createUploadPost: async (target) => {
       uploads.push(target);
@@ -433,6 +465,17 @@ export async function createTestApi() {
     copyObject: async (from, to) => {
       await hooks.onCopy?.(from, to);
       copies.push({ from, to });
+    },
+    putOriginal: async (target) => {
+      await hooks.onPut?.(target.key);
+      puts.push({
+        key: target.key,
+        contentType: target.contentType,
+        size: target.bytes.byteLength,
+        takenAt: target.takenAt,
+      });
+      objects.add(target.key);
+      sizes.set(target.key, target.bytes.byteLength);
     },
     exists: async (key) => objects.has(key),
     objectSize: async (key) => (objects.has(key) ? (sizes.get(key) ?? 0) : null),
@@ -472,6 +515,18 @@ export async function createTestApi() {
   /** Messages sent to the import queue; `queueFails` makes the next send throw. */
   const importMessages: ImportMessage[] = [];
   const queue = { fails: false };
+  const importQueue = {
+    send: async (message: ImportMessage) => {
+      if (queue.fails) {
+        queue.fails = false;
+        throw new Error("SQS unavailable");
+      }
+      importMessages.push(message);
+    },
+    sendBatch: async (messages: ImportMessage[]) => {
+      importMessages.push(...messages);
+    },
+  };
   const deps = {
     repos,
     users,
@@ -480,15 +535,7 @@ export async function createTestApi() {
     config: { defaultQuotaBytes: TEST_DEFAULT_QUOTA },
     imports: {
       google: google.google,
-      queue: {
-        send: async (message: ImportMessage) => {
-          if (queue.fails) {
-            queue.fails = false;
-            throw new Error("SQS unavailable");
-          }
-          importMessages.push(message);
-        },
-      },
+      queue: importQueue,
       redirectOrigins: [TEST_APP_ORIGIN],
     },
   };
@@ -530,7 +577,10 @@ export async function createTestApi() {
     hooks,
     storage,
     google: google.state,
+    googleClient: google.google,
     importMessages,
+    importQueue,
+    puts,
     queue,
     app,
     api,

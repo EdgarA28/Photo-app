@@ -4,13 +4,14 @@
  */
 import { GOOGLE_PHOTOS_PICKER_SCOPE } from "@photo-app/shared";
 import { describe, expect, test, vi } from "vitest";
-import { loadImportConfig } from "../src/lib/config";
+import { loadImportConfig, loadImportWorkerConfig } from "../src/lib/config";
 import {
   GOOGLE_TOKEN_URL,
   GoogleApiError,
   googlePhotosClient,
   parseDuration,
   PICKER_API_URL,
+  toPickedItem,
   toSession,
 } from "../src/lib/google";
 
@@ -153,6 +154,89 @@ describe("Picker sessions", () => {
   });
 });
 
+describe("worker calls (13.5d)", () => {
+  const ITEM = {
+    id: "AF1Qip_1",
+    type: "PHOTO",
+    createTime: "2024-07-14T09:30:00Z",
+    mediaFile: {
+      baseUrl: "https://lh3.googleusercontent.com/ppa/x",
+      mimeType: "image/jpeg",
+      filename: "IMG_1.jpg",
+    },
+  };
+
+  test("listMediaItems pages the session's picked items", async () => {
+    const { client, request } = setup(
+      json({ mediaItems: [ITEM], nextPageToken: "next" }),
+      json({ mediaItems: [{ ...ITEM, id: "AF1Qip_2" }] }),
+    );
+    expect(await client.listMediaItems("t", "sess-1")).toEqual({
+      items: [
+        {
+          mediaItemId: "AF1Qip_1",
+          type: "PHOTO",
+          baseUrl: ITEM.mediaFile.baseUrl,
+          mimeType: "image/jpeg",
+          fileName: "IMG_1.jpg",
+          createTime: "2024-07-14T09:30:00Z",
+        },
+      ],
+      nextPageToken: "next",
+    });
+    expect(request(0).url).toBe(`${PICKER_API_URL}/mediaItems?sessionId=sess-1&pageSize=100`);
+    const second = await client.listMediaItems("t", "sess-1", "next");
+    expect(second.nextPageToken).toBeNull();
+    expect(request(1).url).toContain("pageToken=next");
+  });
+
+  test("toPickedItem turns missing fields into empty ones (skipped later)", () => {
+    expect(toPickedItem({ id: 1 })).toEqual({
+      mediaItemId: "",
+      type: "",
+      baseUrl: "",
+      mimeType: "",
+      fileName: "",
+      createTime: "",
+    });
+  });
+
+  test("download asks for the original with the token", async () => {
+    const { client, request } = setup(new Response(new Uint8Array([1, 2, 3])));
+    const result = await client.download("ya29.x", "https://lh3.googleusercontent.com/ppa/x", 10);
+    expect(result).toEqual({ kind: "ok", bytes: new Uint8Array([1, 2, 3]) });
+    expect(request().url).toBe("https://lh3.googleusercontent.com/ppa/x=d");
+    expect(request().init.headers).toEqual({ authorization: "Bearer ya29.x" });
+  });
+
+  test("download stops at the limit, by Content-Length or while reading", async () => {
+    const big = new Response(new Uint8Array(11), { headers: { "content-length": "11" } });
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(6));
+        controller.enqueue(new Uint8Array(6));
+        controller.close();
+      },
+    });
+    const { client } = setup(big, new Response(stream));
+    expect(await client.download("t", "https://x/y", 10)).toEqual({ kind: "too-large" });
+    expect(await client.download("t", "https://x/y", 10)).toEqual({ kind: "too-large" });
+  });
+
+  test("download: 404 → not-found, 401/403 → unauthorized, 5xx throws", async () => {
+    const { client } = setup(
+      new Response(null, { status: 404 }),
+      new Response(null, { status: 401 }),
+      new Response(null, { status: 403 }),
+      json({ error: { status: "UNAVAILABLE" } }, 503),
+    );
+    expect(await client.download("t", "https://x/y", 10)).toEqual({ kind: "not-found" });
+    expect(await client.download("t", "https://x/y", 10)).toEqual({ kind: "unauthorized" });
+    expect(await client.download("t", "https://x/y", 10)).toEqual({ kind: "unauthorized" });
+    await expect(client.download("t", "https://x/y", 10)).rejects.toMatchObject({ status: 503 });
+  });
+});
+
 describe("loadImportConfig (13.5c)", () => {
   const env = {
     GOOGLE_CLIENT_ID: "client-id",
@@ -181,5 +265,23 @@ describe("loadImportConfig (13.5c)", () => {
     ["no origins", { IMPORT_REDIRECT_ORIGINS: " , " }],
   ])("fails the cold start on %s", (_, change) => {
     expect(() => loadImportConfig({ ...env, ...change })).toThrow();
+  });
+});
+
+describe("loadImportWorkerConfig (13.5d)", () => {
+  test("needs table, bucket, queue and default quota; no Google secret", () => {
+    const env = {
+      TABLE_NAME: "t",
+      PHOTO_BUCKET: "b",
+      IMPORT_QUEUE_URL: "https://sqs/q",
+      DEFAULT_QUOTA_BYTES: "1000",
+    };
+    expect(loadImportWorkerConfig(env)).toEqual({
+      tableName: "t",
+      photoBucket: "b",
+      importQueueUrl: "https://sqs/q",
+      defaultQuotaBytes: 1000,
+    });
+    expect(() => loadImportWorkerConfig({ ...env, IMPORT_QUEUE_URL: "" })).toThrow();
   });
 });

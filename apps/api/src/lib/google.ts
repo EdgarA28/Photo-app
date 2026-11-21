@@ -25,6 +25,25 @@ export interface PickerSession {
   mediaItemsSet: boolean;
 }
 
+/** One item the user picked (Picker `PickedMediaItem`), as far as the import needs it. */
+export interface PickedItem {
+  mediaItemId: string;
+  /** `PHOTO`, `VIDEO` or `TYPE_UNSPECIFIED`. */
+  type: string;
+  /** Download base URL (~1 h); `=d` gets the original. Never logged (NFR-SEC-10). */
+  baseUrl: string;
+  mimeType: string;
+  fileName: string;
+  /** Google's creation time (RFC 3339): the date taken without an EXIF date (FR-IMP-4). */
+  createTime: string;
+}
+
+export type DownloadResult =
+  | { kind: "ok"; bytes: Uint8Array }
+  | { kind: "too-large" }
+  | { kind: "not-found" }
+  | { kind: "unauthorized" };
+
 export interface GooglePhotos {
   /**
    * Authorization code → access token (no refresh token: `access_type=online`, §11.5). Null when
@@ -41,6 +60,18 @@ export interface GooglePhotos {
   getSession(accessToken: string, sessionId: string): Promise<PickerSession | null>;
   /** Deletes the session; a session Google no longer knows counts as deleted. */
   deleteSession(accessToken: string, sessionId: string): Promise<void>;
+  /** One page (≤ 100) of the picked items (worker `list` step, §10.1). */
+  listMediaItems(
+    accessToken: string,
+    sessionId: string,
+    pageToken?: string,
+  ): Promise<{ items: PickedItem[]; nextPageToken: string | null }>;
+  /**
+   * The original (`{baseUrl}=d`), at most `maxBytes`: larger ones stop reading at once
+   * (`too-large`). Gone at Google → `not-found`; token refused → `unauthorized`. Other failures
+   * (429, 5xx, network) throw, so SQS tries again (§10.1).
+   */
+  download(accessToken: string, baseUrl: string, maxBytes: number): Promise<DownloadResult>;
 }
 
 /** A failed Google call: status and Google's error code only (never tokens or URLs). */
@@ -64,6 +95,8 @@ export const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 export const PICKER_API_URL = "https://photospicker.googleapis.com/v1";
 /** Each Google call gets this long; the API Lambda has 10 s for the whole request. */
 const GOOGLE_TIMEOUT_MS = 4000;
+/** A whole original (≤ 50 MB) may take longer; the worker has 120 s (§10.1). */
+const DOWNLOAD_TIMEOUT_MS = 90_000;
 /** Used when Google's poll interval is missing or unreadable. */
 const DEFAULT_POLL_INTERVAL_SEC = 5;
 
@@ -77,8 +110,13 @@ export interface GoogleClientOptions {
 export function googlePhotosClient(options: GoogleClientOptions): GooglePhotos {
   const fetchFn = options.fetch ?? fetch;
 
-  async function call(operation: string, url: string, init: RequestInit): Promise<Response> {
-    return fetchFn(url, { ...init, signal: AbortSignal.timeout(GOOGLE_TIMEOUT_MS) }).catch(
+  async function call(
+    operation: string,
+    url: string,
+    init: RequestInit,
+    timeoutMs = GOOGLE_TIMEOUT_MS,
+  ): Promise<Response> {
+    return fetchFn(url, { ...init, signal: AbortSignal.timeout(timeoutMs) }).catch(
       (err: unknown) => {
         // Network error or timeout: no status. The message never contains the request body.
         throw new GoogleApiError(0, err instanceof Error ? err.name : undefined, operation);
@@ -166,6 +204,87 @@ export function googlePhotosClient(options: GoogleClientOptions): GooglePhotos {
       if (res.ok || res.status === 404) return;
       throw await apiError(res, "delete session");
     },
+
+    async listMediaItems(accessToken, sessionId, pageToken) {
+      const query = new URLSearchParams({ sessionId, pageSize: "100" });
+      if (pageToken) query.set("pageToken", pageToken);
+      const res = await picker("list media items", accessToken, `/mediaItems?${query}`);
+      if (!res.ok) throw await apiError(res, "list media items");
+      const body = (await res.json()) as { mediaItems?: unknown; nextPageToken?: unknown };
+      const raw = Array.isArray(body.mediaItems) ? body.mediaItems : [];
+      return {
+        items: raw.map(toPickedItem),
+        nextPageToken:
+          typeof body.nextPageToken === "string" && body.nextPageToken ? body.nextPageToken : null,
+      };
+    },
+
+    async download(accessToken, baseUrl, maxBytes) {
+      const res = await call(
+        "download",
+        `${baseUrl}=d`,
+        { headers: { authorization: `Bearer ${accessToken}` } },
+        DOWNLOAD_TIMEOUT_MS,
+      );
+      if (res.status === 404) return discard(res, { kind: "not-found" });
+      if (res.status === 401 || res.status === 403) return discard(res, { kind: "unauthorized" });
+      if (!res.ok) throw await apiError(res, "download");
+      const declared = Number(res.headers.get("content-length"));
+      if (declared > maxBytes) return discard(res, { kind: "too-large" });
+      return readAtMost(res, maxBytes);
+    },
+  };
+}
+
+/** Drops a body we don't read, so the connection can be reused. */
+async function discard<T>(res: Response, result: T): Promise<T> {
+  await res.body?.cancel().catch(() => {});
+  return result;
+}
+
+/** Reads the body into memory, stopping as soon as it passes `maxBytes` (≤ 50 MB, FR-UP-3). */
+async function readAtMost(res: Response, maxBytes: number): Promise<DownloadResult> {
+  if (!res.body) return { kind: "ok", bytes: new Uint8Array() };
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const reader = res.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read().catch(() => {
+      throw new GoogleApiError(res.status, "read_failed", "download");
+    });
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => {});
+      return { kind: "too-large" };
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { kind: "ok", bytes };
+}
+
+/** A Picker `PickedMediaItem` → our shape; missing fields become empty and are skipped later. */
+export function toPickedItem(raw: unknown): PickedItem {
+  const item = (raw ?? {}) as {
+    id?: unknown;
+    type?: unknown;
+    createTime?: unknown;
+    mediaFile?: { baseUrl?: unknown; mimeType?: unknown; filename?: unknown };
+  };
+  const text = (value: unknown) => (typeof value === "string" ? value : "");
+  return {
+    mediaItemId: text(item.id),
+    type: text(item.type),
+    baseUrl: text(item.mediaFile?.baseUrl),
+    mimeType: text(item.mediaFile?.mimeType),
+    fileName: text(item.mediaFile?.filename),
+    createTime: text(item.createTime),
   };
 }
 

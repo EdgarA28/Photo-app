@@ -2,6 +2,7 @@ import {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
   CopyObjectCommand,
+  PutObjectCommand,
   CreateMultipartUploadCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
@@ -85,6 +86,17 @@ export interface PhotoStorage {
    * saved to the recipient's gallery. The new object starts the thumbnail Lambda like an upload.
    */
   copyObject(from: string, to: string): Promise<void>;
+  /**
+   * Stores an original the backend fetched itself (Google Photos import, FR-IMP-4: bytes go from
+   * Google to S3, never through the device). `takenAt` becomes `x-amz-meta-taken-at`, the date
+   * the thumbnail Lambda uses when the photo has no EXIF date (§10).
+   */
+  putOriginal(target: {
+    key: string;
+    contentType: string;
+    bytes: Uint8Array;
+    takenAt: string;
+  }): Promise<void>;
   /**
    * Whether the object is in the bucket (6.11: did an abandoned upload's original ever arrive?).
    * Needs `s3:ListBucket` besides `s3:GetObject`: without it S3 answers 403 for a missing key.
@@ -235,6 +247,22 @@ export function s3PhotoStorage(client: S3Client, bucket: string): PhotoStorage {
       if (failed.length > 0) {
         throw new Error(`Failed to delete ${failed.map((e) => `${e.Key} (${e.Code})`).join(", ")}`);
       }
+    },
+
+    async putOriginal({ key, contentType, bytes, takenAt }) {
+      // One request: originals are at most 50 MB (FR-UP-3), within PutObject's 5 GB. Same storage
+      // class as uploads (§8.1).
+      await client.send(
+        new PutObjectCommand({
+          Bucket: bucket,
+          Key: key,
+          Body: bytes,
+          ContentType: contentType,
+          ContentLength: bytes.byteLength,
+          Metadata: { "taken-at": takenAt },
+          StorageClass: "INTELLIGENT_TIERING",
+        }),
+      );
     },
 
     async copyObject(from, to) {

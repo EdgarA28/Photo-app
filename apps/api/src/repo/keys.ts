@@ -84,6 +84,14 @@ export const importKey = (userId: string, importId: string) => ({
   PK: userPk(userId),
   SK: `IMPORT#${importId}`,
 });
+/**
+ * Marks one picked photo of an import as counted (13.5d, FR-IMP-6): written in the same
+ * transaction as the `done`/`failed` increment, so a redelivered copy never counts twice.
+ */
+export const importItemKey = (userId: string, importId: string, mediaItemId: string) => ({
+  PK: userPk(userId),
+  SK: `IMPORTED#${importId}#${mediaItemId}`,
+});
 /** An entry of the user's place list (13.2c). */
 export const placeKey = (userId: string, placeId: string) => ({
   PK: userPk(userId),

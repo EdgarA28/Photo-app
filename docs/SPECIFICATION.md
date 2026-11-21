@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Version** | 0.58 |
-| **Date** | 2026-11-21 |
+| **Version** | 0.59 |
+| **Date** | 2026-11-22 |
 | **Owner** | Edgar |
 | **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5), videos (Phase 14) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
 
@@ -430,6 +430,7 @@ Initial design; refine during implementation.
 | Upload claim | `USER#{userId}` | `UPLOAD#{uploadId}` | — | — | photoId, ttl (7 days). Imports use `uploadId = gp-{importId}-{mediaItemId}`. A saved shared photo (FR-SHR-10) uses `uploadId = shared-{photoId}` (the owner's photo ID) **without ttl**: it remembers the copy; released once the copy is deleted for good |
 | Pending marker | `PENDING` | `UPLOADED#{uploadedAt}#{userId}#{photoId}` | — | — | userId, photoId, uploadedAt, ttl (30 days). Written with every `pending` photo; the daily sweep (§8.2 access patterns) removes it once the photo is no longer pending, or deletes the photo if its upload never arrived |
 | Import | `USER#{userId}` | `IMPORT#{importId}` | — | — | source (`google-photos`), status (`picking`/`listing`/`copying`/`done`/`cancelled`/`expired`), sessionId, pickerUri, pollIntervalSec, lastPolledAt, accessToken (removed when the import ends), tokenExpiresAt, sessionExpiresAt, total, done, failed, skipped, failedReasons (`{code: count}`), createdAt, ttl (7 days) |
+| Import item counted | `USER#{userId}` | `IMPORTED#{importId}#{mediaItemId}` | — | — | outcome (`done` or the failure code), ttl (7 days). Written in the same transaction as the `done`/`failed` increment, so a redelivered copy never counts twice (FR-IMP-6) |
 | Profile | `USER#{userId}` | `PROFILE` | — | — | username, usernameChangedAt |
 | Place (list entry) | `USER#{userId}` | `PLACE#{placeId}` | — | — | kind (`city`/`region`/`country`), name, context, photoCount, trashedCount (its photos in the trash, so the entry survives for a restore) |
 | Place photo | `PLACE#{userId}#{placeId}` | `PHOTO#{photoId}` | `PLACE#{userId}#{placeId}` (removed while the photo is in the trash) | `TAKEN#{takenAt}#{photoId}` | ownerId, placeId |
@@ -566,12 +567,12 @@ TypeScript Lambda, arm64, in `apps/api` (same bundle as the API, own handler and
 | Trigger | SQS queue `photo-app-{env}-imports`, batch size 1, event source **maximum concurrency 3** (keeps Lambda capacity for the API and thumbnails, 12.3a); DLQ after 5 receives, 14-day retention |
 | `list` message | `{type: "list", userId, importId}`: pages the Picker media items (100 per page), keeps `PHOTO` items with a FR-UP-2 type, sends one `copy` per photo (`SendMessageBatch`, 10 per call), sets `total`, `skipped`, status `copying` |
 | `copy` message | `{type: "copy", userId, importId, mediaItemId, baseUrl, fileName, contentType, createTime}`. `type` lets one queue and one handler serve both steps; no message carries the Google token (the worker reads it from the Import item, NFR-SEC-10) |
-| Copy steps | Upload claim `gp-{importId}-{mediaItemId}` (a redelivered message reuses its photoId, FR-IMP-6) → `GET {baseUrl}=d` with the Bearer token, streamed → ≤ 50 MB → quota check + `pending` Photo item in one transaction (as `POST /photos/upload-url`) → multipart upload to `users/{userId}/originals/{photoId}.{ext}` with `taken-at` metadata → `done += 1` → the thumbnail Lambda takes over |
-| Errors — permanent | Too large, over quota, gone at Google (404): no photo (or the pending one set `failed`), `failed += 1` with a reason (`TOO_LARGE`, `QUOTA_EXCEEDED`, `NOT_FOUND`), message deleted |
+| Copy steps | Import still `listing` or `copying` (copies may start before the list step sets `copying`), photo not counted yet → upload claim `gp-{importId}-{mediaItemId}` (a redelivered message reuses its photo, FR-IMP-6; one whose original is already stored is just counted) → `GET {baseUrl}=d` with the Bearer token, read into memory and stopped past 50 MB (FR-UP-3) → quota check with the exact size + `pending` Photo item in one transaction (as `POST /photos/upload-url`) → one `PutObject` to `users/{userId}/originals/{photoId}.{ext}` with `taken-at` metadata → `done += 1` (with its Import item counted marker) → the thumbnail Lambda takes over |
+| Errors — permanent | Too large, over quota, gone at Google (404), token refused (401/403 → `EXPIRED`): no photo (a pending one from an earlier delivery is deleted, releasing its reservation), `failed += 1` with a reason (`TOO_LARGE`, `QUOTA_EXCEEDED`, `NOT_FOUND`, `EXPIRED`), message deleted. A token refused while listing ends the import as `expired`. An unreadable message is dropped (logged without its body) |
 | Errors — transient | Google 429/5xx, DynamoDB `TransactionConflict`: throw → SQS redelivers after the visibility timeout; after 5 receives → DLQ. An import still `copying` when its token has expired is closed by `GET /imports/{id}`: the rest count as failed (`EXPIRED`) |
 | Finish | The update that makes `done + failed = total` (conditional) sets `done`, deletes the Picker session and removes `accessToken` |
 | Cancel | `DELETE /imports/{id}` sets `cancelled`; queued `copy` messages see it and are dropped |
-| Limits | Timeout 120 s, memory 512 MB (everything streamed), visibility timeout 720 s; 500 photos ≈ 3 min with 3 workers, well within the token's hour |
+| Limits | Timeout 120 s (download ≤ 90 s), memory 512 MB (one original of ≤ 50 MB in memory at a time), visibility timeout 720 s; 500 photos ≈ 3 min with 3 workers, well within the token's hour |
 | Logs | Structured JSON; 30-day retention; never the token or `baseUrl` |
 
 ### 10.2 Video service (Phase 14)
@@ -902,6 +903,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.38 | 2026-11-01 | Less gallery polling while uploads run: 15 s instead of 3 s, refreshes during a batch only mark lists stale (13.1j, §12.4) |
 | 0.53 | 2026-11-05 | FR-GAL-8 (user request): pinch to resize the grid tiles, continuous (live scale, settle on the nearest size) |
+| 0.59 | 2026-11-22 | §10.1 import worker (13.5d): the original is read into memory (≤ 50 MB) and stored with one `PutObject`, so the quota check uses the exact size (was: streamed multipart); copies accept `listing` too; new Import item counted marker (§8.2) makes counts exactly once; a refused token fails the photo as `EXPIRED`; a stored original is not written again on a retry |
 | 0.58 | 2026-11-21 | Import (13.5c): Import item gains `sessionExpiresAt`; the Picker session is created with `maxItemCount` 500 (FR-IMP-2 enforced in Google's picker); an import still listing/copying is closed as expired 3 min after the token ran out (a copy in flight may still finish) |
 | 0.57 | 2026-11-21 | §10.1: import queue messages carry `type` (`list` / `copy`) and never the Google token (13.5b) |
 | 0.56 | 2026-11-06 | FR-GAL-8: 5 sizes, with a 3-per-row layout between 4 and 2 per row on a phone (user: no layout in between) |

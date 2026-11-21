@@ -58,6 +58,20 @@ export function loadImportConfig(env: NodeJS.ProcessEnv = process.env): ImportCo
   };
 }
 
+/**
+ * The import worker (13.5d, §10.1): table, photo bucket, its own queue (copy messages) and the
+ * default quota (copies count against it like uploads). No Google secret: it uses the token the
+ * API stored in the Import item.
+ */
+export function loadImportWorkerConfig(env: NodeJS.ProcessEnv = process.env) {
+  return {
+    tableName: required(env, "TABLE_NAME"),
+    photoBucket: required(env, "PHOTO_BUCKET"),
+    importQueueUrl: required(env, "IMPORT_QUEUE_URL"),
+    defaultQuotaBytes: positiveInteger(env, "DEFAULT_QUOTA_BYTES"),
+  };
+}
+
 /** The trash purge Lambda (FR-DEL-3, `purge.ts`): only the table and the photo bucket. */
 export function loadPurgeConfig(env: NodeJS.ProcessEnv = process.env): Pick<
   Config,

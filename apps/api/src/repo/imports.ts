@@ -1,7 +1,13 @@
 import { GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { IMPORT_TTL_DAYS, type ImportFailureCode, type ImportStatus } from "@photo-app/shared";
-import { isConditionalCheckFailed, stripKeys, type Db } from "./db";
-import { importKey } from "./keys";
+import {
+  conditionFailedAt,
+  isConditionalCheckFailed,
+  stripKeys,
+  transactWrite,
+  type Db,
+} from "./db";
+import { importItemKey, importKey } from "./keys";
 
 /**
  * Imports from Google Photos (13.5c; §8.2 Import item, FR-IMP-*). One item per import under the
@@ -189,6 +195,130 @@ export function importsRepo(db: Db) {
         },
       });
       return ok ? ended : null;
+    },
+
+    /**
+     * Worker `list` step done (§10.1): listing → copying with the number of photos to copy and
+     * the picked items skipped. False when the import isn't listing any more (cancelled, or a
+     * redelivered `list` message after the first one finished).
+     */
+    async setListed(
+      userId: string,
+      importId: string,
+      { total, skipped }: { total: number; skipped: number },
+    ): Promise<boolean> {
+      return update(userId, importId, {
+        // `total` is a DynamoDB reserved word.
+        UpdateExpression: "SET #status = :copying, #total = :total, skipped = :skipped",
+        ConditionExpression: "#status = :listing",
+        ExpressionAttributeNames: { "#status": "status", "#total": "total" },
+        ExpressionAttributeValues: {
+          ":copying": "copying",
+          ":listing": "listing",
+          ":total": total,
+          ":skipped": skipped,
+        },
+      });
+    },
+
+    /**
+     * Counts one picked photo as `done` or `failed` (with its reason) exactly once (FR-IMP-6):
+     * the marker `IMPORTED#{importId}#{mediaItemId}` and the counter change in one transaction.
+     * `already` = counted by an earlier delivery; `ended` = the import was cancelled or expired.
+     * Copies finishing together clash on the Import item; `transactWrite` retries those.
+     */
+    async countItem(
+      userId: string,
+      importId: string,
+      mediaItemId: string,
+      outcome: { kind: "done" } | { kind: "failed"; code: ImportFailureCode },
+    ): Promise<"counted" | "already" | "ended"> {
+      const counter: {
+        UpdateExpression: string;
+        names: Record<string, string>;
+        values: Record<string, unknown>;
+      } =
+        outcome.kind === "done"
+          ? { UpdateExpression: "ADD done :one", names: {}, values: {} }
+          : {
+              UpdateExpression:
+                "ADD failed :one SET failedReasons.#code = if_not_exists(failedReasons.#code, :zero) + :one",
+              names: { "#code": outcome.code },
+              values: { ":zero": 0 },
+            };
+      try {
+        await transactWrite(db, {
+          TransactItems: [
+            {
+              Put: {
+                TableName: db.table,
+                Item: {
+                  ...importItemKey(userId, importId, mediaItemId),
+                  entity: "importItem",
+                  outcome: outcome.kind === "done" ? "done" : outcome.code,
+                  ttl: Math.ceil(Date.now() / 1000) + IMPORT_TTL_DAYS * 24 * 60 * 60,
+                },
+                ConditionExpression: "attribute_not_exists(PK)",
+              },
+            },
+            {
+              Update: {
+                TableName: db.table,
+                Key: importKey(userId, importId),
+                UpdateExpression: counter.UpdateExpression,
+                ConditionExpression: "#status IN (:listing, :copying)",
+                ExpressionAttributeNames: { "#status": "status", ...counter.names },
+                ExpressionAttributeValues: {
+                  ":one": 1,
+                  ":listing": "listing",
+                  ":copying": "copying",
+                  ...counter.values,
+                },
+              },
+            },
+          ],
+        });
+        return "counted";
+      } catch (err) {
+        if (conditionFailedAt(err, 0)) return "already";
+        if (conditionFailedAt(err, 1)) return "ended";
+        throw err;
+      }
+    },
+
+    /** Whether this picked photo was already counted (a redelivered `copy` message). */
+    async isCounted(userId: string, importId: string, mediaItemId: string): Promise<boolean> {
+      const output = await db.client.send(
+        new GetCommand({
+          TableName: db.table,
+          Key: importItemKey(userId, importId, mediaItemId),
+          ConsistentRead: true,
+        }),
+      );
+      return output.Item !== undefined;
+    },
+
+    /**
+     * `done` once every photo is counted (§10.1 "Finish"): conditional on the counters read, so
+     * exactly one caller ends it. Returns the record as it was (with the token, to delete the
+     * Picker session) when this call ended it, else null.
+     */
+    async finishIfComplete(userId: string, importId: string): Promise<ImportRecord | null> {
+      const record = await get(userId, importId);
+      if (!record || record.status !== "copying") return null;
+      if (record.done + record.failed < record.total) return null;
+      const ok = await update(userId, importId, {
+        UpdateExpression: "SET #status = :done REMOVE accessToken",
+        ConditionExpression: "#status = :copying AND done = :d AND failed = :f",
+        ExpressionAttributeNames: { "#status": "status" },
+        ExpressionAttributeValues: {
+          ":done": "done",
+          ":copying": "copying",
+          ":d": record.done,
+          ":f": record.failed,
+        },
+      });
+      return ok ? record : null;
     },
   };
 }
