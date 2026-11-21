@@ -11,6 +11,8 @@ export const errorCodes = [
   "SHARE_TARGET_NOT_FOUND",
   "USERNAME_TAKEN",
   "RATE_LIMITED",
+  /** POST /imports/google: Google rejected the authorization code (§9, FR-IMP-1). */
+  "GOOGLE_AUTH_FAILED",
   "INTERNAL_ERROR",
 ] as const;
 

@@ -159,3 +159,14 @@ export const MEDIA_COOKIE_TTL_SECONDS = 8 * 60 * 60;
 /** Derived image sizes (§10); a video's poster frame uses the same two (§10.2). */
 export const THUMB_MAX_EDGE = 400;
 export const PREVIEW_MAX_EDGE = 1600;
+
+// Import from Google Photos (13.5, §6.9, §10.1, §11.5)
+/** Most photos one import copies (FR-IMP-2). */
+export const MAX_PHOTOS_PER_IMPORT = 500;
+/** An Import item is removed by DynamoDB TTL this long after it was created (§8.2). */
+export const IMPORT_TTL_DAYS = 7;
+/** The only Google scope the import asks for (FR-IMP-2, NFR-SEC-10). */
+export const GOOGLE_PHOTOS_PICKER_SCOPE =
+  "https://www.googleapis.com/auth/photospicker.mediaitems.readonly";
+/** App route Google redirects back to after the import consent (§11.5, §12.1). */
+export const GOOGLE_IMPORT_CALLBACK_PATH = "/import/google/callback";

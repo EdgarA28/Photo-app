@@ -55,7 +55,7 @@
 | Auth trigger Lambda | `services/auth-triggers` | ✅ (dev) | Pre sign-up handler (Google → native account linking, refuses duplicate email sign-ups) + 24 tests (4.5); **deployed in dev** (4.6), linking verified manually |
 | Web app / PWA | `apps/web` | ✅ (dev) | 8.1 scaffold: Vite + React, file routes of spec §12.1 (placeholder pages), Query client, Zod-validated gallery search, `/api` dev proxy. 8.2 Tailwind CSS 4 + shadcn/ui (D-3). 8.3 login (oidc-client-ts, PKCE, refresh, guard, logout). 8.4 API client (bearer, Zod, 401 retry); settings shows `GET /me`. 8.5 app shell (side rail / bottom tab bar, full-screen viewer, system dark mode). 8.6 gallery (infinite query, virtualized justified rows, album/sort filters in the URL). 8.7 processing/failed tiles + polling while photos process. 8.8 full-screen viewer (preview, prev/next through the gallery list, arrow keys, Escape, swipe). 8.9 download original + delete with confirmation in the viewer. 8.10 upload queue (IndexedDB, picker / drag & drop / camera, 3 parallel, progress, automatic retry, one uploading tab, gallery tiles + nav badge). 8.11 albums (list, create, rename, delete, album view, select mode, add/remove photos, cover; album actions in the viewer). 8.12 sharing (share dialog by email or @username, revoke, "Shared with me", read-only shared album view, "Shared by" in the viewer). 8.13 settings (account, quota bar, username set/change, logout clearing the upload queue and Query cache). 8.14 storage-full handling (space warning, grouped banner, Retry all), session-expired and offline messages. 8.15 "choose a username" prompt after login. **Phase 8 complete.** Thumbnails and previews show once Phase 7 serves them. 9.1 web app manifest + icons (installable metadata). 9.2 service worker caching: precached shell, offline navigation fallback, CacheFirst thumbnails. 9.4 service worker registered (`registerType: 'prompt'`) with an "Update available" prompt and hourly update checks. 9.3 Query cache saved to IndexedDB per user and restored on start; offline start with the stored session's `sub`. 9.5 Background Sync: the service worker uploads the queue after the app is closed or frozen (Chromium); refresh token now in IndexedDB. 9.6 Android share target: photos shared to the app land in the upload queue. Later (all on dev): month sections (8.16), viewer zoom (8.17), sticky header (8.18/8.19), invitations (8.20), branded login (8.21), public photo links (8.22/8.23), upload reliability (8.24), faster start (8.25), save shared photos (8.26), collaborative albums (8.28), shared locations (8.29), photos shown once ready (8.32), trash (13.3), place search + `/map` (13.2), bulk / folder upload (13.1-0/a–f/j/l: scalable queue, folders, large in-tab batches, skipped-files summary, space check, whole-queue progress / pause / cancel, continue interrupted batches, less polling during uploads, mobile data warning + phone hint). Status: ✅ except the iOS test (9.7, Phase 11) and open user checks in `PROGRESS.md` |
 | Thumbnail queue (SQS) | `infra/modules/thumbnails`, `services/thumbnails` | ✅ (dev) | 13.6 (spec v0.30 §10, B-11): S3 → EventBridge rule (originals only, `users/*/originals/*`) → SQS `photo-app-{env}-thumbnails` → thumbnail Lambda (event source mapping, batch 5, maximum concurrency 5, `ReportBatchItemFailures`, redrive to the existing DLQ after 5 receives, EventCount metrics on the mapping). Applied to dev from local 2026-11-01. Two bulk tests (530 photos each) lost invocations to Lambda's recursive loop detection; fixed by the EventBridge trigger; third bulk test 2026-11-02 (533 photos) passed: all ready, nothing dropped, concurrency ≤ 5. DLQ purged 2026-11-03 (19 messages left over from the 2nd test). Costs: spec v0.43 §16 (free tier) |
-| Import from Google Photos | `apps/api` (routes + worker), `infra/modules/api`, `apps/web` | 📋 | Planned (13.5, spec v0.24 §6.9): Picker API, `/imports` routes, SQS import queue + DLQ, import worker Lambda; nothing built yet (§10.8) |
+| Import from Google Photos | `apps/api` (routes + worker), `infra/modules/api`, `apps/web` | 🚧 | Planned (13.5, spec v0.24 §6.9): Picker API, `/imports` routes, SQS import queue + DLQ, import worker Lambda. 🚧 13.5b shared contracts done (`schemas/imports.ts`, import constants, `GOOGLE_AUTH_FAILED`); API, worker, infra and web not built yet (§10.8) |
 | Videos | `packages/shared`, `apps/api`, `services/thumbnails`, `infra/modules/{thumbnails,storage,frontend}`, `apps/web` | 🚧 | Planned (Phase 14, spec v0.41 §6.10 FR-VID-*, §10.2): second media type of the Photo item; multipart upload routes, video Lambda (ffmpeg poster + metadata) with its own queue, S3 routing by suffix, bucket CORS `PUT` + `ETag`, `<video>` viewer; V2 playback copy. **Built (not deployed, nothing user-visible):** 14.1 shared contracts (§7: video content types, size/part constants, `mediaType`/`durationMs`/`videoCodec`/`playable`/`videoUrl` on `Photo`, `/videos/*` schemas, `playbackKey`, key vectors with `mp4`/`mov`); the thumbnail Lambda skips video originals. 14.2 API: `/videos/uploads`, `/videos/{id}/parts`, `/videos/{id}/complete` (§9), cancel = abort, playback copy deleted with the video, stale-pending sweep aborts, `videoUrl` for owner / recipients / public links; IAM in `infra/modules/api` (abort, `ListBucket`, `playback/*` deletes; offline-tested, not applied). 14.3 video processing: `thumbnails.video_handler.handler` with PyAV (ranged S3 reads, poster frame, metadata, the shared `ready` transaction), separate package `dist-video/` (§10.2). 14.4 infra **applied to dev 2026-11-03**: `videos` module (Lambda `photo-app-dev-videos`, queue + DLQ, rule for `.mp4`/`.mov`, IAM), bucket CORS `PUT`, CSP `media-src`, sweep retries by media type, the 14.2 IAM; smoke test on Lambda OK (PyAV loads on arm64). 14.5 web upload (code, not deployed): MP4/MOV accepted, multipart uploader with per-part retries and resume, memory-only items, cancel frees the reserved quota, share target up to 200 MB (§14.1). **Videos section (FR-VID-11, 2026-11-04, not deployed):** the Gallery lists photos only; `/videos` lists videos (GSI1 `VIDEOS#{userId}`, `GET /photos?mediaType=video`); albums, map and places stay mixed. **14.6 gallery tiles + player (2026-11-04, not deployed):** tiles (gallery, Videos, albums, trash, map pins and strip, public links) show a play mark + duration (`VideoBadge`, `formatDuration`; labels "name, Video, 1:05"); `GET /places/map` pins carry `mediaType` + `durationMs`; the viewer and the public link page play the original in `<video controls playsinline preload="metadata">` with the preview as poster (`VideoPlayer`), no zoom, swipe except on the controls bar, arrow keys left to a focused video; a codec the browser can't decode (`canPlayType` with the codec, `viewer/playback.ts`) or a load error → "This video can't play in this browser" + download; the service worker never matches originals or range requests. **14.7 quota + costs (2026-11-04, not deployed):** defaults 5 GiB dev / 25 GiB prod (`infra/envs/*/main.tf`), `GET /me` usage `videoCount` / `videoBytes`, `QuotaBar` video line, video costs in `docs/SCALING.md` §3.7 and spec §16. **14.8** user check passed 2026-11-05 (laptop + Android). **14.9 playback copy (2026-11-05, on dev, backfilled and pushed; user check passed 2026-11-21):** after `ready` the video Lambda makes `playback/{id}.mp4` (`transcode.py`: 720p H.264 + AAC, faststart, upright, ≤ 30 fps; 20-min limit, deadline 45 s before the 15-min timeout), item `playbackStatus` / `playbackSizeBytes` / `playbackReason`, not counted in Usage; `videoUrl` (own, shared, public links) points to the copy once ready (`videoKey`, `lib/objects.ts`); the viewer plays it (codec H.264) and says "being prepared" for an HEVC original while it's pending; `videos` module 3008 MB / 900 s / 2 GB `/tmp`, IAM `playback/*` write + abort; bucket policy lets CloudFront read `playback/*`; `scripts/backfill_playback.py` for older videos. User check passed 2026-11-21 |
 | CI/CD workflows | `.github/workflows` | 🚧 | `ci.yml` (10.1: checks, build, dev `tofu plan` + PR comment; pull requests and pushes to `main`); `deploy.yml` (10.2: dev deploy after CI passes on `main`; running since `87fbe5c`). Prod job (10.3): Phase 11 |
 
@@ -265,7 +265,7 @@ Photo-app/
 │       │   ├── constants.ts     limits, content types, TTLs, image sizes
 │       │   ├── ids.ts           ULID generation & ID validators
 │       │   ├── s3Keys.ts        S3 key builders/parser
-│       │   ├── schemas/         Zod: common, errors, photos, videos (14.1), albums, account, places, links
+│       │   ├── schemas/         Zod: common, errors, photos, videos (14.1), albums, account, places, links, imports (13.5b)
 │       │   └── *.test.ts        Vitest suites
 │       └── test-vectors/
 │           └── s3-keys.json     cross-language key contract (TS + Python)
@@ -440,6 +440,10 @@ Root commands: `pnpm lint`, `pnpm format[:check]`, `pnpm typecheck`, `pnpm test`
 | `SHARED_VIDEO_URL_TTL_SECONDS` | 14 400 (4 h): a shared video's signed URL must outlast its playback (range requests until the end) | FR-VID-7 |
 | `MEDIA_COOKIE_TTL_SECONDS` | 28 800 (8 h) | §9 |
 | `THUMB_MAX_EDGE` / `PREVIEW_MAX_EDGE` | 400 / 1600 px (also a video's poster frame) | §10, §10.2 |
+| `MAX_PHOTOS_PER_IMPORT` | 500 | FR-IMP-2 |
+| `IMPORT_TTL_DAYS` | 7 (Import item TTL) | §8.2 |
+| `GOOGLE_PHOTOS_PICKER_SCOPE` | `https://www.googleapis.com/auth/photospicker.mediaitems.readonly` | FR-IMP-2, NFR-SEC-10 |
+| `GOOGLE_IMPORT_CALLBACK_PATH` | `/import/google/callback` | §11.5, §12.1 |
 
 Per-environment settings (e.g. default quota 5 GB dev / 25 GB prod since 14.7) are deployment config, not shared constants.
 
@@ -496,6 +500,7 @@ All request/response bodies of §9 as Zod schemas with inferred TS types.
 | `SHARE_TARGET_NOT_FOUND` | No registered user with that email or username |
 | `USERNAME_TAKEN` | `PUT /me/username`: someone else has the name, or it is held for its former owner (409) |
 | `RATE_LIMITED` | Throttled |
+| `GOOGLE_AUTH_FAILED` | `POST /imports/google`: Google rejected the authorization code (400, 13.5) |
 | `INTERNAL_ERROR` | Unexpected failure |
 
 **Photos (`photos.ts`)**
@@ -550,6 +555,22 @@ All request/response bodies of §9 as Zod schemas with inferred TS types.
 | `sharedAlbumSchema` | `Album` + `ownerId, ownerUsername\|null, sharedAt` |
 | `sharedAlbumPageSchema` | `Page<SharedAlbum>` |
 
+**Import from Google Photos (`imports.ts`, 13.5b; FR-IMP-*, §9, §10.1)** — contracts only; routes, worker and web come with 13.5c–g
+
+| Schema / helper | Shape |
+|---|---|
+| `importIdSchema` | ULID (`idSchema`) |
+| `importStatusSchema` / `ImportStatus` | `picking` \| `listing` \| `copying` \| `done` \| `cancelled` \| `expired`; `isFinalImportStatus` (last three) |
+| `importFailureCodeSchema` | `TOO_LARGE` \| `QUOTA_EXCEEDED` \| `NOT_FOUND` \| `EXPIRED` (unsupported types are `skipped`, not failed) |
+| `startGoogleImportRequestSchema` | `{ code (1–2048), codeVerifier (RFC 7636: 43–128 unreserved chars), redirectUri }`; `redirectUri` = http(s) URL whose path is exactly `GOOGLE_IMPORT_CALLBACK_PATH`, no query, fragment or credentials (the API also checks the origin) |
+| `startGoogleImportResponseSchema` | `{ importId, pickerUri (https), expiresAt }` |
+| `importSchema` | `GET /imports/{id}`: `{ status, total, done, failed, skipped, failedReasons: {code → count} }` |
+| `importListMessageSchema` / `importCopyMessageSchema` / `importMessageSchema` | queue messages, discriminated by `type` (`list` \| `copy`); copy = `{ userId, importId, mediaItemId, baseUrl (https), fileName, contentType (photo types only), createTime (offset allowed) }`. No token in messages: the worker reads it from the Import item |
+| `googleMediaItemIdSchema` | `[A-Za-z0-9_-]{1,512}` (it goes into a DynamoDB sort key) |
+| `importClaimId(importId, mediaItemId)` | `gp-{importId}-{mediaItemId}` (upload claim, FR-IMP-6) |
+
+Deviation from spec §10.1 (spec updated, v0.57): queue messages carry a `type` field so one queue and one handler serve both steps.
+
 **Account (`account.ts`)**
 
 | Schema | Shape |
@@ -567,6 +588,7 @@ All request/response bodies of §9 as Zod schemas with inferred TS types.
 |---|---|
 | `s3Keys.test.ts` | builders (incl. `playbackKey`) and parser against the shared vectors, which cover every original extension; invalid IDs throw; `extensionFor`, `mediaTypeOfExtension` |
 | `ids.test.ts` | 1000 IDs valid/unique/sorted; embedded timestamp; validators |
+| `schemas/imports.test.ts` | import request (redirect URI path/query/fragment/credentials/scheme, PKCE verifier bounds), response https, progress + reasons, final statuses, queue messages (type, createTime with fractions/offset, photo types only, bad IDs/URLs), claim ID, `GOOGLE_AUTH_FAILED` |
 | `schemas/schemas.test.ts` | defaults & coercion, limits, pending photo shape (video fields default to photo), a processed video, video upload schemas (sizes, part counts, part lists), linked videos, album rules, email normalisation, error envelope |
 
 ---
@@ -884,9 +906,9 @@ flowchart LR
 
 Bootstrap uses local state per workspace instead of S3.
 
-### 10.8 Import from Google Photos 📋 (planned, 13.5)
+### 10.8 Import from Google Photos 🚧 (13.5)
 
-Designed in spec §5.2, §6.9, §10.1 and §11.5; nothing exists yet. The user picks photos in Google's picker; the backend copies them.
+Designed in spec §5.2, §6.9, §10.1 and §11.5. Done: Google Cloud setup (13.5a: Picker API, scope, redirect URIs, test users) and the shared contracts (13.5b, §7.4); the rest is still planned. The user picks photos in Google's picker; the backend copies them.
 
 ```mermaid
 sequenceDiagram
@@ -1405,6 +1427,7 @@ Target design: spec §12 (TanStack Router file routes with an authenticated layo
 | 2026-11-04 | **Videos section (FR-VID-11, user request, spec v0.50; not deployed):** API: video items in GSI1 `VIDEOS#{userId}` (`galleryPk`, set by `createPending` and `restore`; the Lambdas only change GSI1SK), `GET /photos?mediaType=video`, `/places/{id}/photos?mediaType=` filters after the read; tests. Web: the gallery page became `src/gallery/Library.tsx` (`kind` photo / video) used by `/gallery` and new `/videos` (`libraryFilter` in `library.ts`), uploads shown on their kind's page, viewer search `mediaType` (list + back to /videos), "Add videos instead" when adding to an album, nav item Videos (6 tabs on phones). |
 | 2026-11-04 | **14.6 video tiles + player (not deployed):** `VideoBadge` on gallery / album / trash / map / public-link tiles, `formatDuration` + `videoLabel`; `photoLocationSchema` + `listLocated` / `toPhotoLocation` add `mediaType`, `durationMs`; `VideoPlayer` (+ `viewer/playback.ts`) in the viewer (`VideoView`) and on `/s/$token` ("N shared photos and videos"); viewer texts by kind ("Delete video", "Next video", processing / failed); service worker route skips `Range` requests. Save to my gallery needed no change (14.2 copies videos as videos). 1133 TS tests. |
 | 2026-11-04 | **14.7 quota + costs (not deployed):** `default_quota_bytes` 5 GiB dev / 25 GiB prod; `photos.videoUsage` (GSI1 `VIDEOS#{userId}`, ready only) → `usage.videoCount` / `videoBytes` on `GET /me` (`usageSchema` defaults 0); `QuotaBar` "N photos and videos" + "N videos use X"; `docs/SCALING.md` §3.7 Videos; spec v0.51 (FR-ACC-2, §9, §13.2, §16). |
+| 2026-11-21 | **13.5b import contracts:** `schemas/imports.ts` (request/response, status, failure codes, queue messages with `type`, claim ID), import constants, error code `GOOGLE_AUTH_FAILED` (+ web message); 13.5a Google Cloud setup done by the user. Import row and §10.8 → 🚧. |
 | 2026-11-21 | 8.35: launch splash icon 96 → 128 px, the size of Chrome's own launch screen icon on Android, so the installed app shows one icon size at startup. |
 | 2026-11-21 | User checks on dev passed (8.16/8.17, 8.21–8.23, 8.26/8.27, 8.29–8.31, 8.33, 8.34, 9.8, 12.2 CSP console, 13.2h, 13.3, 14.9); Videos row: 14.9 checked. No code change. |
 | 2026-11-06 | **8.34 sizes (user: no layout between 4 and 2 per row):** 5 steps, phone 56, 72 px then 4, 3, 2 per row (`PHONE_PER_ROW`), wide 96, 136, 192, 272, 384 px. Pushed `a681dae`, on dev. |

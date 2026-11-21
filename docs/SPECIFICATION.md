@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Version** | 0.56 |
-| **Date** | 2026-11-06 |
+| **Version** | 0.57 |
+| **Date** | 2026-11-21 |
 | **Owner** | Edgar |
 | **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5), videos (Phase 14) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
 
@@ -564,8 +564,8 @@ TypeScript Lambda, arm64, in `apps/api` (same bundle as the API, own handler and
 | Aspect | Specification |
 |---|---|
 | Trigger | SQS queue `photo-app-{env}-imports`, batch size 1, event source **maximum concurrency 3** (keeps Lambda capacity for the API and thumbnails, 12.3a); DLQ after 5 receives, 14-day retention |
-| `list` message | `{userId, importId}`: pages the Picker media items (100 per page), keeps `PHOTO` items with a FR-UP-2 type, sends one `copy` per photo (`SendMessageBatch`, 10 per call), sets `total`, `skipped`, status `copying` |
-| `copy` message | `{userId, importId, mediaItemId, baseUrl, fileName, contentType, createTime}` |
+| `list` message | `{type: "list", userId, importId}`: pages the Picker media items (100 per page), keeps `PHOTO` items with a FR-UP-2 type, sends one `copy` per photo (`SendMessageBatch`, 10 per call), sets `total`, `skipped`, status `copying` |
+| `copy` message | `{type: "copy", userId, importId, mediaItemId, baseUrl, fileName, contentType, createTime}`. `type` lets one queue and one handler serve both steps; no message carries the Google token (the worker reads it from the Import item, NFR-SEC-10) |
 | Copy steps | Upload claim `gp-{importId}-{mediaItemId}` (a redelivered message reuses its photoId, FR-IMP-6) → `GET {baseUrl}=d` with the Bearer token, streamed → ≤ 50 MB → quota check + `pending` Photo item in one transaction (as `POST /photos/upload-url`) → multipart upload to `users/{userId}/originals/{photoId}.{ext}` with `taken-at` metadata → `done += 1` → the thumbnail Lambda takes over |
 | Errors — permanent | Too large, over quota, gone at Google (404): no photo (or the pending one set `failed`), `failed += 1` with a reason (`TOO_LARGE`, `QUOTA_EXCEEDED`, `NOT_FOUND`), message deleted |
 | Errors — transient | Google 429/5xx, DynamoDB `TransactionConflict`: throw → SQS redelivers after the visibility timeout; after 5 receives → DLQ. An import still `copying` when its token has expired is closed by `GET /imports/{id}`: the rest count as failed (`EXPIRED`) |
@@ -902,6 +902,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.38 | 2026-11-01 | Less gallery polling while uploads run: 15 s instead of 3 s, refreshes during a batch only mark lists stale (13.1j, §12.4) |
 | 0.53 | 2026-11-05 | FR-GAL-8 (user request): pinch to resize the grid tiles, continuous (live scale, settle on the nearest size) |
+| 0.57 | 2026-11-21 | §10.1: import queue messages carry `type` (`list` / `copy`) and never the Google token (13.5b) |
 | 0.56 | 2026-11-06 | FR-GAL-8: 5 sizes, with a 3-per-row layout between 4 and 2 per row on a phone (user: no layout in between) |
 | 0.55 | 2026-11-06 | Phone layout like Google Photos (user request, measured from screenshots): grids edge to edge with 1.5 px gaps, two photos per row at the largest size (FR-GAL-8), floating tab bar, gallery header on two rows that scrolls away going down and returns going up (replaces the always-visible sticky header on phones; unchanged from `md`) |
 | 0.54 | 2026-11-06 | FR-GAL-8 reworked after phone tests (user): the grid always covers the width, each size dissolves into the next, one size per pinch, a new layout once shown stays, 4 sizes |

@@ -32,6 +32,7 @@ const MESSAGES: Record<ClientErrorCode, string> = {
   SHARE_TARGET_NOT_FOUND: "No user with this email or username.",
   USERNAME_TAKEN: "This username is already taken.",
   RATE_LIMITED: "Too many requests. Wait a moment and try again.",
+  GOOGLE_AUTH_FAILED: "Google didn't accept the sign-in. Start the import again.",
   INTERNAL_ERROR: "Something went wrong on our side. Try again later.",
   NETWORK_ERROR: "Can't reach the server. Check your connection.",
   INVALID_RESPONSE: "The server sent an unexpected response. Try reloading the app.",
