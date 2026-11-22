@@ -49,7 +49,7 @@ const aspectOf = (photo: Photo) => (photo.width && photo.height ? photo.width / 
 
 /** What the virtualizer lays out: a month heading or a row of tiles. */
 export type GridItem =
-  | { kind: "month"; label: string; height: number }
+  | { kind: "month"; label: string; height: number; /** `YYYY-MM` (local) */ month: string }
   | { kind: "row"; row: Row<Photo>; height: number; gap: number };
 
 /** The grid's justified rows (§12.3) at a size step, under month headings if asked. */
@@ -77,8 +77,8 @@ export function gridItems(
     }));
   if (!months) return rowsOf(photos);
   // Each month gets its own rows, so a row never mixes months (§12.3).
-  return monthSections(photos, (photo) => photo.takenAt).flatMap(({ label, items }) => [
-    { kind: "month", label, height: MONTH_HEADING_HEIGHT } as const,
+  return monthSections(photos, (photo) => photo.takenAt).flatMap(({ key, label, items }) => [
+    { kind: "month", label, height: MONTH_HEADING_HEIGHT, month: key } as const,
     ...rowsOf(items),
   ]);
 }

@@ -1,4 +1,10 @@
-import { mediaTypeSchema, photoSortSchema, placeIdSchema, ULID_REGEX } from "@photo-app/shared";
+import {
+  isoDateTimeSchema,
+  mediaTypeSchema,
+  photoSortSchema,
+  placeIdSchema,
+  ULID_REGEX,
+} from "@photo-app/shared";
 import { z } from "zod";
 
 // §12.1: `album` filters to one album, `place` to one of the user's places (13.2), `sort` orders by
@@ -14,6 +20,12 @@ export const gallerySearchSchema = z.object({
    * Set by the grids for the viewer; a place without it (opened from the map) lists both.
    */
   mediaType: mediaTypeSchema.optional().catch(undefined),
+  /**
+   * Where the Gallery or Videos list starts after a jump with the timeline scrubber (8.36,
+   * FR-GAL-9): the API's `start`. Newer photos load in above while scrolling up. The viewer gets it
+   * too, so it walks the same list.
+   */
+  from: isoDateTimeSchema.optional().catch(undefined),
   /** Picking photos to add to this album (8.11, from the album's "Add photos"). */
   addTo: z.string().regex(ULID_REGEX).optional().catch(undefined),
 });

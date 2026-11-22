@@ -84,11 +84,13 @@ const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", tim
 export const Route = createFileRoute("/_authenticated/photos/$photoId")({
   staticData: { fullScreen: true },
   validateSearch: gallerySearchSchema,
-  loaderDeps: ({ search: { album, place, sort, mediaType } }) => ({
+  loaderDeps: ({ search: { album, place, sort, mediaType, from } }) => ({
     album,
     place,
     sort,
     mediaType,
+    // The list after a timeline jump (8.36), as the grid showed it.
+    start: place ? undefined : from,
   }),
   loader: async ({ context: { queryClient, api }, params: { photoId }, deps }) => {
     // Usually cached from the gallery. A photo beyond the loaded pages (deep link) is fetched on
@@ -121,12 +123,12 @@ export const Route = createFileRoute("/_authenticated/photos/$photoId")({
 function Viewer() {
   const { api } = Route.useRouteContext();
   const { photoId } = Route.useParams();
-  const { album, place, sort, mediaType } = Route.useSearch();
+  const { album, place, sort, mediaType, from } = Route.useSearch();
   const navigate = Route.useNavigate();
   const close = useClose();
 
   const { data, hasNextPage, isFetchingNextPage, fetchNextPage } = useSuspenseInfiniteQuery(
-    galleryQuery(api, { album, place, sort, mediaType }),
+    galleryQuery(api, { album, place, sort, mediaType, start: place ? undefined : from }),
   );
   // Previous/next walk what the grid shows (no photos still processing); a processing photo
   // opened by its link is still found in the loaded pages.

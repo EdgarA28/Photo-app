@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.62 |
+| **Version** | 0.63 |
 | **Date** | 2026-11-22 |
 | **Owner** | Edgar |
 | **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5), videos (Phase 14) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
@@ -266,6 +266,7 @@ IDs are stable — reference them in issues, PRs and tests.
 | FR-GAL-4 | Clicking a photo opens a full-screen viewer showing the preview image, with next/previous navigation. |
 | FR-GAL-7 | The viewer zooms: pinch, double tap and drag on touch; wheel or trackpad pinch, double click, drag and + / − / 0 on a computer. Zoomed past the preview's detail, the full-resolution original loads and replaces it (where the browser can show its format). |
 | FR-GAL-8 | The photo grids (Gallery, Videos, albums) change their tile size with a pinch, as in Google Photos: fingers apart → bigger tiles, together → smaller, continuously: the grid follows the fingers, always covering the width, each size dissolving into the next as it is reached, and one pinch moves at most one size; on release it settles on the nearest of 5 sizes (from small tiles to 4, 3 and 2 photos per row on a phone, whatever their shape, only a panorama alone at 2) with a short animation, or springs back after a small pinch that hasn't shown the new layout; a trackpad pinch (Ctrl + wheel) does the same on a computer; with reduced motion the settle isn't animated. The photo under the fingers stays in place, the page itself doesn't zoom, and the size is remembered on the device. |
+| FR-GAL-9 | The Gallery and the Videos section have a timeline scrubber on the right edge, as in Google Photos: the years and a dot per month, spaced by how many items each month holds, and a handle at the month on screen. Dragging it (or the arrow keys) shows the month and jumps there, also to months not loaded yet, without loading everything in between; newer items load in above while scrolling up. On a phone it shows while scrolling; on a computer it stays, in its own lane (user request 2026-11-22) |
 | FR-GAL-5 | Photos still processing aren't shown in the gallery, albums or the viewer's previous/next; they appear once ready (the list is polled meanwhile). Photos that failed processing show an error state. |
 | FR-GAL-6 | Correct orientation for all photos (EXIF orientation applied). |
 
@@ -483,7 +484,8 @@ Access patterns:
 | `POST` | `/videos/uploads` | Start a video upload (FR-VID-1–3): body `{fileName, contentType, sizeBytes}` → `201 {photoId, uploadId, partBytes, partCount}`; same quota check and `pending` item as `upload-url`, plus `CreateMultipartUpload` |
 | `POST` | `/videos/{photoId}/parts` | Body `{partNumbers}` (1–100 distinct, each 1–128) → `{parts: [{partNumber, url}], expiresAt}`: pre-signed `UploadPart` URLs, 15 min; only for the caller's `pending` video (else 404 / 409) |
 | `POST` | `/videos/{photoId}/complete` | Body `{parts: [{partNumber, etag}]}` (every part once, any order) → `200 {photoId}` (still `pending` until the video service); `CompleteMultipartUpload`, then the stored size must equal `sizeBytes`, else the object and the photo are deleted (its reservation released) and `400` (a second guard: each part URL is signed with its exact `Content-Length`; together they replace the POST policy's size condition); a repeated complete → `200`, an aborted upload → `409`. `DELETE /photos/{id}` of a pending video aborts the multipart upload |
-| `GET` | `/photos` | List own photos `?cursor&limit&sort`; `?mediaType=video` lists own videos instead (FR-VID-11). `/places/{placeId}/photos` lists both unless `?mediaType=` is given |
+| `GET` | `/photos` | List own photos `?cursor&limit&sort`; `?mediaType=video` lists own videos instead (FR-VID-11). `/places/{placeId}/photos` lists both unless `?mediaType=` is given. FR-GAL-9: `?start=<ISO>` begins the first page there in the sort order (newest first: taken before it; oldest first: at or after it; not with `cursor`); the page's `prevCursor` (null at the top) with `?direction=backward` gives the items just before it, in the sort order |
+| `GET` | `/photos/timeline` | `?mediaType&utcOffset` (minutes): every month of the Gallery (or Videos) list with its count, newest first, `{months: [{month: "YYYY-MM", count}]}` in the caller's time zone (FR-GAL-9) |
 | `GET` | `/photos/{photoId}` | Photo metadata; with `?albumId=` a photo of an album shared with the caller, with signed image URLs. A ready video has `videoUrl` (FR-VID-5/7) and `playbackStatus`: the playback copy's (or, without one, the original's) CloudFront path for the owner, a signed URL valid 4 h for recipients (playback needs range requests until the end) |
 | `GET` | `/photos/{photoId}/download-url` | 5-min pre-signed GET with `attachment` disposition |
 | `DELETE` | `/photos/{photoId}` | Move to the trash (FR-DEL-3): out of gallery, albums and places, files and usage stay; a `pending` upload is deleted at once (files + metadata + usage) |
@@ -671,6 +673,7 @@ Second handler in `services/thumbnails` (`thumbnails.video_handler.handler`), so
 ### 12.3 Gallery rendering (TanStack Virtual)
 
 - Virtualized grid of rows; only visible rows rendered.
+- Timeline scrubber (FR-GAL-9): the months from `GET /photos/timeline`; a loaded month is scrolled to, any other restarts the list there (`?from=` in the URL, the API's `start`, so the viewer walks the same list); newer pages load in above while scrolling up, keeping the photo on screen where it was.
 - API returns `width`/`height` so tiles reserve space before images load (no layout shift).
 - `fetchNextPage()` triggered when approaching the end.
 - Month sections, as in Google Photos but by month only: a heading ("October 2026", local time) above each month of date taken, in the gallery and in albums; a row never mixes months.
@@ -904,6 +907,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.38 | 2026-11-01 | Less gallery polling while uploads run: 15 s instead of 3 s, refreshes during a batch only mark lists stale (13.1j, §12.4) |
 | 0.53 | 2026-11-05 | FR-GAL-8 (user request): pinch to resize the grid tiles, continuous (live scale, settle on the nearest size) |
+| 0.63 | 2026-11-22 | FR-GAL-9 timeline scrubber (user request): `GET /photos/timeline`, `GET /photos?start&direction` + `prevCursor` (§9), §12.3 |
 | 0.62 | 2026-11-22 | §12.6: imported photos have no location (confirmed in dev); the import box and summary say so. Import page: after Google's consent one prominent "Choose your photos" button (the picker can only open from a tap) |
 | 0.61 | 2026-11-22 | The Google Photos import starts from the Upload page, under the normal upload (user's choice), not from Settings |
 | 0.60 | 2026-11-22 | §12.1 import pages (13.5g): the callback hands over to a separate `/import/$importId` page (progress survives a reload); the import is offered only when the web build has the Google client ID |

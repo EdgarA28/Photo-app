@@ -13,8 +13,14 @@ import { TILE_ATTRIBUTE, useDragSelect } from "./useDragSelect";
 import { useGridZoom } from "./useGridZoom";
 import { usePinchLayer, type PinchLayerState } from "./usePinchLayer";
 
-/** Start loading the next page this many rows before the end (FR-GAL-2). */
+/** Start loading the next page this many rows before the end (FR-GAL-2), or the top (8.36). */
 const LOOKAHEAD_ROWS = 6;
+
+/** Where a month's heading is, in page coordinates (`window.scrollY` units), for the scrubber. */
+export interface MonthOffset {
+  month: string;
+  top: number;
+}
 
 /** Select mode (8.11): tiles toggle instead of opening the viewer. */
 export interface GridSelection {
@@ -26,7 +32,7 @@ interface PhotoGridProps {
   photos: Photo[];
   hasNextPage: boolean;
   isFetchingNextPage: boolean;
-  fetchNextPage: () => unknown;
+  fetchNextPage: (options?: { cancelRefetch?: boolean }) => unknown;
   /** The list the viewer walks (FR-GAL-4); default: the current page's search params. */
   viewerSearch?: GallerySearch | undefined;
   selection?: GridSelection | undefined;
@@ -34,6 +40,14 @@ interface PhotoGridProps {
   onSelectionChange?: ((selected: ReadonlySet<string>) => void) | undefined;
   /** A heading per month of date taken; only for lists ordered by date taken. */
   months?: boolean | undefined;
+  /** A list that started mid-way (timeline jump, 8.36) loads newer pages above. */
+  hasPreviousPage?: boolean | undefined;
+  isFetchingPreviousPage?: boolean | undefined;
+  fetchPreviousPage?: ((options?: { cancelRefetch?: boolean }) => unknown) | undefined;
+  /** Any fetch of the list running (a refresh would cancel the request for newer photos). */
+  isFetching?: boolean | undefined;
+  /** The month headings' positions after each layout (the timeline scrubber, 8.36). */
+  onMonthOffsets?: ((offsets: MonthOffset[]) => void) | undefined;
 }
 
 /**
@@ -51,6 +65,11 @@ export function PhotoGrid({
   selection,
   onSelectionChange,
   months = false,
+  hasPreviousPage = false,
+  isFetchingPreviousPage = false,
+  fetchPreviousPage,
+  isFetching = false,
+  onMonthOffsets,
 }: PhotoGridProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { width, top } = useElementBox(ref);
@@ -72,6 +91,21 @@ export function PhotoGrid({
     () => gridItems(photos, width, zoom, months),
     [photos, width, months, zoom],
   );
+  // Photos loaded above (8.36: scrolling up after a timeline jump) push everything down: keep the
+  // photo that was at the top of the screen where it was. Runs before `current` takes the new
+  // layout, so it still has the old one to measure against.
+  const shownFirst = useRef<string | undefined>(undefined);
+  useLayoutEffect(() => {
+    const before = shownFirst.current;
+    shownFirst.current = photos[0]?.photoId;
+    if (!before || before === photos[0]?.photoId) return;
+    if (!photos.some((photo, i) => i > 0 && photo.photoId === before)) return;
+    const anchor = topVisiblePhoto(current.current.items, window.scrollY - top);
+    if (!anchor) return;
+    const start = startOfPhoto(items, anchor.photoId);
+    if (start !== null) window.scrollTo(0, top + start + anchor.offset);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items]);
   useLayoutEffect(() => {
     current.current = { items, zoom };
   });
@@ -100,13 +134,69 @@ export function PhotoGrid({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [virtualizer, items]);
 
+  // Month headings for the timeline scrubber (8.36), whenever the layout changes.
+  useLayoutEffect(() => {
+    if (!onMonthOffsets) return;
+    let y = top;
+    const offsets: MonthOffset[] = [];
+    for (const item of items) {
+      if (item.kind === "month") offsets.push({ month: item.month, top: y });
+      y += item.height;
+    }
+    onMonthOffsets(offsets);
+  }, [items, top, onMonthOffsets]);
+
   const virtualRows = virtualizer.getVirtualItems();
+  const firstIndex = virtualRows[0]?.index ?? -1;
+  // Newer photos above a list that started mid-way: only while nothing else fetches the list (a
+  // refresh would cancel the request), once per state of the list (asking again while the page
+  // is being added looped in the harness, 2026-11-22).
+  const firstPhotoId = photos[0]?.photoId;
+  const askedFor = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!hasPreviousPage || isFetching || isFetchingPreviousPage || firstIndex < 0) return;
+    if (firstIndex >= LOOKAHEAD_ROWS || askedFor.current === firstPhotoId) return;
+    // A tick later: effects run child first, so right after a jump the parent's query hook hasn't
+    // switched to the new list yet and the request would go to the old one (seen 2026-11-22).
+    const timer = window.setTimeout(() => {
+      askedFor.current = firstPhotoId;
+      // Never cancels a fetch in flight (that one would be lost); it asks again once idle.
+      void fetchPreviousPage?.({ cancelRefetch: false });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [
+    hasPreviousPage,
+    isFetching,
+    isFetchingPreviousPage,
+    fetchPreviousPage,
+    firstIndex,
+    firstPhotoId,
+  ]);
+  // A fetch that ended without new photos above (e.g. cancelled by a refresh) may be asked again.
+  useEffect(() => {
+    if (!isFetching) askedFor.current = undefined;
+  }, [isFetching]);
   const lastIndex = virtualRows.at(-1)?.index ?? -1;
   useEffect(() => {
-    if (hasNextPage && !isFetchingNextPage && lastIndex >= items.length - LOOKAHEAD_ROWS) {
-      void fetchNextPage();
+    if (
+      hasNextPage &&
+      !isFetchingNextPage &&
+      !isFetchingPreviousPage &&
+      lastIndex >= items.length - LOOKAHEAD_ROWS
+    ) {
+      // A tick later, and without cancelling a fetch in flight, as for the previous page below
+      // (both ends of a short list after a jump are on screen at once).
+      const timer = window.setTimeout(() => void fetchNextPage({ cancelRefetch: false }), 0);
+      return () => window.clearTimeout(timer);
     }
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage, lastIndex, items.length]);
+  }, [
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchingPreviousPage,
+    fetchNextPage,
+    lastIndex,
+    items.length,
+  ]);
 
   return (
     <div
@@ -379,4 +469,44 @@ function useElementBox(ref: RefObject<HTMLElement | null>) {
     return () => observer.disconnect();
   }, [ref]);
   return box;
+}
+
+/** The first photo of the row at `offset` (grid coordinates) and how far into its row that is. */
+function topVisiblePhoto(
+  items: readonly GridItem[],
+  offset: number,
+): { photoId: string; offset: number } | null {
+  // Above the grid's top (e.g. right after a jump, the grid under the header): the first row.
+  if (offset < 0) {
+    const index = items.findIndex((item) => item.kind === "row");
+    const first = items[index];
+    if (!first || first.kind !== "row") return null;
+    const rowStart = items.slice(0, index).reduce((sum, item) => sum + item.height, 0);
+    return { photoId: first.row.tiles[0]!.item.photoId, offset: offset - rowStart };
+  }
+  let y = 0;
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!;
+    if (offset < y + item.height) {
+      // A heading: anchor on the row below it, keeping the heading's distance.
+      const row = item.kind === "row" ? item : items[i + 1];
+      if (!row || row.kind !== "row") return null;
+      const rowStart = item.kind === "row" ? y : y + item.height;
+      return { photoId: row.row.tiles[0]!.item.photoId, offset: offset - rowStart };
+    }
+    y += item.height;
+  }
+  return null;
+}
+
+/** Where the row holding `photoId` starts (grid coordinates), or null. */
+function startOfPhoto(items: readonly GridItem[], photoId: string): number | null {
+  let y = 0;
+  for (const item of items) {
+    if (item.kind === "row" && item.row.tiles.some((tile) => tile.item.photoId === photoId)) {
+      return y;
+    }
+    y += item.height;
+  }
+  return null;
 }

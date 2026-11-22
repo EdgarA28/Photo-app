@@ -2,7 +2,7 @@ import { photoSortSchema, TRASH_RETENTION_DAYS, type PhotoSort } from "@photo-ap
 import { useInfiniteQuery, useQuery, useSuspenseInfiniteQuery } from "@tanstack/react-query";
 import { Link, useRouter } from "@tanstack/react-router";
 import { Link2, MapPin, X } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AddToAlbumDialog } from "@/albums/AddToAlbumDialog";
 import { errorMessage } from "@/api/errors";
 import {
@@ -16,6 +16,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import {
   Select,
   SelectContent,
@@ -23,7 +24,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PhotoGrid } from "./PhotoGrid";
+import { PhotoGrid, type MonthOffset } from "./PhotoGrid";
+import { jumpStart } from "./timeline";
+import { TimelineScrubber } from "./TimelineScrubber";
 import { PlaceSearch } from "./PlaceSearch";
 import { libraryFilter, type LibraryKind } from "./library";
 import type { GallerySearch } from "./search";
@@ -34,7 +37,13 @@ import { useSelection } from "./useSelection";
 import { ShareLinkDialog } from "@/links/ShareLinkDialog";
 import { albumsQuery, useAddToAlbum } from "@/queries/albums";
 import { sharedAlbumsQuery } from "@/queries/shares";
-import { galleryQuery, processingCount, shownPhotos, useDeletePhotos } from "@/queries/photos";
+import {
+  galleryQuery,
+  processingCount,
+  shownPhotos,
+  timelineQuery,
+  useDeletePhotos,
+} from "@/queries/photos";
 import { placesQuery } from "@/queries/places";
 import { GalleryUploads } from "@/upload/GalleryUploads";
 import { useUploads } from "@/upload/useUploads";
@@ -66,8 +75,17 @@ export function Library({
 }) {
   const { album, place, addTo } = search;
   const noun = NOUN[kind];
-  const { data, hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage } =
-    useSuspenseInfiniteQuery(galleryQuery(api, libraryFilter(kind, search)));
+  const {
+    data,
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+    fetchNextPage,
+    hasPreviousPage,
+    isFetchingPreviousPage,
+    fetchPreviousPage,
+    isFetching,
+  } = useSuspenseInfiniteQuery(galleryQuery(api, libraryFilter(kind, search)));
   const photos = useMemo(() => shownPhotos(data.pages), [data]);
   const processing = useMemo(() => processingCount(data.pages), [data]);
   // Not-yet-uploaded files (FR-UP-6), each on its own page (photos here, videos in Videos);
@@ -92,11 +110,19 @@ export function Library({
   const own = album === undefined || !!albums?.items.some((a) => a.albumId === album);
   // Its buttons (Unselect all, the album being added to) stay while they're the way out.
   const headerHidden = useHideOnScroll(!selection.active && !addTo);
+  const timeline = useTimeline({ api, kind, search, setSearch, enabled: !place && !addTo });
 
   return (
     // On a phone the header takes as little room from the photos as it can: tight to the top of the
     // page and to the grid, and out of the way while scrolling down.
-    <main className="-mt-5 space-y-1 md:mt-0 md:space-y-5">
+    <main
+      className={cn(
+        "-mt-5 space-y-1 md:mt-0 md:space-y-5",
+        // On a computer the timeline scrubber gets its own lane; on a phone it floats over the
+        // photos while scrolling, as in Google Photos.
+        timeline.months.length > 1 && "md:pr-12",
+      )}
+    >
       {/* Stays at the top while the photos scroll under it; full width over the page padding. */}
       <div
         data-hidden={headerHidden || undefined}
@@ -142,6 +168,11 @@ export function Library({
         </p>
       )}
       {uploads.length > 0 && <GalleryUploads entries={uploads} />}
+      {isFetchingPreviousPage && (
+        <p role="status" className="py-2 text-center text-sm text-muted-foreground">
+          Loading newer {noun.many}…
+        </p>
+      )}
       {photos.length === 0 ? (
         uploads.length === 0 && (
           <EmptyGallery kind={kind} inAlbum={album !== undefined || place !== undefined} />
@@ -159,6 +190,18 @@ export function Library({
           }}
           viewerSearch={viewerSearch}
           months
+          hasPreviousPage={hasPreviousPage}
+          isFetchingPreviousPage={isFetchingPreviousPage}
+          fetchPreviousPage={fetchPreviousPage}
+          isFetching={isFetching}
+          onMonthOffsets={timeline.onMonthOffsets}
+        />
+      )}
+      {timeline.months.length > 1 && photos.length > 0 && (
+        <TimelineScrubber
+          months={timeline.months}
+          current={timeline.current}
+          onScrub={timeline.scrub}
         />
       )}
       {isFetchNextPageError && (
@@ -545,4 +588,79 @@ function EmptyGallery({ kind, inAlbum }: { kind: LibraryKind; inAlbum: boolean }
       )}
     </div>
   );
+}
+
+/** Room the sticky header takes at the top of the screen when scrolling to a month. */
+const HEADER_ROOM = 64;
+
+/**
+ * The timeline scrubber's side of the page (8.36, FR-GAL-9): the months (`GET /photos/timeline`)
+ * in the list's order, the month at the top of the screen, and what a scrub does. A month whose
+ * heading is loaded is scrolled to (live while dragging); any other one, on release, restarts the
+ * list there (`from`, the API's `start`) and newer photos load in above while scrolling up.
+ */
+function useTimeline({
+  api,
+  kind,
+  search,
+  setSearch,
+  enabled,
+}: {
+  api: Api;
+  kind: LibraryKind;
+  search: GallerySearch;
+  setSearch: (change: (prev: GallerySearch) => GallerySearch) => void;
+  enabled: boolean;
+}) {
+  const { data } = useQuery({ ...timelineQuery(api, kind), enabled });
+  const months = useMemo(() => {
+    const newestFirst = enabled ? (data?.months ?? []) : [];
+    return search.sort === "taken-desc" ? newestFirst : [...newestFirst].reverse();
+  }, [data, enabled, search.sort]);
+
+  const offsets = useRef<MonthOffset[]>([]);
+  const pending = useRef<string | null>(null);
+  const [current, setCurrent] = useState<string | null>(null);
+
+  const scrollTo = (month: string) => {
+    const heading = offsets.current.find((m) => m.month === month);
+    if (!heading) return false;
+    window.scrollTo(0, Math.max(0, heading.top - HEADER_ROOM));
+    return true;
+  };
+
+  const update = useCallback(() => {
+    const line = window.scrollY + HEADER_ROOM + 1;
+    let month = offsets.current[0]?.month ?? null;
+    for (const heading of offsets.current) {
+      if (heading.top <= line) month = heading.month;
+      else break;
+    }
+    setCurrent(month);
+  }, []);
+
+  const onMonthOffsets = useCallback(
+    (next: MonthOffset[]) => {
+      offsets.current = next;
+      // After a jump: put the month asked for at the top once its photos are laid out.
+      if (pending.current && scrollTo(pending.current)) pending.current = null;
+      update();
+    },
+    [update],
+  );
+
+  useEffect(() => {
+    window.addEventListener("scroll", update, { passive: true });
+    return () => window.removeEventListener("scroll", update);
+  }, [update]);
+
+  const scrub = (month: string, final: boolean) => {
+    if (scrollTo(month) || !final) return;
+    pending.current = month;
+    // The first month of the list is its start: no jump needed.
+    const from = month === months[0]?.month ? undefined : jumpStart(month, search.sort);
+    setSearch((prev) => ({ ...prev, from }));
+  };
+
+  return { months, current, onMonthOffsets, scrub };
 }

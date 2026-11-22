@@ -22,7 +22,12 @@ export interface GalleryFilter {
    * place, unset = both (the map's list). Albums always hold both.
    */
   mediaType?: MediaType | undefined;
+  /** The Gallery's or Videos' list starts here (a timeline jump, 8.36); newer pages load above. */
+  start?: string | undefined;
 }
+
+/** A page to load: after the last one (`cursor`), before the first one (`backward`). */
+type PageParam = { cursor?: string | undefined; backward?: boolean } | string | null | undefined;
 
 /** How often the gallery refetches while photos are processing (§5 step 5, FR-GAL-5). */
 export const PROCESSING_POLL_MS = 3000;
@@ -90,36 +95,45 @@ export function processingPollInterval(
  * it lists that album, with a place that place's photos (13.2); all sorted by date taken (§9,
  * §12.3). Everything sits under ["photos"] for invalidation after uploads/deletes.
  */
-export const galleryQuery = (api: Api, { album, place, sort, mediaType }: GalleryFilter) =>
+export const galleryQuery = (api: Api, { album, place, sort, mediaType, start }: GalleryFilter) =>
   infiniteQueryOptions({
     queryKey: album
       ? ["photos", { album, sort }]
       : place
         ? ["photos", { place, sort, ...(mediaType && { mediaType }) }]
         : mediaType === "video"
-          ? ["photos", { sort, mediaType }]
-          : ["photos", { sort }],
-    // `?? undefined`: a list restored from the saved cache (9.3) has `null` for the first page,
-    // since JSON can't store `undefined`; sent as `?cursor=null`, the API answers 400.
-    queryFn: ({ pageParam, signal }) =>
-      album
-        ? api.albums.photos(album, { sort, cursor: pageParam ?? undefined }, { signal })
+          ? ["photos", { sort, mediaType, ...(start && { start }) }]
+          : ["photos", { sort, ...(start && { start }) }],
+    queryFn: ({ pageParam, signal }) => {
+      // A list restored from the saved cache (9.3) can hold `null` or an old string cursor; a
+      // `null` sent as `?cursor=null` would be refused by the API.
+      const param: PageParam = pageParam;
+      const { cursor, backward } =
+        typeof param === "string" ? { cursor: param, backward: false } : (param ?? {});
+      return album
+        ? api.albums.photos(album, { sort, cursor: cursor ?? undefined }, { signal })
         : place
           ? api.places.photos(
               place,
-              { sort, cursor: pageParam ?? undefined, ...(mediaType && { mediaType }) },
+              { sort, cursor: cursor ?? undefined, ...(mediaType && { mediaType }) },
               { signal },
             )
           : api.photos.list(
               {
                 sort,
-                cursor: pageParam ?? undefined,
+                ...(cursor ? { cursor } : start ? { start } : {}),
+                ...(backward && { direction: "backward" as const }),
                 ...(mediaType === "video" && { mediaType }),
               },
               { signal },
-            ),
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: (page) => page.nextCursor ?? undefined,
+            );
+    },
+    initialPageParam: undefined as PageParam,
+    getNextPageParam: (page): PageParam =>
+      page.nextCursor ? { cursor: page.nextCursor } : undefined,
+    // A list that started at a date grows upwards too (8.36).
+    getPreviousPageParam: (page): PageParam =>
+      page.prevCursor ? { cursor: page.prevCursor, backward: true } : undefined,
     // Refetches every loaded page, so a finished photo gets its size, thumbnail and date position,
     // and a shared album's signed URLs are renewed before they expire.
     refetchInterval: ({ state: { data } }) =>
@@ -226,3 +240,20 @@ export function useDeletePhotos() {
       ),
   });
 }
+
+/**
+ * The Gallery's or Videos' months with their counts (8.36, FR-GAL-9), newest first, in this
+ * device's time zone. Under ["photos"], so uploads and deletes refresh it with the lists.
+ */
+export const timelineQuery = (api: Api, mediaType: MediaType) =>
+  queryOptions({
+    queryKey: ["photos", "timeline", mediaType],
+    queryFn: ({ signal }) =>
+      api.photos.timeline(
+        {
+          ...(mediaType === "video" && { mediaType: "video" as const }),
+          utcOffset: -new Date().getTimezoneOffset(),
+        },
+        { signal },
+      ),
+  });

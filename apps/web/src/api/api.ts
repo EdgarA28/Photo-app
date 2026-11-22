@@ -17,6 +17,7 @@ import {
   sharedAlbumPageSchema,
   shareInvitationPageSchema,
   trashListSchema,
+  timelineSchema,
   importSchema,
   startGoogleImportResponseSchema,
   type StartGoogleImportRequest,
@@ -52,8 +53,18 @@ export function createApi(request: Request) {
     },
 
     photos: {
-      list: (query: Page & { sort?: PhotoSort } = {}, o?: Opts) =>
-        request("GET", "/photos", { schema: photoPageSchema, query, ...o }),
+      list: (
+        query: Page & {
+          sort?: PhotoSort;
+          mediaType?: "video";
+          start?: string;
+          direction?: "backward";
+        } = {},
+        o?: Opts,
+      ) => request("GET", "/photos", { schema: photoPageSchema, query, ...o }),
+      /** Months with counts, newest first, for the timeline scrubber (8.36). */
+      timeline: (query: { mediaType?: "video"; utcOffset: number }, o?: Opts) =>
+        request("GET", "/photos/timeline", { schema: timelineSchema, query, ...o }),
       /** With `albumId`: a photo of an album shared with me, with signed image URLs (7.4). */
       get: (photoId: string, albumId?: string, o?: Opts) =>
         request("GET", `/photos/${enc(photoId)}`, {
