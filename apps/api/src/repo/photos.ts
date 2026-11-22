@@ -17,6 +17,7 @@ import {
   queryPage,
   stripKeys,
   type Db,
+  type Item,
   transactWrite,
   retryOnConflict,
   isTransactionConflict,
@@ -39,6 +40,7 @@ import {
   usageKey,
   userPk,
 } from "./keys";
+import { encodeCursor, type CursorKey } from "./cursor";
 import { removeMembership, restoreMembership } from "./memberships";
 
 /** Photo item without key attributes (spec §8.2). */
@@ -299,7 +301,12 @@ export function photosRepo(db: Db) {
       return items.map((item) => stripKeys<PhotoRecord>(item));
     },
 
-    /** Gallery (photos) or Videos section: GSI1, by date taken (FR-GAL-1/2, FR-VID-11). */
+    /**
+     * Gallery (photos) or Videos section: GSI1, by date taken (FR-GAL-1/2, FR-VID-11). For the
+     * timeline scrubber (8.36, FR-GAL-9) the list can start at `start` (desc: taken before it;
+     * asc: at or after it) and go `backward` from a page's `prevCursor`; items always come in the
+     * sort order. `prevCursor` is set when something may come before the first item.
+     */
     async list(
       userId: string,
       options: {
@@ -307,15 +314,32 @@ export function photosRepo(db: Db) {
         limit: number;
         cursor?: string | undefined;
         mediaType?: MediaType | undefined;
+        start?: string | undefined;
+        direction?: "forward" | "backward" | undefined;
       },
-    ): Promise<Page<PhotoRecord>> {
+    ): Promise<Page<PhotoRecord> & { prevCursor: string | null }> {
       const pk = galleryPk(userId, options.mediaType);
+      const desc = options.sort === "taken-desc";
+      const backward = options.direction === "backward";
+      // `TAKEN#{iso}` sorts before every `TAKEN#{iso}#{photoId}` of that instant; "~" after all.
+      let range: { condition: string; values: Record<string, string> } = {
+        condition: "begins_with(GSI1SK, :taken)",
+        values: { ":taken": "TAKEN#" },
+      };
+      if (options.start) {
+        const bound = `TAKEN#${options.start}`;
+        range = {
+          condition: "GSI1SK BETWEEN :from AND :to",
+          values: desc ? { ":from": "TAKEN#", ":to": bound } : { ":from": bound, ":to": "TAKEN#~" },
+        };
+      }
       const page = await queryPage(db, {
         input: {
           IndexName: GSI1,
-          KeyConditionExpression: "GSI1PK = :pk AND begins_with(GSI1SK, :taken)",
-          ExpressionAttributeValues: { ":pk": pk, ":taken": "TAKEN#" },
-          ScanIndexForward: options.sort === "taken-asc",
+          KeyConditionExpression: `GSI1PK = :pk AND ${range.condition}`,
+          ExpressionAttributeValues: { ":pk": pk, ...range.values },
+          // Backward walks against the sort order from the cursor.
+          ScanIndexForward: desc === backward,
         },
         keyAttributes: GSI1_KEY_ATTRIBUTES,
         // A cursor of the other list (or another user's) is refused, not followed.
@@ -323,7 +347,50 @@ export function photosRepo(db: Db) {
         limit: options.limit,
         cursor: options.cursor,
       });
-      return { ...page, items: page.items.map((item) => stripKeys<PhotoRecord>(item)) };
+      if (backward) {
+        // Read away from the page, shown in the sort order; more of them → keep going back.
+        return {
+          items: page.items.reverse().map((item) => stripKeys<PhotoRecord>(item)),
+          nextCursor: null,
+          prevCursor: page.nextCursor,
+        };
+      }
+      // A list that didn't start at the top may have items before its first one.
+      const first = page.items[0];
+      const prevCursor =
+        (options.start || options.cursor) && first ? encodeCursor(keyOf(first)) : null;
+      return {
+        items: page.items.map((item) => stripKeys<PhotoRecord>(item)),
+        nextCursor: page.nextCursor,
+        prevCursor,
+      };
+    },
+
+    /**
+     * Every month of the Gallery or Videos list with its count (8.36, FR-GAL-9), newest first, in
+     * the caller's time zone (`utcOffset` minutes, like the web's month sections). Reads only the
+     * GSI1 sort keys of the list: one item key per photo, a few queries for a large library.
+     */
+    async monthCounts(
+      userId: string,
+      { mediaType, utcOffset }: { mediaType?: MediaType | undefined; utcOffset: number },
+    ): Promise<{ month: string; count: number }[]> {
+      const keys = await queryAll(db, {
+        IndexName: GSI1,
+        KeyConditionExpression: "GSI1PK = :pk AND begins_with(GSI1SK, :taken)",
+        ExpressionAttributeValues: { ":pk": galleryPk(userId, mediaType), ":taken": "TAKEN#" },
+        ProjectionExpression: "GSI1SK",
+        ScanIndexForward: false,
+      });
+      const counts = new Map<string, number>();
+      for (const { GSI1SK } of keys) {
+        // TAKEN#{takenAt}#{photoId}; takenAt is a JS toISOString().
+        const takenAt = Date.parse(String(GSI1SK).slice("TAKEN#".length, "TAKEN#".length + 24));
+        if (Number.isNaN(takenAt)) continue;
+        const month = new Date(takenAt + utcOffset * 60_000).toISOString().slice(0, 7);
+        counts.set(month, (counts.get(month) ?? 0) + 1);
+      }
+      return [...counts].map(([month, count]) => ({ month, count }));
     },
 
     /**
@@ -760,4 +827,14 @@ async function dropEmptyPlaces(db: Db, userId: string, placeIds: Set<string> | u
       log("WARN", "Empty place entry left after clashing writes", { userId, placeId });
     }
   }
+}
+
+/** The GSI1 cursor key of an item (`GSI1_KEY_ATTRIBUTES`). */
+function keyOf(item: Item): CursorKey {
+  return {
+    GSI1PK: String(item.GSI1PK),
+    GSI1SK: String(item.GSI1SK),
+    PK: String(item.PK),
+    SK: String(item.SK),
+  };
 }

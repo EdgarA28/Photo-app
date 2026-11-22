@@ -107,8 +107,55 @@ export const listPhotosQuerySchema = pageQuerySchema.extend({
   mediaType: mediaTypeSchema.optional(),
 });
 export type ListPhotosQuery = z.infer<typeof listPhotosQuerySchema>;
-export const photoPageSchema = pageSchema(photoSchema);
+
+/**
+ * GET /photos only (8.36, FR-GAL-9, timeline scrubber): the list can start at any date and grow in
+ * both directions.
+ * - `start`: the first page begins there, in the sort order: `taken-desc` → taken before `start`;
+ *   `taken-asc` → taken at or after `start`. Not with `cursor`.
+ * - `direction: backward` with a page's `prevCursor`: the photos just before that page (newer ones
+ *   in `taken-desc`), still returned in the sort order.
+ */
+export const galleryQuerySchema = listPhotosQuerySchema
+  .extend({
+    start: isoDateTimeSchema.optional(),
+    direction: z.enum(["forward", "backward"]).default("forward"),
+  })
+  .refine((q) => !(q.start && q.cursor), { message: "start and cursor can't be combined" })
+  .refine((q) => q.direction === "forward" || q.cursor, {
+    message: "direction backward needs a cursor",
+  });
+export type GalleryQuery = z.infer<typeof galleryQuerySchema>;
+
+/**
+ * A page of photos. `prevCursor` (GET /photos, 8.36): continues before the first item (with
+ * `direction=backward`); null when nothing comes before it, or the list started at the top. Other
+ * lists never set it.
+ */
+export const photoPageSchema = pageSchema(photoSchema).extend({
+  prevCursor: z.string().min(1).max(2048).nullable().default(null),
+});
 export type PhotoPage = z.infer<typeof photoPageSchema>;
+
+/** One month of the timeline: `YYYY-MM` in the caller's time zone and how many items it has. */
+export const timelineMonthSchema = z.object({
+  month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+  count: z.number().int().positive(),
+});
+
+/** GET /photos/timeline query: the list (`mediaType`) and the caller's UTC offset in minutes. */
+export const timelineQuerySchema = z.object({
+  mediaType: mediaTypeSchema.optional(),
+  utcOffset: z.coerce.number().int().min(-840).max(840).default(0),
+});
+export type TimelineQuery = z.infer<typeof timelineQuerySchema>;
+
+/**
+ * GET /photos/timeline (8.36, FR-GAL-9): every month of the Gallery (or the Videos section) with
+ * its count, newest first, for the scrubber; pending photos included (they are in the list).
+ */
+export const timelineSchema = z.object({ months: z.array(timelineMonthSchema) });
+export type Timeline = z.infer<typeof timelineSchema>;
 
 /** GET /trash: own photos in the trash, most recently deleted first, in one response (FR-DEL-3). */
 export const trashListSchema = z.object({ items: z.array(photoSchema) });

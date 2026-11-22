@@ -67,6 +67,8 @@ export function placeRoutes(app: Hono<AppEnv>, { repos }: Deps): void {
       );
       const byId = new Map(photos.map((photo) => [photo.photoId, photo]));
       const body: PhotoPage = {
+        // Only the Gallery list starts mid-way (8.36).
+        prevCursor: null,
         // A photo being deleted can briefly outlive its place item; skip it.
         // With `mediaType`, only that kind (the Gallery's place filter: photos, FR-VID-11); a
         // page may then hold fewer items, the cursor still goes on.

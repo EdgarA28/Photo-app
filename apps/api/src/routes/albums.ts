@@ -138,6 +138,8 @@ export function albumRoutes(app: Hono<AppEnv>, { repos, media }: Deps): void {
       });
       const now = new Date();
       const body: PhotoPage = {
+        // Only the Gallery list starts mid-way (8.36).
+        prevCursor: null,
         items: await Promise.all(
           records.map(async (photo) => {
             const ownerUsername = usernames.get(photo.userId) ?? null;

@@ -749,6 +749,8 @@ const exempt: Record<string, string> = {
   "GET /api/places": "caller's own places (keyed by sub); checked below",
   "GET /api/places/map": "caller's own photos with GPS (keyed by sub); checked below",
   "POST /api/imports/google": "creates under the caller (Google's token is the caller's own)",
+  "GET /api/photos/timeline":
+    "caller's own month counts (keyed by sub); foreign prevCursor in routes.timeline",
   "GET /api/links/:token":
     "public by design (FR-SHR-8): an unguessable token is the only key; routes.links",
   "GET /api/links/:token/photos/:photoId/download-url":

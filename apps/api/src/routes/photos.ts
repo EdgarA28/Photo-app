@@ -4,7 +4,9 @@ import {
   getPhotoQuerySchema,
   extensionFor,
   idSchema,
-  listPhotosQuerySchema,
+  galleryQuerySchema,
+  timelineQuerySchema,
+  type Timeline,
   newId,
   originalKey,
   uploadUrlRequestSchema,
@@ -104,10 +106,34 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, media, config }
    * Own photos by date taken, newest first by default, paginated (FR-GAL-1, FR-GAL-2): the
    * Gallery's photos, or with `?mediaType=video` the Videos section (FR-VID-11).
    */
-  app.get("/photos", validate("query", listPhotosQuerySchema), async (c) => {
-    const { sort, limit, cursor, mediaType } = c.req.valid("query");
-    const page = await repos.photos.list(c.get("userId"), { sort, limit, cursor, mediaType });
-    const body: PhotoPage = { items: page.items.map(toPhoto), nextCursor: page.nextCursor };
+  app.get("/photos", validate("query", galleryQuerySchema), async (c) => {
+    const { sort, limit, cursor, mediaType, start, direction } = c.req.valid("query");
+    const page = await repos.photos.list(c.get("userId"), {
+      sort,
+      limit,
+      cursor,
+      mediaType,
+      start,
+      direction,
+    });
+    const body: PhotoPage = {
+      items: page.items.map(toPhoto),
+      nextCursor: page.nextCursor,
+      prevCursor: page.prevCursor,
+    };
+    return c.json(body);
+  });
+
+  /**
+   * Months of the Gallery (or the Videos section) with their counts, newest first, for the
+   * timeline scrubber (8.36, FR-GAL-9). The caller's own list only (keyed by the JWT sub).
+   * Registered before `/photos/:photoId`, which would read "timeline" as an ID.
+   */
+  app.get("/photos/timeline", validate("query", timelineQuerySchema), async (c) => {
+    const { mediaType, utcOffset } = c.req.valid("query");
+    const body: Timeline = {
+      months: await repos.photos.monthCounts(c.get("userId"), { mediaType, utcOffset }),
+    };
     return c.json(body);
   });
 
