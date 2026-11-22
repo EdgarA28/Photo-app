@@ -424,6 +424,7 @@ Deferred by the user (2026-10-24): done once Phases 7–12 are finished. Until t
     - [x] First user test 2026-11-22: picked photos, nothing happened. API logs: every poll `Google get session failed: 200 invalid_response` (6 imports, all stuck at picking). Cause: `toSession` required `pickerUri` and `expireTime` on the poll answer too, which Google's GET doesn't carry (the fake Google in tests always did). Fix: `getSession` reads only `mediaItemsSet`; the fake now answers polls with only that; the create-answer error names missing fields. 2 new tests, 1292 TS pass. Left: push, then the user tries again (the stuck imports expire by themselves)
     - [x] User 2026-11-22: the import button belongs on the Upload page under the normal upload, not in Settings → moved (`GoogleImportOption`), spec v0.61; 3 tests (on Upload after the picker, hidden without config, gone from Settings), 1293 TS pass
     - [x] User 2026-11-22: the import works (4 imports, 8 photos), but without locations → Google strips them (see 13.5a); hint added. User asked whether the two taps are needed: yes (the picker can only open from a tap, and Google sends no one back); kept, with one prominent "Choose your photos" button and "Open Google Photos again" (user's choice over a one-tap popup flow)
+    - [x] User 2026-11-22: after Done the bar came only seconds later, or not at all for a few photos → back from Google Photos the page shows "Preparing your photos…" with a moving bar at once and checks immediately; 1.5 s polling after opening; listing shows the moving bar; done keeps a full bar; survives a reload. 4 new tests (25 import tests), 1296 TS pass
 
 ## Phase 14 — Videos (planned)
 
@@ -656,6 +657,7 @@ Moved to the end by the user (2026-10-27): everything about prod and iOS waits u
 
 | Date | Summary |
 |---|---|
+| 2026-11-22 | Import page shows progress right after returning from Google Photos (user: bar late or missing). Not pushed. |
 | 2026-11-22 | User: import works, but no locations. Checked: Google strips GPS from Picker downloads (not our bug) → location hint on the Upload box and in the summary. User kept the two taps (picker needs a tap after the consent redirect) → one prominent "Choose your photos" step. Spec v0.62, 1293 TS pass. Pushed `4788005`, CI + Deploy green (web only). |
 | 2026-11-22 | Google Photos import moved from Settings to the Upload page under the picker (user's choice), spec v0.61. Pushed with the poll fix (`d0e87d4`), CI + Deploy green (3 Lambdas updated: API, purge, import worker). |
 | 2026-11-22 | 13.5h first user test failed (stuck at picking): Google's session poll answer lacks fields the code required; fixed (`getSession` reads only `mediaItemsSet`). Pushed `d0e87d4`. |

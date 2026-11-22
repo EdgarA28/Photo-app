@@ -28,3 +28,14 @@ export function pickerUriOf(importId: string, storage: Store = sessionStorage): 
 export function openPicker(pickerUri: string, open: typeof window.open = window.open.bind(window)) {
   open(`${pickerUri}/autoclose`, "_blank", "noopener");
 }
+
+const OPENED_PREFIX = "photo-app:google-import-opened:";
+
+/** Remembers that the picker was opened for this import (this tab, survives a reload). */
+export function markPickerOpened(importId: string, storage: Store = sessionStorage) {
+  storage.setItem(OPENED_PREFIX + importId, "1");
+}
+
+export function wasPickerOpened(importId: string, storage: Store = sessionStorage): boolean {
+  return storage.getItem(OPENED_PREFIX + importId) === "1";
+}

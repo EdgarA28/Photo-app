@@ -5,8 +5,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { errorMessage } from "@/api/errors";
 import { Button } from "@/components/ui/button";
 import { ImportStartButton, LOCATION_HINT } from "@/import/ImportStart";
-import { openPicker, pickerUriOf } from "@/import/pickerStore";
-import { importQuery } from "@/queries/imports";
+import { markPickerOpened, openPicker, pickerUriOf, wasPickerOpened } from "@/import/pickerStore";
+import { importQuery, useReturnedFromPicker } from "@/queries/imports";
 import { refreshAfterUpload } from "@/queries/photos";
 
 /**
@@ -48,12 +48,22 @@ function ImportPage() {
   const { importId } = Route.useParams();
   const { api } = Route.useRouteContext();
   const queryClient = useQueryClient();
-  const { data, error, refetch } = useQuery(importQuery(api, importId));
+  // Opened in this tab (kept over a reload: Android may reload the app on the way back).
+  const [opened, setOpened] = useState(() => wasPickerOpened(importId));
+  // Back from Google Photos: from then on the page shows progress at once (user 2026-11-22: the
+  // bar came seconds after Done, or not at all for a few photos).
+  const returned = useReturnedFromPicker(opened);
+  const { data, error, refetch } = useQuery(importQuery(api, importId, { active: opened }));
   const pickerUri = pickerUriOf(importId);
   const cancel = useMutation({
     mutationFn: () => api.imports.cancel(importId),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["imports", importId] }),
   });
+
+  // Ask at once instead of waiting for the next poll.
+  useEffect(() => {
+    if (returned) void refetch();
+  }, [returned, refetch]);
 
   // New photos show up as processing tiles while they're copied (FR-IMP-4): refresh the gallery
   // and usage as the count grows and once more at the end.
@@ -84,6 +94,14 @@ function ImportPage() {
         <ImportState
           data={data}
           pickerUri={pickerUri}
+          opened={opened}
+          returned={returned}
+          onOpen={() => {
+            if (!pickerUri) return;
+            openPicker(pickerUri);
+            markPickerOpened(importId);
+            setOpened(true);
+          }}
           cancelling={cancel.isPending}
           onCancel={() => cancel.mutate()}
         />
@@ -97,14 +115,31 @@ function ImportPage() {
   );
 }
 
+/** Indeterminate (no value) while we wait, filling as photos are counted, full at the end. */
+function ImportProgress({ value, max }: { value?: number; max?: number }) {
+  return (
+    <progress
+      className="h-2 w-full accent-primary"
+      aria-label="Import progress"
+      {...(value !== undefined && { value, max: Math.max(1, max ?? value) })}
+    />
+  );
+}
+
 function ImportState({
   data,
   pickerUri,
+  opened,
+  returned,
+  onOpen,
   cancelling,
   onCancel,
 }: {
   data: Import;
   pickerUri: string | null;
+  opened: boolean;
+  returned: boolean;
+  onOpen: () => void;
   cancelling: boolean;
   onCancel: () => void;
 }) {
@@ -116,8 +151,29 @@ function ImportState({
 
   switch (data.status) {
     case "picking":
+      if (returned) {
+        // Most likely Done was tapped; the next status check confirms it (1.5 s polling).
+        return (
+          <>
+            <p>Preparing your photos…</p>
+            <ImportProgress />
+            <p className="text-sm text-muted-foreground">
+              Waiting for Google Photos to confirm your choice. Didn't tap Done there?{" "}
+              <button
+                type="button"
+                className="underline underline-offset-2"
+                onClick={onOpen}
+                disabled={!pickerUri}
+              >
+                Open Google Photos again
+              </button>
+            </p>
+            {cancelButton}
+          </>
+        );
+      }
       return pickerUri ? (
-        <ChoosePhotos pickerUri={pickerUri} cancelButton={cancelButton} />
+        <ChoosePhotos opened={opened} onOpen={onOpen} cancelButton={cancelButton} />
       ) : (
         <>
           <p className="text-muted-foreground">
@@ -130,7 +186,8 @@ function ImportState({
     case "listing":
       return (
         <>
-          <p className="text-muted-foreground">Getting the photos you picked…</p>
+          <p>Preparing your photos…</p>
+          <ImportProgress />
           {cancelButton}
         </>
       );
@@ -138,15 +195,13 @@ function ImportState({
       const handled = data.done + data.failed;
       return (
         <>
-          <p className="text-muted-foreground">
-            Copying {handled} of {photos(data.total)}… You can close the app: the import goes on.
+          <p>
+            Copying {handled} of {photos(data.total)}…
           </p>
-          <progress
-            className="h-2 w-full"
-            aria-label="Import progress"
-            max={Math.max(1, data.total)}
-            value={handled}
-          />
+          <ImportProgress value={handled} max={data.total} />
+          <p className="text-sm text-muted-foreground">
+            You can close the app: the import goes on.
+          </p>
           {cancelButton}
         </>
       );
@@ -154,6 +209,7 @@ function ImportState({
     case "done":
       return (
         <>
+          {data.total > 0 && <ImportProgress value={data.total} max={data.total} />}
           <p role="status">{importSummary(data)}.</p>
           {data.done > 0 && (
             <>
@@ -195,8 +251,15 @@ function ImportState({
  * obvious). The picker can only open from a tap (popup blockers, §11.5), and Google sends no one
  * back to the app, so this page waits for the Done in Google Photos by polling.
  */
-function ChoosePhotos({ pickerUri, cancelButton }: { pickerUri: string; cancelButton: ReactNode }) {
-  const [opened, setOpened] = useState(false);
+function ChoosePhotos({
+  opened,
+  onOpen,
+  cancelButton,
+}: {
+  opened: boolean;
+  onOpen: () => void;
+  cancelButton: ReactNode;
+}) {
   return (
     <div className="space-y-4">
       <p>
@@ -208,10 +271,7 @@ function ChoosePhotos({ pickerUri, cancelButton }: { pickerUri: string; cancelBu
         size="lg"
         variant={opened ? "outline" : "default"}
         className="h-12 w-full text-base sm:w-auto sm:px-6"
-        onClick={() => {
-          openPicker(pickerUri);
-          setOpened(true);
-        }}
+        onClick={onOpen}
       >
         {opened ? "Open Google Photos again" : "Choose your photos"}
       </Button>

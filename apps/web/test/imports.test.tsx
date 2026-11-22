@@ -12,7 +12,12 @@ import {
   startGoogleConsent,
   takeGoogleConsent,
 } from "../src/import/googleConsent";
-import { openPicker, pickerUriOf, savePickerUri } from "../src/import/pickerStore";
+import {
+  markPickerOpened,
+  openPicker,
+  pickerUriOf,
+  savePickerUri,
+} from "../src/import/pickerStore";
 import { importSummary } from "../src/routes/_authenticated/import/$importId";
 import { fakeApi, testConfig, testId } from "./fakes";
 import { defaultResponses, renderAt } from "./render";
@@ -222,7 +227,8 @@ describe("import page (FR-IMP-5)", () => {
     const bar = await screen.findByRole("progressbar", { name: "Import progress" });
     expect(bar.getAttribute("value")).toBe("5");
     expect(bar.getAttribute("max")).toBe("10");
-    expect(screen.getByText(/Copying 5 of 10 photos… You can close the app/)).toBeTruthy();
+    expect(screen.getByText("Copying 5 of 10 photos…")).toBeTruthy();
+    expect(screen.getByText(/You can close the app/)).toBeTruthy();
   });
 
   it("cancels on request", async () => {
@@ -235,12 +241,55 @@ describe("import page (FR-IMP-5)", () => {
     );
   });
 
+  it("back from Google Photos: a moving bar at once, and an immediate status check", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.spyOn(window, "open").mockImplementation(() => null);
+    const { request } = await openImport({
+      status: "picking",
+      total: 0,
+      done: 0,
+      failed: 0,
+      failedReasons: {},
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Choose your photos" }));
+    // Still picking in Google Photos: no bar yet.
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    await vi.advanceTimersByTimeAsync(600);
+    const polls = () =>
+      request.mock.calls.filter(([m, p]) => m === "GET" && p === `/imports/${IMPORT_ID}`).length;
+    const before = polls();
+    window.dispatchEvent(new Event("focus"));
+    const bar = await screen.findByRole("progressbar", { name: "Import progress" });
+    // Indeterminate: no value until the photos are counted.
+    expect(bar.hasAttribute("value")).toBe(false);
+    expect(screen.getByText("Preparing your photos…")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open Google Photos again" })).toBeTruthy();
+    await waitFor(() => expect(polls()).toBeGreaterThan(before));
+    vi.useRealTimers();
+  });
+
+  it("a reload after opening the picker shows the progress straight away", async () => {
+    markPickerOpened(IMPORT_ID);
+    await openImport({ status: "picking", total: 0, done: 0, failed: 0, failedReasons: {} });
+    expect(await screen.findByText("Preparing your photos…")).toBeTruthy();
+    expect(screen.getByRole("progressbar", { name: "Import progress" })).toBeTruthy();
+  });
+
+  it("while listing: the moving bar", async () => {
+    await openImport({ status: "listing", total: 0, done: 0, failed: 0, failedReasons: {} });
+    const bar = await screen.findByRole("progressbar", { name: "Import progress" });
+    expect(bar.hasAttribute("value")).toBe(false);
+  });
+
   it("when done: the summary and a way to the gallery", async () => {
     await openImport({ status: "done", total: 10, done: 9, failed: 1 });
     expect((await screen.findByRole("status")).textContent).toBe(
       "Imported 9 photos · 2 skipped (videos or other types) · 1 not imported: storage full.",
     );
     expect(screen.getByRole("link", { name: "Go to gallery" })).toBeTruthy();
+    // A fast import still shows its bar, full.
+    const bar = screen.getByRole("progressbar", { name: "Import progress" });
+    expect([bar.getAttribute("value"), bar.getAttribute("max")]).toEqual(["10", "10"]);
     // Google strips locations (checked in dev 2026-11-22): said where it matters.
     expect(screen.getByText(/Google removes the location from imported photos/)).toBeTruthy();
   });
