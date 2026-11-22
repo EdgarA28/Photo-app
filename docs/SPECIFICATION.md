@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.63 |
+| **Version** | 0.64 |
 | **Date** | 2026-11-22 |
 | **Owner** | Edgar |
 | **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5), videos (Phase 14) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
@@ -74,7 +74,8 @@ A private photo storage and gallery app, similar in spirit to Google Photos, bui
 - Search other than by place (dates, tags), face/object recognition
 - Native mobile apps
 - Photo editing
-- Importing a whole Google Photos library: since 2025-03-31 Google's Library API only reads media the app itself created, and Google Takeout archives aren't read (§6.9)
+- Importing a whole Google Photos library: since 2025-03-31 Google's Library API only reads media the app itself created, and Google Takeout archives aren't read (§6.9). Locations of imported photos: Google strips them from Picker downloads; to keep them, users upload the originals (from the phone, or a Takeout export with the folder upload, which keeps the GPS stored in the files). Reading Takeout's `.json` sidecars (locations added or edited in Google Photos) is not planned (user's decision 2026-11-22)
+- Importing from iCloud Photos: Apple offers no web API for a user's photo library. Originals downloaded from iCloud.com, exported as unmodified originals on a Mac, or synced by iCloud for Windows can be added with the folder upload, which keeps their location (user's decision 2026-11-22: no dedicated import)
 
 ---
 
@@ -877,7 +878,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | B-8 | Search & metadata | Date ranges, tags (places and map done: §6.8); location off switch | Idea |
 | B-9 | On-the-fly image resizing | Only if many sizes are needed; current fixed sizes are simpler | Idea |
 | B-11 | SQS queue in front of the thumbnail Lambda | S3 → SQS → thumbnail Lambda with an event source maximum concurrency (e.g. 5), so big upload bursts can't use up the account's Lambda capacity and throttle the API. Only if raising the concurrency quota (12.3a) and reserved concurrency on the thumbnail Lambda aren't enough. Costs: new queue (redrives to the existing DLQ), S3 notification target changes, handler reads SQS records | Done in dev (13.6, §10) |
-| B-10 | Import from Google Photos | Picker API, backend copy (§6.9, §10.1, §11.5); whole library / Takeout not planned | Planned (13.5) |
+| B-10 | Import from Google Photos | Picker API, backend copy (§6.9, §10.1, §11.5); whole library / Takeout not planned; no locations (Google strips them) | Implemented in dev (13.5); user check open |
 | | | | |
 
 ---
@@ -907,6 +908,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.38 | 2026-11-01 | Less gallery polling while uploads run: 15 s instead of 3 s, refreshes during a batch only mark lists stale (13.1j, §12.4) |
 | 0.53 | 2026-11-05 | FR-GAL-8 (user request): pinch to resize the grid tiles, continuous (live scale, settle on the nearest size) |
+| 0.64 | 2026-11-22 | §2: imported photos have no location (keeping it = uploading originals); no Takeout `.json` reading and no iCloud import (user's decision); B-10 implemented in dev |
 | 0.63 | 2026-11-22 | FR-GAL-9 timeline scrubber (user request): `GET /photos/timeline`, `GET /photos?start&direction` + `prevCursor` (§9), §12.3 |
 | 0.62 | 2026-11-22 | §12.6: imported photos have no location (confirmed in dev); the import box and summary say so. Import page: after Google's consent one prominent "Choose your photos" button (the picker can only open from a tap) |
 | 0.61 | 2026-11-22 | The Google Photos import starts from the Upload page, under the normal upload (user's choice), not from Settings |

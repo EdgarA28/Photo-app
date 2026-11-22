@@ -569,7 +569,7 @@ Moved to the end by the user (2026-10-27): everything about prod and iOS waits u
 
 ### iOS (from 9.7)
 
-- [ ] **9.7** iOS: install (Safari → Share → Add to Home Screen), Google login inside the installed app, restart stays signed in. The user has no device for now. Risk: the login state (PKCE verifier) is in `sessionStorage`; if iOS opens the Cognito/Google pages outside the app's web view, the callback fails with a missing state. Pre-checked 2026-10-26: CloudFront serves the manifest, apple-touch-icon, icons and `sw.js` with the right types
+- [ ] **9.7** iOS: install (Safari → Share → Add to Home Screen), Google login inside the installed app, restart stays signed in. The user has no device for now. Risk: the login state (PKCE verifier) is in `sessionStorage`; if iOS opens the Cognito/Google pages outside the app's web view, the callback fails with a missing state. Pre-checked 2026-10-26: CloudFront serves the manifest, apple-touch-icon, icons and `sw.js` with the right types Also check (2026-11-22): does a photo picked from the iPhone library in Safari / the installed app keep its location (iOS may strip it; the picker's "Options → Location")?
 
 ---
 
@@ -577,6 +577,7 @@ Moved to the end by the user (2026-10-27): everything about prod and iOS waits u
 
 | Date | Note |
 |---|---|
+| 2026-11-22 | **Imports and locations** (user asked; decided to keep it as it is): Google strips locations from Picker downloads and offers no other way; keeping them = uploading the originals (from the phone, or a Google Takeout export with the folder upload, which keeps the GPS in the files). Reading Takeout's `.json` sidecars (locations added or edited in Google Photos) was offered and declined. **iCloud Photos**: Apple has no web API for a user's library, so no dedicated import; originals from iCloud.com, a Mac (Export Unmodified Original) or iCloud for Windows go through the folder upload. Open for the iOS test (Phase 11): whether iOS keeps the location of photos picked in Safari. Spec v0.64 §2 |
 | 2026-11-01 | **Video decisions (14.0)** (user: "go with your defaults"): 2 GB max, MP4 + MOV only, no transcoding in V1 (play the original, download fallback), one quota for photos and videos with defaults raised to dev 5 GB / prod 25 GB, videos count towards the phone's 1 GB per pick, public links include videos, share target takes videos ≤ 200 MB, no duration limit. Spec v0.41. |
 | 2026-11-01 | **Videos planned as Phase 14** (user): a second media type of the Photo item (albums, sharing, trash, places, quota unchanged); V1 = multipart upload + ffmpeg video Lambda (poster + metadata) + play the original with a download fallback; V2 = H.264 playback copy; later = import, Live Photos, HLS. Open decisions listed in 14.0 with proposed defaults (2 GB, MP4/MOV, transcoding later, quota to raise). |
 | 2026-11-01 | **Duplicate detection: not planned, deferred** (user: "forget that for now"). Today nothing detects a re-picked file (excluded from 13.1 on 2026-10-24, FR-IMP-6 "no dedupe in v1", SCALING S4 backlog only); 5.6a only stops duplicate *pending* items on retries. Sketch if it comes back (would be 13.7, no new AWS resources): browser SHA-256 per file → sent with `POST /photos/upload-url` → `HASH#{sha256}` claim per user in the `createPending` transaction → duplicate = no upload, "Already in your library — skipped"; hard delete / empty trash / stale-pending sweep release the claim (trashed photos still count); thumbnail Lambda stores the hash for new photos + one-off backfill for existing ones; 13.5 import uses the same check server-side. Catches identical bytes only (edited or re-compressed copies still upload). |
@@ -658,6 +659,7 @@ Moved to the end by the user (2026-10-27): everything about prod and iOS waits u
 
 | Date | Summary |
 |---|---|
+| 2026-11-22 | User asked about keeping locations on import and importing from iCloud; decided to keep things as they are (no Takeout `.json`, no iCloud import). Docs only: decision, spec v0.64 §2 + B-10, ARCHITECTURE. |
 | 2026-11-22 | 8.36 timeline scrubber (FR-GAL-9, spec v0.63): API month counts + start/backward paging, web scrubber with jumps and upward loading; checked in headless Chrome (3,000 fake photos), 1317 TS pass. Pushed with `ed9cf86` (import progress) as `03d8576`, CI + Deploy green (3 Lambdas updated). |
 | 2026-11-22 | Import page shows progress right after returning from Google Photos (user: bar late or missing). Not pushed. |
 | 2026-11-22 | User: import works, but no locations. Checked: Google strips GPS from Picker downloads (not our bug) → location hint on the Upload box and in the summary. User kept the two taps (picker needs a tap after the consent redirect) → one prominent "Choose your photos" step. Spec v0.62, 1293 TS pass. Pushed `4788005`, CI + Deploy green (web only). |
