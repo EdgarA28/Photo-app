@@ -22,3 +22,8 @@ output "import_queue_url" {
   description = "Import queue (13.5f); null without google_client_id."
   value       = local.imports ? aws_sqs_queue.imports[0].url : null
 }
+
+output "import_client_id" {
+  description = "Google OAuth client ID the web app starts the import consent with (13.5g, VITE_GOOGLE_IMPORT_CLIENT_ID); null without the import."
+  value       = local.imports ? var.google_client_id : null
+}

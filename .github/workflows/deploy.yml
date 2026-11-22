@@ -99,6 +99,8 @@ jobs:
             echo "VITE_COGNITO_CLIENT_ID=$(jq -r .web_client_id.value outputs.json)"
             echo "VITE_COGNITO_DOMAIN=$(jq -r .cognito_domain_url.value outputs.json)"
             echo "VITE_GOOGLE_LOGIN=$(jq -r .google_login.value outputs.json)"
+            # Empty when the import is off (13.5g): the app then hides it.
+            echo "VITE_GOOGLE_IMPORT_CLIENT_ID=$(jq -r '.google_import_client_id.value // empty' outputs.json)"
           } >> "$GITHUB_ENV"
 
       # Public client config only (apps/web/src/config.ts), baked in at build time.

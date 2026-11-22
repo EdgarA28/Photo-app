@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.59 |
+| **Version** | 0.60 |
 | **Date** | 2026-11-22 |
 | **Owner** | Edgar |
 | **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5), videos (Phase 14) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
@@ -654,7 +654,8 @@ Second handler in `services/thumbnails` (`thumbnails.video_handler.handler`), so
 | `/albums/$albumId` | Album view. Owner: "Members can add photos" (FR-SHR-11) and "Share photo locations" (FR-SHR-12) switches in the share dialog; members see "Locations are shown in this album". Member of a collaborative album: Add photos (picked in the gallery), remove own photos; "Added by @name" in the viewer |
 | `/map` | Map of own photos with GPS (FR-SRCH-5); MapLibre, loaded only with this page |
 | `/upload` | Upload page / queue status |
-| `/import/google/callback` | Return from Google's consent (§11.5): checks `state`, starts the import, shows "Choose photos in Google Photos", then progress and the summary (FR-IMP-1/5). Started from Settings |
+| `/import/google/callback` | Return from Google's consent (§11.5): checks `state`, starts the import (`POST /imports/google`), then replaces itself with `/import/$importId` (FR-IMP-1). Started from Settings ("Import" section, only when the build has `VITE_GOOGLE_IMPORT_CLIENT_ID`) |
+| `/import/$importId` | One import (FR-IMP-5): "Choose photos in Google Photos" (in the tab where it started: the Picker link is kept in sessionStorage), cancel, progress while copying, then the summary; polls `GET /imports/{id}` every 3 s until it ends; safe to reload or leave |
 | `/settings` | Usage, quota, link to the trash, logout |
 | `/s/$token` | Public photo link (FR-SHR-8), no login, no app shell: one photo full screen, or a grid ("N shared photos") whose tiles open the photo large with prev/next; "Link works until …", Download original per photo; "expired" message |
 | `/trash` | Trash (FR-DEL-3): trashed photos with days left; pick to restore or delete forever; empty trash |
@@ -903,6 +904,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.38 | 2026-11-01 | Less gallery polling while uploads run: 15 s instead of 3 s, refreshes during a batch only mark lists stale (13.1j, §12.4) |
 | 0.53 | 2026-11-05 | FR-GAL-8 (user request): pinch to resize the grid tiles, continuous (live scale, settle on the nearest size) |
+| 0.60 | 2026-11-22 | §12.1 import pages (13.5g): the callback hands over to a separate `/import/$importId` page (progress survives a reload); the import is offered only when the web build has the Google client ID |
 | 0.59 | 2026-11-22 | §10.1 import worker (13.5d): the original is read into memory (≤ 50 MB) and stored with one `PutObject`, so the quota check uses the exact size (was: streamed multipart); copies accept `listing` too; new Import item counted marker (§8.2) makes counts exactly once; a refused token fails the photo as `EXPIRED`; a stored original is not written again on a retry |
 | 0.58 | 2026-11-21 | Import (13.5c): Import item gains `sessionExpiresAt`; the Picker session is created with `maxItemCount` 500 (FR-IMP-2 enforced in Google's picker); an import still listing/copying is closed as expired 3 min after the token ran out (a copy in flight may still finish) |
 | 0.57 | 2026-11-21 | §10.1: import queue messages carry `type` (`list` / `copy`) and never the Google token (13.5b) |

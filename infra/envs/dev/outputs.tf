@@ -92,3 +92,8 @@ output "import_worker_function_name" {
 output "import_queue_url" {
   value = module.api.import_queue_url
 }
+
+# Public client config for the web build (13.5g): the import button only shows with it.
+output "google_import_client_id" {
+  value = module.api.import_client_id
+}

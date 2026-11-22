@@ -10,6 +10,11 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((value) => value === "true"),
+  // Google OAuth client for the Google Photos import (13.5g, §11.5); empty = no import offered.
+  VITE_GOOGLE_IMPORT_CLIENT_ID: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || null),
 });
 
 export interface AppConfig {
@@ -24,6 +29,8 @@ export interface AppConfig {
   };
   /** Whether the app client allows Google (4.4); otherwise only email login is offered. */
   googleLogin: boolean;
+  /** Import from Google Photos (13.5g): the Google OAuth client ID, or null when it is off. */
+  googleImport: { clientId: string } | null;
 }
 
 export function loadConfig(
@@ -46,5 +53,8 @@ export function loadConfig(
       domain: vars.VITE_COGNITO_DOMAIN,
     },
     googleLogin: vars.VITE_GOOGLE_LOGIN,
+    googleImport: vars.VITE_GOOGLE_IMPORT_CLIENT_ID
+      ? { clientId: vars.VITE_GOOGLE_IMPORT_CLIENT_ID }
+      : null,
   };
 }

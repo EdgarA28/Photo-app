@@ -17,6 +17,9 @@ import {
   sharedAlbumPageSchema,
   shareInvitationPageSchema,
   trashListSchema,
+  importSchema,
+  startGoogleImportResponseSchema,
+  type StartGoogleImportRequest,
   emptyTrashResultSchema,
   uploadUrlResponseSchema,
   completeVideoUploadResponseSchema,
@@ -104,6 +107,16 @@ export function createApi(request: Request) {
           schema: downloadUrlResponseSchema,
           public: true,
         }),
+    },
+
+    /** Import from Google Photos (13.5, FR-IMP-1/5). */
+    imports: {
+      /** Google's authorization code from the consent redirect → a new import (`picking`). */
+      startGoogle: (body: StartGoogleImportRequest) =>
+        request("POST", "/imports/google", { schema: startGoogleImportResponseSchema, body }),
+      get: (importId: string, o?: Opts) =>
+        request("GET", `/imports/${enc(importId)}`, { schema: importSchema, ...o }),
+      cancel: (importId: string) => request("DELETE", `/imports/${enc(importId)}`),
     },
 
     trash: {

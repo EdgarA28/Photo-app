@@ -317,6 +317,11 @@ run "imports_off_without_google_client" {
     )
     error_message = "Without google_client_id there is no import (prod until Phase 11): /imports stays off."
   }
+
+  assert {
+    condition     = output.import_client_id == null
+    error_message = "No client ID for the web build: the app hides the import (13.5g)."
+  }
 }
 
 run "imports_on_with_google_client" {
@@ -382,6 +387,11 @@ run "imports_on_with_google_client" {
   assert {
     condition     = length(aws_iam_role_policy.api_imports) == 1 && aws_iam_role_policy.api_imports[0].role == aws_iam_role.api.id
     error_message = "The API's import grants (secret, queue) are a separate policy on its role."
+  }
+
+  assert {
+    condition     = output.import_client_id == "client-id.apps.googleusercontent.com"
+    error_message = "The web build gets the client ID that starts the import consent (13.5g)."
   }
 }
 

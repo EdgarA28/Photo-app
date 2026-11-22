@@ -21,6 +21,7 @@ export const testConfig: AppConfig = {
     domain: "https://photo-app-test.auth.us-east-1.amazoncognito.com",
   },
   googleLogin: true,
+  googleImport: { clientId: "test-google-client.apps.googleusercontent.com" },
 };
 
 export const testUser: SessionUser = {

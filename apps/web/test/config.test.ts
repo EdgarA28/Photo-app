@@ -18,7 +18,17 @@ describe("loadConfig", () => {
         domain: "https://photo-app-dev-063359189013.auth.us-east-1.amazoncognito.com",
       },
       googleLogin: true,
+      googleImport: null,
     });
+  });
+
+  it("offers the Google Photos import only with its client ID (13.5g)", () => {
+    const withImport = { ...env, VITE_GOOGLE_IMPORT_CLIENT_ID: "abc.apps.googleusercontent.com" };
+    expect(loadConfig(withImport, "http://localhost:5173").googleImport).toEqual({
+      clientId: "abc.apps.googleusercontent.com",
+    });
+    const empty = { ...env, VITE_GOOGLE_IMPORT_CLIENT_ID: " " };
+    expect(loadConfig(empty, "http://localhost:5173").googleImport).toBeNull();
   });
 
   it("turns Google off unless enabled", () => {

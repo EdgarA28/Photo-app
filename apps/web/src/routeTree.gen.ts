@@ -22,7 +22,9 @@ import { Route as AuthCallbackRouteImport } from './routes/auth/callback'
 import { Route as STokenRouteImport } from './routes/s/$token'
 import { Route as AuthenticatedAlbumsIndexRouteImport } from './routes/_authenticated/albums/index'
 import { Route as AuthenticatedAlbumsAlbumIdRouteImport } from './routes/_authenticated/albums/$albumId'
+import { Route as AuthenticatedImportImportIdRouteImport } from './routes/_authenticated/import/$importId'
 import { Route as AuthenticatedPhotosPhotoIdRouteImport } from './routes/_authenticated/photos/$photoId'
+import { Route as AuthenticatedImportGoogleCallbackRouteImport } from './routes/_authenticated/import/google/callback'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -90,10 +92,22 @@ const AuthenticatedAlbumsAlbumIdRoute =
     path: '/albums/$albumId',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
+const AuthenticatedImportImportIdRoute =
+  AuthenticatedImportImportIdRouteImport.update({
+    id: '/import/$importId',
+    path: '/import/$importId',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedPhotosPhotoIdRoute =
   AuthenticatedPhotosPhotoIdRouteImport.update({
     id: '/photos/$photoId',
     path: '/photos/$photoId',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedImportGoogleCallbackRoute =
+  AuthenticatedImportGoogleCallbackRouteImport.update({
+    id: '/import/google/callback',
+    path: '/import/google/callback',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 
@@ -109,8 +123,10 @@ export interface FileRoutesByFullPath {
   '/auth/callback': typeof AuthCallbackRoute
   '/s/$token': typeof STokenRoute
   '/albums/$albumId': typeof AuthenticatedAlbumsAlbumIdRoute
+  '/import/$importId': typeof AuthenticatedImportImportIdRoute
   '/photos/$photoId': typeof AuthenticatedPhotosPhotoIdRoute
   '/albums/': typeof AuthenticatedAlbumsIndexRoute
+  '/import/google/callback': typeof AuthenticatedImportGoogleCallbackRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -124,8 +140,10 @@ export interface FileRoutesByTo {
   '/auth/callback': typeof AuthCallbackRoute
   '/s/$token': typeof STokenRoute
   '/albums/$albumId': typeof AuthenticatedAlbumsAlbumIdRoute
+  '/import/$importId': typeof AuthenticatedImportImportIdRoute
   '/photos/$photoId': typeof AuthenticatedPhotosPhotoIdRoute
   '/albums': typeof AuthenticatedAlbumsIndexRoute
+  '/import/google/callback': typeof AuthenticatedImportGoogleCallbackRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -141,8 +159,10 @@ export interface FileRoutesById {
   '/auth/callback': typeof AuthCallbackRoute
   '/s/$token': typeof STokenRoute
   '/_authenticated/albums/$albumId': typeof AuthenticatedAlbumsAlbumIdRoute
+  '/_authenticated/import/$importId': typeof AuthenticatedImportImportIdRoute
   '/_authenticated/photos/$photoId': typeof AuthenticatedPhotosPhotoIdRoute
   '/_authenticated/albums/': typeof AuthenticatedAlbumsIndexRoute
+  '/_authenticated/import/google/callback': typeof AuthenticatedImportGoogleCallbackRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -158,8 +178,10 @@ export interface FileRouteTypes {
     | '/auth/callback'
     | '/s/$token'
     | '/albums/$albumId'
+    | '/import/$importId'
     | '/photos/$photoId'
     | '/albums/'
+    | '/import/google/callback'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -173,8 +195,10 @@ export interface FileRouteTypes {
     | '/auth/callback'
     | '/s/$token'
     | '/albums/$albumId'
+    | '/import/$importId'
     | '/photos/$photoId'
     | '/albums'
+    | '/import/google/callback'
   id:
     | '__root__'
     | '/'
@@ -189,8 +213,10 @@ export interface FileRouteTypes {
     | '/auth/callback'
     | '/s/$token'
     | '/_authenticated/albums/$albumId'
+    | '/_authenticated/import/$importId'
     | '/_authenticated/photos/$photoId'
     | '/_authenticated/albums/'
+    | '/_authenticated/import/google/callback'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -294,11 +320,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAlbumsAlbumIdRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/import/$importId': {
+      id: '/_authenticated/import/$importId'
+      path: '/import/$importId'
+      fullPath: '/import/$importId'
+      preLoaderRoute: typeof AuthenticatedImportImportIdRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/photos/$photoId': {
       id: '/_authenticated/photos/$photoId'
       path: '/photos/$photoId'
       fullPath: '/photos/$photoId'
       preLoaderRoute: typeof AuthenticatedPhotosPhotoIdRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/import/google/callback': {
+      id: '/_authenticated/import/google/callback'
+      path: '/import/google/callback'
+      fullPath: '/import/google/callback'
+      preLoaderRoute: typeof AuthenticatedImportGoogleCallbackRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
   }
@@ -312,8 +352,10 @@ interface AuthenticatedRouteChildren {
   AuthenticatedUploadRoute: typeof AuthenticatedUploadRoute
   AuthenticatedVideosRoute: typeof AuthenticatedVideosRoute
   AuthenticatedAlbumsAlbumIdRoute: typeof AuthenticatedAlbumsAlbumIdRoute
+  AuthenticatedImportImportIdRoute: typeof AuthenticatedImportImportIdRoute
   AuthenticatedPhotosPhotoIdRoute: typeof AuthenticatedPhotosPhotoIdRoute
   AuthenticatedAlbumsIndexRoute: typeof AuthenticatedAlbumsIndexRoute
+  AuthenticatedImportGoogleCallbackRoute: typeof AuthenticatedImportGoogleCallbackRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
@@ -324,8 +366,11 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedUploadRoute: AuthenticatedUploadRoute,
   AuthenticatedVideosRoute: AuthenticatedVideosRoute,
   AuthenticatedAlbumsAlbumIdRoute: AuthenticatedAlbumsAlbumIdRoute,
+  AuthenticatedImportImportIdRoute: AuthenticatedImportImportIdRoute,
   AuthenticatedPhotosPhotoIdRoute: AuthenticatedPhotosPhotoIdRoute,
   AuthenticatedAlbumsIndexRoute: AuthenticatedAlbumsIndexRoute,
+  AuthenticatedImportGoogleCallbackRoute:
+    AuthenticatedImportGoogleCallbackRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(

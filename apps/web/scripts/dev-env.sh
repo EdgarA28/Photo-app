@@ -27,6 +27,8 @@ VITE_COGNITO_USER_POOL_ID=$pool_id
 VITE_COGNITO_CLIENT_ID=$client_id
 VITE_COGNITO_DOMAIN=$(out cognito_domain_url)
 VITE_GOOGLE_LOGIN=$google
+# Import from Google Photos (13.5g); empty = no import button.
+VITE_GOOGLE_IMPORT_CLIENT_ID=$(out google_import_client_id 2>/dev/null || true)
 # Read by vite.config.ts only (not exposed to the browser): /api and /users proxy targets.
 API_PROXY_TARGET=$(out api_endpoint)
 MEDIA_PROXY_TARGET=$(out app_url)
