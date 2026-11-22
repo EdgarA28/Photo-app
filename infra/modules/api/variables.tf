@@ -114,3 +114,29 @@ variable "media_private_key_parameter_arn" {
   description = "ARN of that parameter: the only one the API may read."
   type        = string
 }
+
+# --- Import from Google Photos (13.5f; spec §6.9, §10.1, §11.5) ---------------------------------
+
+variable "google_client_id" {
+  description = "Google OAuth client ID (same client as login, §11.5). null: no import (no queue, worker or secret; the /imports routes stay off)."
+  type        = string
+  default     = null
+}
+
+variable "google_client_secret" {
+  description = "Google OAuth client secret, stored as an SSM SecureString the API reads (NFR-SEC-10). Required with google_client_id."
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
+variable "import_redirect_origins" {
+  description = "IMPORT_REDIRECT_ORIGINS: app origins Google may send the import consent back to ({origin}/import/google/callback)."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for o in var.import_redirect_origins : can(regex("^https?://[^/]+$", o))])
+    error_message = "import_redirect_origins are http(s) origins without a path or trailing slash."
+  }
+}

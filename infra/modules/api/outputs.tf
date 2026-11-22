@@ -12,3 +12,13 @@ output "purge_function_name" {
   description = "Daily trash purge Lambda (FR-DEL-3), for logs and manual runs."
   value       = aws_lambda_function.purge.function_name
 }
+
+output "import_worker_function_name" {
+  description = "Google Photos import worker (13.5f), for logs; null without google_client_id."
+  value       = local.imports ? aws_lambda_function.import_worker[0].function_name : null
+}
+
+output "import_queue_url" {
+  description = "Import queue (13.5f); null without google_client_id."
+  value       = local.imports ? aws_sqs_queue.imports[0].url : null
+}

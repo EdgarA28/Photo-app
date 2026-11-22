@@ -34,6 +34,19 @@ mock_provider "aws" {
     }
   }
 
+  mock_resource "aws_sqs_queue" {
+    defaults = {
+      arn = "arn:aws:sqs:us-east-1:123456789012:test"
+      url = "https://sqs.us-east-1.amazonaws.com/123456789012/test"
+    }
+  }
+
+  mock_resource "aws_ssm_parameter" {
+    defaults = {
+      arn = "arn:aws:ssm:us-east-1:123456789012:parameter/test"
+    }
+  }
+
   mock_resource "aws_apigatewayv2_api" {
     defaults = {
       execution_arn = "arn:aws:execute-api:us-east-1:123456789012:abc123"
@@ -287,4 +300,108 @@ run "trash_purge" {
     )
     error_message = "The sweep aborts only video uploads of originals (14.2)."
   }
+}
+
+# --- Import from Google Photos (13.5f) ----------------------------------------------------------
+
+run "imports_off_without_google_client" {
+  command = plan
+
+  assert {
+    condition = (
+      length(aws_sqs_queue.imports) == 0 &&
+      length(aws_lambda_function.import_worker) == 0 &&
+      length(aws_ssm_parameter.google_client_secret) == 0 &&
+      length(aws_iam_role_policy.api_imports) == 0 &&
+      !contains(keys(aws_lambda_function.api.environment[0].variables), "GOOGLE_CLIENT_ID")
+    )
+    error_message = "Without google_client_id there is no import (prod until Phase 11): /imports stays off."
+  }
+}
+
+run "imports_on_with_google_client" {
+  command = apply
+
+  variables {
+    google_client_id        = "client-id.apps.googleusercontent.com"
+    google_client_secret    = "test-secret"
+    import_redirect_origins = ["https://d111.cloudfront.net", "http://localhost:5173"]
+  }
+
+  assert {
+    condition = (
+      aws_sqs_queue.imports[0].name == "photo-app-test-imports" &&
+      aws_sqs_queue.imports[0].visibility_timeout_seconds == 720 &&
+      aws_sqs_queue.imports[0].sqs_managed_sse_enabled &&
+      jsondecode(aws_sqs_queue.imports[0].redrive_policy).maxReceiveCount == 5 &&
+      aws_sqs_queue.imports_dlq[0].message_retention_seconds == 1209600
+    )
+    error_message = "Import queue: 720 s visibility (6 × 120 s), SSE, DLQ after 5 receives kept 14 days (§10.1)."
+  }
+
+  assert {
+    condition = (
+      aws_lambda_function.import_worker[0].function_name == "photo-app-test-import-worker" &&
+      aws_lambda_function.import_worker[0].handler == "importWorker.handler" &&
+      aws_lambda_function.import_worker[0].memory_size == 512 &&
+      aws_lambda_function.import_worker[0].timeout == 120 &&
+      aws_lambda_function.import_worker[0].architectures == tolist(["arm64"]) &&
+      aws_lambda_function.import_worker[0].environment[0].variables["IMPORT_QUEUE_URL"] == aws_sqs_queue.imports[0].url &&
+      !contains(keys(aws_lambda_function.import_worker[0].environment[0].variables), "GOOGLE_CLIENT_SECRET_PARAMETER")
+    )
+    error_message = "Worker: dist/importWorker.mjs, 512 MB, 120 s, its queue, no Google secret (§10.1, NFR-SEC-10)."
+  }
+
+  assert {
+    condition = (
+      aws_lambda_event_source_mapping.import_worker[0].batch_size == 1 &&
+      aws_lambda_event_source_mapping.import_worker[0].scaling_config[0].maximum_concurrency == 3
+    )
+    error_message = "One message per invocation, at most 3 workers (§10.1)."
+  }
+
+  assert {
+    condition = (
+      aws_ssm_parameter.google_client_secret[0].name == "/photo-app/test/google/client-secret" &&
+      aws_ssm_parameter.google_client_secret[0].type == "SecureString"
+    )
+    error_message = "The Google client secret is an SSM SecureString (NFR-SEC-10)."
+  }
+
+  assert {
+    condition = (
+      aws_lambda_function.api.environment[0].variables["GOOGLE_CLIENT_ID"] == "client-id.apps.googleusercontent.com" &&
+      aws_lambda_function.api.environment[0].variables["GOOGLE_CLIENT_SECRET_PARAMETER"] == "/photo-app/test/google/client-secret" &&
+      aws_lambda_function.api.environment[0].variables["IMPORT_QUEUE_URL"] == aws_sqs_queue.imports[0].url &&
+      aws_lambda_function.api.environment[0].variables["IMPORT_REDIRECT_ORIGINS"] == "https://d111.cloudfront.net,http://localhost:5173" &&
+      aws_lambda_function.api.environment[0].variables["TABLE_NAME"] == "photo-app-test"
+    )
+    error_message = "The API gets the import settings (loadImportConfig) next to its own."
+  }
+
+  assert {
+    condition     = length(aws_iam_role_policy.api_imports) == 1 && aws_iam_role_policy.api_imports[0].role == aws_iam_role.api.id
+    error_message = "The API's import grants (secret, queue) are a separate policy on its role."
+  }
+}
+
+run "imports_need_the_secret" {
+  command = plan
+
+  variables {
+    google_client_id        = "client-id.apps.googleusercontent.com"
+    import_redirect_origins = ["https://d111.cloudfront.net"]
+  }
+
+  expect_failures = [aws_ssm_parameter.google_client_secret]
+}
+
+run "import_origins_have_no_path" {
+  command = plan
+
+  variables {
+    import_redirect_origins = ["https://d111.cloudfront.net/app"]
+  }
+
+  expect_failures = [var.import_redirect_origins]
 }

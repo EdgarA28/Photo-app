@@ -84,3 +84,11 @@ output "site_bucket_name" {
 output "media_key_pair_id" {
   value = module.frontend.media_key_pair_id
 }
+
+output "import_worker_function_name" {
+  value = module.api.import_worker_function_name
+}
+
+output "import_queue_url" {
+  value = module.api.import_queue_url
+}

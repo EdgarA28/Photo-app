@@ -98,6 +98,12 @@ module "api" {
   media_key_pair_id                = module.frontend.media_key_pair_id
   media_private_key_parameter_name = module.frontend.media_private_key_parameter_name
   media_private_key_parameter_arn  = module.frontend.media_private_key_parameter_arn
+
+  # Import from Google Photos (13.5f): same Google client as login (§11.5); Google may send the
+  # consent back to the app's origins (CloudFront + localhost:5173, both registered in 13.5a).
+  google_client_id        = var.google_client_id
+  google_client_secret    = var.google_client_secret
+  import_redirect_origins = local.app_origins
 }
 
 module "frontend" {

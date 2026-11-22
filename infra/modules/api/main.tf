@@ -147,9 +147,10 @@ resource "aws_lambda_function" "api" {
   # Every route is a few DynamoDB/S3/Cognito calls; API Gateway itself allows at most 30 s.
   timeout = 10
 
-  # Read by apps/api/src/lib/config.ts; a missing one fails the cold start.
+  # Read by apps/api/src/lib/config.ts; a missing one fails the cold start. The Google Photos
+  # import settings (imports.tf) only with google_client_id.
   environment {
-    variables = {
+    variables = merge(local.import_env, {
       TABLE_NAME          = var.table_name
       PHOTO_BUCKET        = var.bucket_name
       USER_POOL_ID        = var.user_pool_id
@@ -159,7 +160,7 @@ resource "aws_lambda_function" "api" {
       MEDIA_KEY_PAIR_ID           = var.media_key_pair_id
       MEDIA_PRIVATE_KEY_PARAMETER = var.media_private_key_parameter_name
       NODE_OPTIONS                = "--enable-source-maps"
-    }
+    })
   }
 
   logging_config {
@@ -167,7 +168,7 @@ resource "aws_lambda_function" "api" {
     log_group  = aws_cloudwatch_log_group.lambda.name
   }
 
-  depends_on = [aws_iam_role_policy.api]
+  depends_on = [aws_iam_role_policy.api, aws_iam_role_policy.api_imports]
 }
 
 # --- HTTP API -----------------------------------------------------------------------------------
