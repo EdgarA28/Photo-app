@@ -44,6 +44,11 @@ export type DownloadResult =
   | { kind: "not-found" }
   | { kind: "unauthorized" };
 
+/** What a poll of the session tells (`getSession`). */
+export interface PickerSessionState {
+  mediaItemsSet: boolean;
+}
+
 export interface GooglePhotos {
   /**
    * Authorization code → access token (no refresh token: `access_type=online`, §11.5). Null when
@@ -56,8 +61,12 @@ export interface GooglePhotos {
   }): Promise<GoogleToken | null>;
   /** A Picker session that lets the user pick at most `maxItemCount` items (FR-IMP-2). */
   createSession(accessToken: string, maxItemCount: number): Promise<PickerSession>;
-  /** Null when Google no longer knows the session (expired or deleted). */
-  getSession(accessToken: string, sessionId: string): Promise<PickerSession | null>;
+  /**
+   * Whether the user is done picking. Null when Google no longer knows the session (expired or
+   * deleted). Only `mediaItemsSet` is relied on: Google's answer here doesn't always carry what
+   * `createSession` gets (seen in dev 2026-11-22: every poll was refused as malformed).
+   */
+  getSession(accessToken: string, sessionId: string): Promise<PickerSessionState | null>;
   /** Deletes the session; a session Google no longer knows counts as deleted. */
   deleteSession(accessToken: string, sessionId: string): Promise<void>;
   /** One page (≤ 100) of the picked items (worker `list` step, §10.1). */
@@ -191,7 +200,7 @@ export function googlePhotosClient(options: GoogleClientOptions): GooglePhotos {
       );
       if (res.status === 404) return null;
       if (!res.ok) throw await apiError(res, "get session");
-      return toSession(await res.json(), "get session");
+      return toSessionState(await res.json());
     },
 
     async deleteSession(accessToken, sessionId) {
@@ -303,7 +312,11 @@ async function apiError(res: Response, operation: string): Promise<GoogleApiErro
   return new GoogleApiError(res.status, code, operation);
 }
 
-/** A Picker `PickingSession` → our shape; anything missing or odd is a bad response. */
+/**
+ * A new Picker `PickingSession` (`createSession`) → our shape. Missing or odd fields make it a bad
+ * response; the error names them (never their values), so a change on Google's side is visible in
+ * the logs at once.
+ */
 export function toSession(raw: unknown, operation: string): PickerSession {
   const body = (raw ?? {}) as {
     id?: unknown;
@@ -313,14 +326,18 @@ export function toSession(raw: unknown, operation: string): PickerSession {
     pollingConfig?: { pollInterval?: unknown };
   };
   const expiresAt = typeof body.expireTime === "string" ? new Date(body.expireTime) : null;
+  const bad = [
+    typeof body.id !== "string" && "id",
+    (typeof body.pickerUri !== "string" || !body.pickerUri.startsWith("https://")) && "pickerUri",
+    (!expiresAt || Number.isNaN(expiresAt.getTime())) && "expireTime",
+  ].filter(Boolean);
   if (
+    bad.length > 0 ||
     typeof body.id !== "string" ||
     typeof body.pickerUri !== "string" ||
-    !body.pickerUri.startsWith("https://") ||
-    !expiresAt ||
-    Number.isNaN(expiresAt.getTime())
+    !expiresAt
   ) {
-    throw new GoogleApiError(200, "invalid_response", operation);
+    throw new GoogleApiError(200, `invalid_response (${bad.join(", ")})`, operation);
   }
   return {
     sessionId: body.id,
@@ -329,6 +346,12 @@ export function toSession(raw: unknown, operation: string): PickerSession {
     expiresAt,
     mediaItemsSet: body.mediaItemsSet === true,
   };
+}
+
+/** A polled session → whether the user is done; anything else in it is ignored. */
+export function toSessionState(raw: unknown): PickerSessionState {
+  const body = (raw ?? {}) as { mediaItemsSet?: unknown };
+  return { mediaItemsSet: body.mediaItemsSet === true };
 }
 
 /** Google's `Duration` JSON ("5s", "2.5s") → whole seconds, at least 1. */

@@ -122,6 +122,27 @@ describe("Picker sessions", () => {
     expect(err).toMatchObject({ status: 401, googleCode: "UNAUTHENTICATED", unauthorized: true });
   });
 
+  test("getSession only needs mediaItemsSet (Google's poll answer lacks the rest)", async () => {
+    // Dev 2026-11-22: requiring pickerUri/expireTime here refused every poll, so no import moved on.
+    const { client } = setup(json({ mediaItemsSet: true }), json({}));
+    expect(await client.getSession("t", "sess-1")).toEqual({ mediaItemsSet: true });
+    expect(await client.getSession("t", "sess-1")).toEqual({ mediaItemsSet: false });
+  });
+
+  test("a malformed new session names the fields, not their values", () => {
+    const err = (() => {
+      try {
+        toSession({ id: "sess-1", pickerUri: "http://x" }, "create session");
+      } catch (e) {
+        return e as GoogleApiError;
+      }
+      return null;
+    })();
+    expect(err?.message).toBe(
+      "Google create session failed: 200 invalid_response (pickerUri, expireTime)",
+    );
+  });
+
   test("deleteSession accepts a session that is already gone", async () => {
     const { client, request } = setup(
       new Response(null, { status: 200 }),

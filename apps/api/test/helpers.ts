@@ -364,7 +364,8 @@ export function fakeGoogle() {
       state.calls.push({ operation: "get", accessToken });
       fail("get session");
       const session = state.sessions.get(sessionId);
-      return session ? { ...session } : null;
+      // Only what a poll may rely on (Google's answer can lack the rest, dev 2026-11-22).
+      return session ? { mediaItemsSet: session.mediaItemsSet } : null;
     },
     deleteSession: async (accessToken, sessionId) => {
       state.calls.push({ operation: "delete", accessToken });
