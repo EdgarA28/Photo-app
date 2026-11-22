@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.61 |
+| **Version** | 0.62 |
 | **Date** | 2026-11-22 |
 | **Owner** | Edgar |
 | **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5), videos (Phase 14) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
@@ -713,7 +713,7 @@ Caching strategies:
 - iOS: installation only via Share → Add to Home Screen; storage may be evicted for unused sites; Web Push only for installed PWAs; no `share_target`.
 - **Test Google/Cognito login in installed (standalone) mode on iOS early.**
 - **Location can be removed before upload** (FR-SRCH-1): sharing a photo directly from Google Photos (Android) sends a copy with the GPS fields blanked (seen 2026-10-27: tags present, values 0/0, empty refs); downloading it first and sharing the file keeps the location, and so does taking the photo with the camera from the app (FR-UP-1). Some photos picked on the phone arrived with no GPS tags at all. Such photos simply get no place; the app can't recover it.
-- **Imported photos probably have no location** (FR-IMP-1): Google documents that the `=d` download keeps EXIF "except location metadata" (Library API docs; to check for the Picker during 13.5). Such photos get no place (FR-SRCH-1).
+- **Imported photos have no location** (FR-IMP-1): the Picker `=d` download keeps EXIF except the location, like Google documents for the Library API (checked in dev 2026-11-22: 8 imported photos with camera and date, no GPS tags; the Picker's metadata has no location either). Such photos get no place (FR-SRCH-1). The Upload page's import box and the import summary say so and point to uploading from the phone's gallery instead.
 
 ---
 
@@ -904,6 +904,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.38 | 2026-11-01 | Less gallery polling while uploads run: 15 s instead of 3 s, refreshes during a batch only mark lists stale (13.1j, §12.4) |
 | 0.53 | 2026-11-05 | FR-GAL-8 (user request): pinch to resize the grid tiles, continuous (live scale, settle on the nearest size) |
+| 0.62 | 2026-11-22 | §12.6: imported photos have no location (confirmed in dev); the import box and summary say so. Import page: after Google's consent one prominent "Choose your photos" button (the picker can only open from a tap) |
 | 0.61 | 2026-11-22 | The Google Photos import starts from the Upload page, under the normal upload (user's choice), not from Settings |
 | 0.60 | 2026-11-22 | §12.1 import pages (13.5g): the callback hands over to a separate `/import/$importId` page (progress survives a reload); the import is offered only when the web build has the Google client ID |
 | 0.59 | 2026-11-22 | §10.1 import worker (13.5d): the original is read into memory (≤ 50 MB) and stored with one `PutObject`, so the quota check uses the exact size (was: streamed multipart); copies accept `listing` too; new Import item counted marker (§8.2) makes counts exactly once; a refused token fails the photo as `EXPIRED`; a stored original is not written again on a retry |

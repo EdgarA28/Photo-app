@@ -3,6 +3,13 @@ import { Button } from "@/components/ui/button";
 import { useConfig } from "@/configContext";
 import { startGoogleConsent } from "./googleConsent";
 
+/**
+ * Google strips the location from photos leaving Google Photos through the Picker (checked in dev
+ * 2026-11-22: camera and date kept, no GPS tags), so imported photos get no place (FR-SRCH-1).
+ */
+export const LOCATION_HINT =
+  "Google removes the location from imported photos. To keep it, upload the photos from your phone's gallery instead.";
+
 /** "Import from Google Photos" (13.5g, FR-IMP-1): off to Google's consent for this one import. */
 export function ImportStartButton({
   loginHint,
@@ -54,6 +61,7 @@ export function GoogleImportOption({ loginHint }: { loginHint?: string }) {
           Choose photos in Google Photos and copy them here, up to 500 at a time. Videos are
           skipped.
         </p>
+        <p className="text-sm text-muted-foreground">{LOCATION_HINT}</p>
       </div>
       <ImportStartButton {...(loginHint && { loginHint })}>
         Choose in Google Photos

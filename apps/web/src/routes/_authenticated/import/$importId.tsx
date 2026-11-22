@@ -1,10 +1,10 @@
 import { idSchema, type Import, type ImportFailureCode } from "@photo-app/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { errorMessage } from "@/api/errors";
 import { Button } from "@/components/ui/button";
-import { ImportStartButton } from "@/import/ImportStart";
+import { ImportStartButton, LOCATION_HINT } from "@/import/ImportStart";
 import { openPicker, pickerUriOf } from "@/import/pickerStore";
 import { importQuery } from "@/queries/imports";
 import { refreshAfterUpload } from "@/queries/photos";
@@ -116,33 +116,15 @@ function ImportState({
 
   switch (data.status) {
     case "picking":
-      return (
+      return pickerUri ? (
+        <ChoosePhotos pickerUri={pickerUri} cancelButton={cancelButton} />
+      ) : (
         <>
-          {pickerUri ? (
-            <>
-              <p className="text-muted-foreground">
-                Choose the photos in Google Photos (up to 500), then tap Done there. Videos are
-                skipped.
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <Button onClick={() => openPicker(pickerUri)}>
-                  Choose photos in Google Photos
-                </Button>
-                {cancelButton}
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="text-muted-foreground">
-                Waiting for you to choose photos in Google Photos, in the tab or app where you
-                started this import.
-              </p>
-              {cancelButton}
-            </>
-          )}
-          <p className="text-sm text-muted-foreground">
-            This page notices when you're done and starts the copy.
+          <p className="text-muted-foreground">
+            Waiting for you to choose photos in Google Photos, in the tab or app where you started
+            this import. This page continues by itself once you're done.
           </p>
+          {cancelButton}
         </>
       );
     case "listing":
@@ -174,10 +156,13 @@ function ImportState({
         <>
           <p role="status">{importSummary(data)}.</p>
           {data.done > 0 && (
-            <p className="text-sm text-muted-foreground">
-              New photos appear in the gallery by the date they were taken, after a short
-              processing.
-            </p>
+            <>
+              <p className="text-sm text-muted-foreground">
+                New photos appear in the gallery by the date they were taken, after a short
+                processing.
+              </p>
+              <p className="text-sm text-muted-foreground">{LOCATION_HINT}</p>
+            </>
           )}
           <Finished />
         </>
@@ -203,6 +188,39 @@ function ImportState({
         </>
       );
   }
+}
+
+/**
+ * The one step left after Google's consent (user's choice 2026-11-22: keep the second tap, make it
+ * obvious). The picker can only open from a tap (popup blockers, §11.5), and Google sends no one
+ * back to the app, so this page waits for the Done in Google Photos by polling.
+ */
+function ChoosePhotos({ pickerUri, cancelButton }: { pickerUri: string; cancelButton: ReactNode }) {
+  const [opened, setOpened] = useState(false);
+  return (
+    <div className="space-y-4">
+      <p>
+        {opened
+          ? "Pick your photos in Google Photos and tap Done there. This page continues by itself."
+          : "Google Photos is connected. One more step: choose the photos to copy."}
+      </p>
+      <Button
+        size="lg"
+        variant={opened ? "outline" : "default"}
+        className="h-12 w-full text-base sm:w-auto sm:px-6"
+        onClick={() => {
+          openPicker(pickerUri);
+          setOpened(true);
+        }}
+      >
+        {opened ? "Open Google Photos again" : "Choose your photos"}
+      </Button>
+      <p className="text-sm text-muted-foreground">
+        Opens Google Photos. Up to 500 photos; videos are skipped.
+      </p>
+      {cancelButton}
+    </div>
+  );
 }
 
 function Finished() {

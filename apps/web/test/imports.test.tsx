@@ -152,9 +152,7 @@ describe("callback page (FR-IMP-1)", () => {
     expect(body.code).toBe("4/abc");
     expect(body.codeVerifier).toMatch(/^[A-Za-z0-9_-]{43,128}$/);
     expect(body.redirectUri).toBe(importRedirectUri(window.location.origin));
-    expect(
-      await screen.findByRole("button", { name: "Choose photos in Google Photos" }),
-    ).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Choose your photos" })).toBeTruthy();
   });
 
   it("says so when Google rejected the code", async () => {
@@ -200,11 +198,16 @@ describe("import page (FR-IMP-5)", () => {
 
   beforeEach(() => savePickerUri(IMPORT_ID, PICKER));
 
-  it("while picking: opens Google's picker from a tap", async () => {
+  it("while picking: one clear button opens Google's picker from a tap", async () => {
     const open = vi.spyOn(window, "open").mockImplementation(() => null);
     await openImport({ status: "picking", total: 0, done: 0, failed: 0, failedReasons: {} });
-    fireEvent.click(await screen.findByRole("button", { name: "Choose photos in Google Photos" }));
+    expect(await screen.findByText(/Google Photos is connected. One more step/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Choose your photos" }));
     expect(open).toHaveBeenCalledWith(`${PICKER}/autoclose`, "_blank", "noopener");
+    // Once opened: what to do there, and a way to open it again.
+    expect(screen.getByText(/tap Done there. This page continues by itself/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open Google Photos again" }));
+    expect(open).toHaveBeenCalledTimes(2);
   });
 
   it("while picking in another tab: no picker button, just the wait", async () => {
@@ -238,6 +241,8 @@ describe("import page (FR-IMP-5)", () => {
       "Imported 9 photos · 2 skipped (videos or other types) · 1 not imported: storage full.",
     );
     expect(screen.getByRole("link", { name: "Go to gallery" })).toBeTruthy();
+    // Google strips locations (checked in dev 2026-11-22): said where it matters.
+    expect(screen.getByText(/Google removes the location from imported photos/)).toBeTruthy();
   });
 
   it("when picking ran out of time: start again", async () => {
@@ -276,6 +281,7 @@ describe("entry on the upload page (user's choice: under the normal upload)", ()
     await renderAt("/upload");
     const offer = await screen.findByRole("region", { name: "Import from Google Photos" });
     expect(within(offer).getByRole("button", { name: "Choose in Google Photos" })).toBeTruthy();
+    expect(within(offer).getByText(/Google removes the location/)).toBeTruthy();
     // After the normal upload picker in the page.
     const picker = screen.getByRole("button", { name: /Choose photos/ });
     expect(picker.compareDocumentPosition(offer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
