@@ -1,6 +1,8 @@
+import { MapPinOff } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useConfig } from "@/configContext";
+import { GooglePhotosIcon } from "./GooglePhotosIcon";
 import { startGoogleConsent } from "./googleConsent";
 
 /**
@@ -8,7 +10,7 @@ import { startGoogleConsent } from "./googleConsent";
  * 2026-11-22: camera and date kept, no GPS tags), so imported photos get no place (FR-SRCH-1).
  */
 export const LOCATION_HINT =
-  "Google removes the location from imported photos. To keep it, upload the photos from your phone's gallery instead.";
+  "Google removes photo locations; upload from your phone's gallery to keep them.";
 
 /** "Import from Google Photos" (13.5g, FR-IMP-1): off to Google's consent for this one import. */
 export function ImportStartButton({
@@ -41,31 +43,54 @@ export function ImportStartButton({
   );
 }
 
+const IMPORT_DETAILS = "Up to 500 photos at a time. Videos are skipped.";
+
 /**
  * The import offer under the upload picker (user's choice 2026-11-22: on the Upload page, not in
- * Settings). Nothing when the build has no Google client ID.
+ * Settings). On a computer the details sit in the box; on a phone (user 2026-11-22) the box keeps
+ * only the title and the button, and the details go under it like the upload page's other hints.
+ * Nothing when the build has no Google client ID.
  */
 export function GoogleImportOption({ loginHint }: { loginHint?: string }) {
   const { googleImport } = useConfig();
   if (!googleImport) return null;
   return (
-    <section
-      aria-labelledby="google-import-title"
-      className="flex flex-wrap items-center gap-3 rounded-xl border p-4"
-    >
-      <div className="min-w-0 flex-1 space-y-1">
-        <h2 id="google-import-title" className="font-semibold">
-          Import from Google Photos
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          Choose photos in Google Photos and copy them here, up to 500 at a time. Videos are
-          skipped.
-        </p>
-        <p className="text-sm text-muted-foreground">{LOCATION_HINT}</p>
-      </div>
-      <ImportStartButton {...(loginHint && { loginHint })}>
-        Choose in Google Photos
-      </ImportStartButton>
-    </section>
+    <div className="space-y-2">
+      <section
+        aria-labelledby="google-import-title"
+        aria-describedby="google-import-details"
+        className="flex flex-wrap items-center gap-3 rounded-xl border p-4"
+      >
+        <div className="min-w-0 flex-1 space-y-1">
+          <h2 id="google-import-title" className="flex items-center gap-2 font-semibold">
+            <GooglePhotosIcon className="size-5 shrink-0" />
+            Import from Google Photos
+          </h2>
+          <ImportDetails className="hidden md:block" />
+        </div>
+        <ImportStartButton {...(loginHint && { loginHint })}>
+          Choose in Google Photos
+        </ImportStartButton>
+      </section>
+      <p
+        id="google-import-details"
+        className="flex items-start gap-2 text-sm text-muted-foreground md:sr-only"
+      >
+        <MapPinOff aria-hidden className="mt-0.5 size-4 shrink-0" />
+        <span>
+          {IMPORT_DETAILS} {LOCATION_HINT}
+        </span>
+      </p>
+    </div>
+  );
+}
+
+function ImportDetails({ className }: { className?: string }) {
+  return (
+    <p aria-hidden className={`text-sm text-muted-foreground ${className ?? ""}`}>
+      {IMPORT_DETAILS}
+      <br />
+      {LOCATION_HINT}
+    </p>
   );
 }

@@ -291,7 +291,7 @@ describe("import page (FR-IMP-5)", () => {
     const bar = screen.getByRole("progressbar", { name: "Import progress" });
     expect([bar.getAttribute("value"), bar.getAttribute("max")]).toEqual(["10", "10"]);
     // Google strips locations (checked in dev 2026-11-22): said where it matters.
-    expect(screen.getByText(/Google removes the location from imported photos/)).toBeTruthy();
+    expect(screen.getByText(/Google removes photo locations/)).toBeTruthy();
   });
 
   it("when picking ran out of time: start again", async () => {
@@ -330,7 +330,12 @@ describe("entry on the upload page (user's choice: under the normal upload)", ()
     await renderAt("/upload");
     const offer = await screen.findByRole("region", { name: "Import from Google Photos" });
     expect(within(offer).getByRole("button", { name: "Choose in Google Photos" })).toBeTruthy();
-    expect(within(offer).getByText(/Google removes the location/)).toBeTruthy();
+    expect(within(offer).getByText(/Google removes photo locations/)).toBeTruthy();
+    // Shorter details (user 2026-11-22), also under the box for phones (described-by).
+    const details = document.getElementById(offer.getAttribute("aria-describedby")!)!;
+    expect(details.textContent).toBe(
+      "Up to 500 photos at a time. Videos are skipped. Google removes photo locations; upload from your phone's gallery to keep them.",
+    );
     // After the normal upload picker in the page.
     const picker = screen.getByRole("button", { name: /Choose photos/ });
     expect(picker.compareDocumentPosition(offer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

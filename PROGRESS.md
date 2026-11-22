@@ -426,6 +426,7 @@ Deferred by the user (2026-10-24): done once Phases 7–12 are finished. Until t
     - [x] User 2026-11-22: the import button belongs on the Upload page under the normal upload, not in Settings → moved (`GoogleImportOption`), spec v0.61; 3 tests (on Upload after the picker, hidden without config, gone from Settings), 1293 TS pass
     - [x] User 2026-11-22: the import works (4 imports, 8 photos), but without locations → Google strips them (see 13.5a); hint added. User asked whether the two taps are needed: yes (the picker can only open from a tap, and Google sends no one back); kept, with one prominent "Choose your photos" button and "Open Google Photos again" (user's choice over a one-tap popup flow)
     - [x] User 2026-11-22: after Done the bar came only seconds later, or not at all for a few photos → back from Google Photos the page shows "Preparing your photos…" with a moving bar at once and checks immediately; 1.5 s polling after opening; listing shows the moving bar; done keeps a full bar; survives a reload. 4 new tests (25 import tests), 1296 TS pass
+    - [x] User 2026-11-22: shorter text in the Upload page's import box, under the box on phones like the other hints, and a small Google Photos icon → done (`GooglePhotosIcon`, drawn pinwheel; details "Up to 500 photos at a time. Videos are skipped. Google removes photo locations; upload from your phone's gallery to keep them."); checked in headless Chrome at phone and desktop width
 
 ## Phase 14 — Videos (planned)
 
@@ -659,6 +660,7 @@ Moved to the end by the user (2026-10-27): everything about prod and iOS waits u
 
 | Date | Summary |
 |---|---|
+| 2026-11-22 | Upload page import box: shorter text, under the box on phones, Google Photos icon (user request). Not pushed. |
 | 2026-11-22 | User asked about keeping locations on import and importing from iCloud; decided to keep things as they are (no Takeout `.json`, no iCloud import). Docs only: decision, spec v0.64 §2 + B-10, ARCHITECTURE. |
 | 2026-11-22 | 8.36 timeline scrubber (FR-GAL-9, spec v0.63): API month counts + start/backward paging, web scrubber with jumps and upward loading; checked in headless Chrome (3,000 fake photos), 1317 TS pass. Pushed with `ed9cf86` (import progress) as `03d8576`, CI + Deploy green (3 Lambdas updated). |
 | 2026-11-22 | Import page shows progress right after returning from Google Photos (user: bar late or missing). Not pushed. |
