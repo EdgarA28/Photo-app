@@ -5,6 +5,7 @@ import { CircleAlert, MonitorUp, WifiOff, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
+import { GoogleImportOption } from "@/import/ImportStart";
 import { useMeteredConnection } from "@/lib/connection";
 import { formatBytes } from "@/lib/format";
 import { MAX_SHARED_BYTES, MAX_SHARED_FILES } from "@/pwa/shareTarget";
@@ -203,6 +204,8 @@ function Upload() {
       )}
       <UploadPicker onFiles={(files, options) => void add(files, options)} />
       {phone && <PhoneHint />}
+      {/* Import from Google Photos (13.5g): the other way to bring photos in. */}
+      <GoogleImportOption {...(me?.email && { loginHint: me.email })} />
       {alreadyUploaded > 0 && (
         <p role="status" className="text-sm text-muted-foreground">
           {alreadyUploaded === 1

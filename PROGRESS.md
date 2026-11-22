@@ -422,6 +422,7 @@ Deferred by the user (2026-10-24): done once Phases 7–12 are finished. Until t
   - [x] **13.5g** Web: "Import from Google Photos" in Settings, `/import/google/callback` (state check, "Choose photos" button → picker, progress, summary, cancel); tests. **Done 2026-11-22**: Settings "Import" section (only with `VITE_GOOGLE_IMPORT_CLIENT_ID`), Google consent with PKCE S256 + state in sessionStorage (`import/googleConsent.ts`), `/import/google/callback` (checks state, `POST /imports/google`, then replaces itself with `/import/$importId`), `/import/$importId` (picker button in the starting tab, progress, cancel, summary; polls 3 s), API client `imports.*`. Build plumbing: api module output `import_client_id` → dev output `google_import_client_id` → deploy.yml + dev-env.sh. Spec v0.60 (separate progress page). Tests: 21 web (consent URL + PKCE, state checks incl. replay/stale/forged, picker link, callback success/rejected/forged/denied, progress states, summary texts, Settings entry), config, 2 tofu asserts; 1290 TS pass
   - [ ] **13.5h** Deploy to dev and user check on laptop + Android (installed app): import a few photos incl. a HEIC and a video (skipped), close the app mid-import, over-quota case
     - [x] First user test 2026-11-22: picked photos, nothing happened. API logs: every poll `Google get session failed: 200 invalid_response` (6 imports, all stuck at picking). Cause: `toSession` required `pickerUri` and `expireTime` on the poll answer too, which Google's GET doesn't carry (the fake Google in tests always did). Fix: `getSession` reads only `mediaItemsSet`; the fake now answers polls with only that; the create-answer error names missing fields. 2 new tests, 1292 TS pass. Left: push, then the user tries again (the stuck imports expire by themselves)
+    - [x] User 2026-11-22: the import button belongs on the Upload page under the normal upload, not in Settings → moved (`GoogleImportOption`), spec v0.61; 3 tests (on Upload after the picker, hidden without config, gone from Settings), 1293 TS pass
 
 ## Phase 14 — Videos (planned)
 
@@ -654,6 +655,7 @@ Moved to the end by the user (2026-10-27): everything about prod and iOS waits u
 
 | Date | Summary |
 |---|---|
+| 2026-11-22 | Google Photos import moved from Settings to the Upload page under the picker (user's choice), spec v0.61. Not pushed. |
 | 2026-11-22 | 13.5h first user test failed (stuck at picking): Google's session poll answer lacks fields the code required; fixed (`getSession` reads only `mediaItemsSet`). Not pushed. |
 | 2026-11-22 | 13.5g import web pages (Settings entry, consent with PKCE, callback, progress page), client ID plumbing to the web build, spec v0.60; 1290 TS pass. Pushed `e9989ee`, CI + Deploy green; live site has the import client ID. |
 | 2026-11-22 | 13.5f import infra (`imports.tf`): planned, user approved, applied to dev (`-target=module.api`, 9 added, 1 changed); verified (health, 401, settings, mapping, worker smoke). 13.5d/e pushed earlier (`db02643`, CI + Deploy green). |

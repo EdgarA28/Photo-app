@@ -58,7 +58,7 @@ function CallbackError({ error }: ErrorComponentProps) {
       <div className="flex flex-wrap gap-2">
         <ImportStartButton variant="default">Try again</ImportStartButton>
         <Button variant="outline" asChild>
-          <Link to="/settings">Back to settings</Link>
+          <Link to="/upload">Back to upload</Link>
         </Button>
       </div>
     </main>

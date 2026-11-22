@@ -3,7 +3,7 @@
  * with PKCE + state, the callback page, the import's progress page and the Settings entry.
  */
 import { GOOGLE_PHOTOS_PICKER_SCOPE } from "@photo-app/shared";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "../src/api/errors";
 import {
@@ -271,15 +271,25 @@ describe("import page (FR-IMP-5)", () => {
   });
 });
 
-describe("settings entry", () => {
-  it("offers the import when it is configured", async () => {
-    await renderAt("/settings");
-    expect(await screen.findByRole("button", { name: "Import from Google Photos" })).toBeTruthy();
+describe("entry on the upload page (user's choice: under the normal upload)", () => {
+  it("offers the import under the upload picker when it is configured", async () => {
+    await renderAt("/upload");
+    const offer = await screen.findByRole("region", { name: "Import from Google Photos" });
+    expect(within(offer).getByRole("button", { name: "Choose in Google Photos" })).toBeTruthy();
+    // After the normal upload picker in the page.
+    const picker = screen.getByRole("button", { name: /Choose photos/ });
+    expect(picker.compareDocumentPosition(offer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("hides it otherwise", async () => {
-    await renderAt("/settings", { config: { ...testConfig, googleImport: null } });
+    await renderAt("/upload", { config: { ...testConfig, googleImport: null } });
+    await screen.findByRole("heading", { name: "Upload" });
+    expect(screen.queryByRole("region", { name: "Import from Google Photos" })).toBeNull();
+  });
+
+  it("is no longer in settings", async () => {
+    await renderAt("/settings");
     await screen.findByText("Storage");
-    expect(screen.queryByRole("button", { name: "Import from Google Photos" })).toBeNull();
+    expect(screen.queryByText("Import from Google Photos")).toBeNull();
   });
 });

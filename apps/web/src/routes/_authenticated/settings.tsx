@@ -16,12 +16,10 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { ImportStartButton } from "@/import/ImportStart";
 import { meQuery } from "@/queries/me";
 import { QuotaBar } from "@/settings/QuotaBar";
 import { UsernameSection } from "@/settings/UsernameSection";
 import { isActive, useUploads } from "@/upload/useUploads";
-import { useConfig } from "@/configContext";
 import { APP_VERSION } from "@/version";
 
 // Account, storage, trash, username and logout (FR-ACC-1, FR-ACC-3, FR-DEL-3, FR-AUTH-5, 8.13).
@@ -35,7 +33,6 @@ export const Route = createFileRoute("/_authenticated/settings")({
 function Settings() {
   const { api } = Route.useRouteContext();
   const { data: me } = useSuspenseQuery(meQuery(api));
-  const { googleImport } = useConfig();
 
   return (
     <main className="mx-auto max-w-2xl space-y-8">
@@ -49,15 +46,6 @@ function Settings() {
       <Section title="Storage">
         <QuotaBar usage={me.usage} />
       </Section>
-
-      {googleImport && (
-        <Section
-          title="Import"
-          description="Copy photos you choose in Google Photos into your library (up to 500 at a time). Videos are skipped."
-        >
-          <ImportStartButton loginHint={me.email} />
-        </Section>
-      )}
 
       <Section
         title="Trash"
