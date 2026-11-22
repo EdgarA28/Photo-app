@@ -22,7 +22,7 @@
 
 ## Next up
 
-Everything below is on dev, deployed by CI from `main` (latest `03d8576`, 2026-11-22). The user checks on dev passed 2026-11-21; next: user checks: 8.36 (timeline scrubber), 13.5h (Google Photos import), 8.35; Phase 12 leftovers.
+Everything below is on dev, deployed by CI from `main` (latest `b5f5c98`, 2026-11-22). The user checks on dev passed 2026-11-21; next: user checks: 8.36 (timeline scrubber), 13.5h (Google Photos import), 8.35; Phase 12 leftovers.
 
 1. ~~**User checks on dev**~~ done 2026-11-21 (user): 8.34 phone layout, 8.33 pinch (Videos, album, select mode), 14.9 HEVC playback, 8.29–8.31, 8.26/8.27, 8.21–8.23, 13.3 trash, 13.2h map, 8.16/8.17, select mode, 9.8 share target, 12.2 CSP console check: all pass.
 2. ~~**6.11 optional look**~~ done 2026-11-03: the 03:00 UTC sweep removed `IMG_0303.jpg` and `IMG_0082.jpg` (`removed: 2`, `stuck: 0`, `failed: 0`, `cleared: 4500` old markers of photos no longer pending); both photo items gone, no `pending` photos left, `bytesReserved` = `bytesUsed` for all 7 users; 558 markers from 2026-11-02 remain (< 24 h old, next run clears them).
@@ -660,7 +660,7 @@ Moved to the end by the user (2026-10-27): everything about prod and iOS waits u
 
 | Date | Summary |
 |---|---|
-| 2026-11-22 | Upload page import box: shorter text, under the box on phones, Google Photos icon (user request). Not pushed. |
+| 2026-11-22 | Upload page import box: shorter text, under the box on phones, Google Photos icon (user request). Pushed `b5f5c98` with the scope docs (`ac962fc`), CI + Deploy green (web only). |
 | 2026-11-22 | User asked about keeping locations on import and importing from iCloud; decided to keep things as they are (no Takeout `.json`, no iCloud import). Docs only: decision, spec v0.64 §2 + B-10, ARCHITECTURE. |
 | 2026-11-22 | 8.36 timeline scrubber (FR-GAL-9, spec v0.63): API month counts + start/backward paging, web scrubber with jumps and upward loading; checked in headless Chrome (3,000 fake photos), 1317 TS pass. Pushed with `ed9cf86` (import progress) as `03d8576`, CI + Deploy green (3 Lambdas updated). |
 | 2026-11-22 | Import page shows progress right after returning from Google Photos (user: bar late or missing). Not pushed. |
