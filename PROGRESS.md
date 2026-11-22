@@ -22,7 +22,7 @@
 
 ## Next up
 
-Everything below is on dev, deployed by CI from `main` (latest `e1cc543`, 2026-11-21). The user checks on dev passed 2026-11-21; next: 13.5h user check (Google Photos import), 8.35 user check (one icon size at startup), Phase 12 leftovers.
+Everything below is on dev, deployed by CI from `main` (latest `e9989ee`, 2026-11-22). The user checks on dev passed 2026-11-21; next: 13.5h user check (Google Photos import), 8.35 user check (one icon size at startup), Phase 12 leftovers.
 
 1. ~~**User checks on dev**~~ done 2026-11-21 (user): 8.34 phone layout, 8.33 pinch (Videos, album, select mode), 14.9 HEVC playback, 8.29–8.31, 8.26/8.27, 8.21–8.23, 13.3 trash, 13.2h map, 8.16/8.17, select mode, 9.8 share target, 12.2 CSP console check: all pass.
 2. ~~**6.11 optional look**~~ done 2026-11-03: the 03:00 UTC sweep removed `IMG_0303.jpg` and `IMG_0082.jpg` (`removed: 2`, `stuck: 0`, `failed: 0`, `cleared: 4500` old markers of photos no longer pending); both photo items gone, no `pending` photos left, `bytesReserved` = `bytesUsed` for all 7 users; 558 markers from 2026-11-02 remain (< 24 h old, next run clears them).
@@ -653,7 +653,7 @@ Moved to the end by the user (2026-10-27): everything about prod and iOS waits u
 
 | Date | Summary |
 |---|---|
-| 2026-11-22 | 13.5g import web pages (Settings entry, consent with PKCE, callback, progress page), client ID plumbing to the web build, spec v0.60; 1290 TS pass. |
+| 2026-11-22 | 13.5g import web pages (Settings entry, consent with PKCE, callback, progress page), client ID plumbing to the web build, spec v0.60; 1290 TS pass. Pushed `e9989ee`, CI + Deploy green; live site has the import client ID. |
 | 2026-11-22 | 13.5f import infra (`imports.tf`): planned, user approved, applied to dev (`-target=module.api`, 9 added, 1 changed); verified (health, 401, settings, mapping, worker smoke). 13.5d/e pushed earlier (`db02643`, CI + Deploy green). |
 | 2026-11-22 | 13.5e thumbnail Lambda date fallback: `x-amz-meta-taken-at` when EXIF has no date; 7 new pytest cases, 211 pass. Not pushed. |
 | 2026-11-22 | 13.5d import worker (`list` + `copy`, exact-once counting, finish), spec v0.59 (in-memory copy, counted marker); 30 new tests, 1268 TS pass. Not pushed. |
