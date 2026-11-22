@@ -152,6 +152,60 @@ def test_taken_at_falls_back_to_upload_time(aws: tuple[Any, Any], jpeg_plain: by
     assert item["GSI1SK"]["S"] == f"TAKEN#{UPLOADED_AT}#{PHOTO}"
 
 
+def upload_imported(s3: Any, data: bytes, taken_at: str) -> dict[str, Any]:
+    """What the import worker stores (13.5d): the original with Google's date as metadata."""
+    etag = s3.put_object(Bucket=BUCKET, Key=ORIGINAL, Body=data, Metadata={"taken-at": taken_at})[
+        "ETag"
+    ].strip('"')
+    return s3_event(ORIGINAL, len(data), etag)
+
+
+def test_taken_at_falls_back_to_googles_date_for_imports(
+    aws: tuple[Any, Any], jpeg_plain: bytes
+) -> None:
+    # FR-IMP-4, §10: an imported photo without an EXIF date is placed by Google's creation time.
+    s3, dynamodb = aws
+    put_pending(dynamodb)
+    handler_module.handler(upload_imported(s3, jpeg_plain, "2019-08-03T17:45:12.000Z"))
+    item = get(dynamodb, PHOTO_KEY)
+    assert item is not None
+    assert item["takenAt"]["S"] == "2019-08-03T17:45:12.000Z"
+    assert item["GSI1SK"]["S"] == f"TAKEN#2019-08-03T17:45:12.000Z#{PHOTO}"
+
+
+def test_exif_date_wins_over_googles_date(aws: tuple[Any, Any], jpeg_rotated: bytes) -> None:
+    s3, dynamodb = aws
+    put_pending(dynamodb, declared=len(jpeg_rotated))
+    handler_module.handler(upload_imported(s3, jpeg_rotated, "2019-08-03T17:45:12.000Z"))
+    item = get(dynamodb, PHOTO_KEY)
+    assert item is not None
+    assert item["takenAt"]["S"] == "2024-05-01T12:30:15.123Z"
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["soon", "2019-08-03T17:45:12", "1800-01-01T00:00:00Z", "2999-01-01T00:00:00Z", ""],
+)
+def test_unusable_googles_date_falls_back_to_upload_time(
+    aws: tuple[Any, Any], jpeg_plain: bytes, value: str
+) -> None:
+    s3, dynamodb = aws
+    put_pending(dynamodb)
+    handler_module.handler(upload_imported(s3, jpeg_plain, value))
+    item = get(dynamodb, PHOTO_KEY)
+    assert item is not None
+    assert item["takenAt"]["S"] == UPLOADED_AT
+
+
+def test_metadata_taken_at_reads_offsets_as_utc() -> None:
+    value = processor_module.metadata_taken_at(
+        {"Metadata": {"taken-at": "2019-08-03T19:45:12+02:00"}}
+    )
+    assert value is not None
+    assert value.isoformat() == "2019-08-03T17:45:12+00:00"
+    assert processor_module.metadata_taken_at({}) is None
+
+
 def test_duplicate_event_is_idempotent(aws: tuple[Any, Any], jpeg_plain: bytes) -> None:
     s3, dynamodb = aws
     put_pending(dynamodb)

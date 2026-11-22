@@ -556,7 +556,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 | Errors — transient | The record is reported as a batch item failure → the message returns after the visibility timeout (6 × the Lambda timeout) → after 5 receives the SQS DLQ (14-day retention). A photo still `pending` a day after its original arrived is sent to the queue again by the daily stale-pending sweep (6.11). |
 | Packaging | Native wheels for `manylinux` aarch64 (`pip install --platform manylinux2014_aarch64 --only-binary=:all:`) or Docker build |
 | Logs | Structured JSON; 30-day retention |
-| Date fallback (imports) | Imported originals carry `x-amz-meta-taken-at` (Google's `createTime`); used when EXIF has no `DateTimeOriginal`, before the upload time (FR-IMP-4) |
+| Date fallback (imports) | Imported originals carry `x-amz-meta-taken-at` (Google's `createTime`); used when EXIF has no `DateTimeOriginal`, before the upload time (FR-IMP-4). Ignored when unreadable, without a time zone, before 1826 or more than a day in the future. Browser uploads can't set it (the pre-signed POST policy allows no extra fields) |
 
 ### 10.1 Import worker (FR-IMP-*)
 

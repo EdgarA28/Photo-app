@@ -2,7 +2,8 @@
 which holds the contract with the API and the shared transaction). Reads the whole original
 (≤ 50 MB, FR-UP-3) and makes the thumb and preview with Pillow (`imaging.py`)."""
 
-from typing import ClassVar
+from datetime import UTC, datetime
+from typing import Any, ClassVar
 
 from botocore.exceptions import ClientError
 
@@ -27,6 +28,34 @@ __all__ = [
     "Processor",
     "conflict_pause",
 ]
+
+
+TAKEN_AT_METADATA = "taken-at"
+"""`x-amz-meta-taken-at`: Google's creation time, set by the import worker (13.5d, §10). Uploads
+from the browser can't carry it (the pre-signed POST policy allows no extra fields)."""
+
+EARLIEST_TAKEN_AT = datetime(1826, 1, 1, tzinfo=UTC)
+"""Before the first photograph: such a date is a broken value, not a date taken."""
+
+
+def metadata_taken_at(obj: dict[str, Any]) -> datetime | None:
+    """The `taken-at` object metadata as an aware UTC datetime, or None when it is missing,
+    unreadable, without a time zone, before photography or more than a day in the future (the
+    caller then falls back to the upload time, §8.2)."""
+    raw = (obj.get("Metadata") or {}).get(TAKEN_AT_METADATA)
+    if not isinstance(raw, str):
+        return None
+    try:
+        value = datetime.fromisoformat(raw.strip())
+    except ValueError:
+        return None
+    if value.tzinfo is None:
+        return None
+    value = value.astimezone(UTC)
+    latest = datetime.now(UTC).timestamp() + 86_400
+    if value < EARLIEST_TAKEN_AT or value.timestamp() > latest:
+        return None
+    return value
 
 
 class Processor(BaseProcessor):
@@ -57,7 +86,8 @@ class Processor(BaseProcessor):
             etag=processed_etag,
             width=image.width,
             height=image.height,
-            taken_at=image.taken_at,
+            # EXIF first; an import from Google Photos also carries Google's date (FR-IMP-4).
+            taken_at=image.taken_at or metadata_taken_at(obj),
             gps=image.gps,
             thumb=image.thumb,
             preview=image.preview,
