@@ -22,7 +22,7 @@
 
 ## Next up
 
-Everything below is on dev, deployed by CI from `main` (latest `d0e87d4`, 2026-11-22). The user checks on dev passed 2026-11-21; next: 13.5h user check (Google Photos import), 8.35 user check (one icon size at startup), Phase 12 leftovers.
+Everything below is on dev, deployed by CI from `main` (latest `4788005`, 2026-11-22). The user checks on dev passed 2026-11-21; next: 13.5h user check (Google Photos import), 8.35 user check (one icon size at startup), Phase 12 leftovers.
 
 1. ~~**User checks on dev**~~ done 2026-11-21 (user): 8.34 phone layout, 8.33 pinch (Videos, album, select mode), 14.9 HEVC playback, 8.29–8.31, 8.26/8.27, 8.21–8.23, 13.3 trash, 13.2h map, 8.16/8.17, select mode, 9.8 share target, 12.2 CSP console check: all pass.
 2. ~~**6.11 optional look**~~ done 2026-11-03: the 03:00 UTC sweep removed `IMG_0303.jpg` and `IMG_0082.jpg` (`removed: 2`, `stuck: 0`, `failed: 0`, `cleared: 4500` old markers of photos no longer pending); both photo items gone, no `pending` photos left, `bytesReserved` = `bytesUsed` for all 7 users; 558 markers from 2026-11-02 remain (< 24 h old, next run clears them).
@@ -656,7 +656,7 @@ Moved to the end by the user (2026-10-27): everything about prod and iOS waits u
 
 | Date | Summary |
 |---|---|
-| 2026-11-22 | User: import works, but no locations. Checked: Google strips GPS from Picker downloads (not our bug) → location hint on the Upload box and in the summary. User kept the two taps (picker needs a tap after the consent redirect) → one prominent "Choose your photos" step. Spec v0.62, 1293 TS pass. Not pushed. |
+| 2026-11-22 | User: import works, but no locations. Checked: Google strips GPS from Picker downloads (not our bug) → location hint on the Upload box and in the summary. User kept the two taps (picker needs a tap after the consent redirect) → one prominent "Choose your photos" step. Spec v0.62, 1293 TS pass. Pushed `4788005`, CI + Deploy green (web only). |
 | 2026-11-22 | Google Photos import moved from Settings to the Upload page under the picker (user's choice), spec v0.61. Pushed with the poll fix (`d0e87d4`), CI + Deploy green (3 Lambdas updated: API, purge, import worker). |
 | 2026-11-22 | 13.5h first user test failed (stuck at picking): Google's session poll answer lacks fields the code required; fixed (`getSession` reads only `mediaItemsSet`). Pushed `d0e87d4`. |
 | 2026-11-22 | 13.5g import web pages (Settings entry, consent with PKCE, callback, progress page), client ID plumbing to the web build, spec v0.60; 1290 TS pass. Pushed `e9989ee`, CI + Deploy green; live site has the import client ID. |
