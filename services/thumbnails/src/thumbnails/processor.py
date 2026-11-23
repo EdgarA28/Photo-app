@@ -19,7 +19,7 @@ from .base import (
     conflict_pause,
 )
 from .imaging import MAX_SOURCE_BYTES, PermanentImageError, process_image
-from .similarity import similarity
+from .similarity import SET_CLAUSE, item_values, similarity
 
 __all__ = [
     "DERIVED_CACHE_CONTROL",
@@ -94,10 +94,7 @@ class Processor(BaseProcessor):
             gps=image.gps,
             thumb=image.thumb,
             preview=image.preview,
-            extra_set=", similarityHash = :simHash, sharpness = :sharpness",
-            extra_values={
-                ":simHash": {"S": similar.hash},
-                ":sharpness": {"N": f"{similar.sharpness:.2f}"},
-            },
+            extra_set=", " + SET_CLAUSE,
+            extra_values=item_values(similar),
             log={"similarityHash": similar.hash, "sharpness": round(similar.sharpness, 2)},
         )

@@ -9,6 +9,7 @@ Pillow only (no numpy), so the photo package stays as it is.
 
 import io
 from dataclasses import dataclass
+from typing import Any
 
 from PIL import Image, ImageMath
 
@@ -24,6 +25,18 @@ class Similarity:
     """64-bit difference hash, 16 lowercase hex characters (§8.2 `similarityHash`)."""
     sharpness: float
     """Variance of the Laplacian of the grayscale preview; higher = sharper (§8.2 `sharpness`)."""
+
+
+SET_CLAUSE = "similarityHash = :simHash, sharpness = :sharpness"
+"""The item attributes, for the `ready` update and the backfill (8.37c) alike."""
+
+
+def item_values(result: Similarity) -> dict[str, Any]:
+    """DynamoDB values for `SET_CLAUSE` (sharpness with 2 decimals)."""
+    return {
+        ":simHash": {"S": result.hash},
+        ":sharpness": {"N": f"{result.sharpness:.2f}"},
+    }
 
 
 def similarity(thumb: bytes, preview: bytes) -> Similarity:
