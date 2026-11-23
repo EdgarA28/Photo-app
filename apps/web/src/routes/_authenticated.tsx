@@ -16,8 +16,14 @@ import { useLargeBatchGuard, useOnline } from "@/upload/useUploads";
 // stored session, `getUser` decides (a network error shows the error page). That user's saved
 // Query cache is restored before any loader reads the cache. Pages render only once the browser
 // holds media cookies for this user (7.3), so the first images don't fail with 403: the ones
-// issued on an earlier start if they're still valid (8.25c, renewed in the background), else new
-// ones, which wait for the token refresh. ready() never throws and runs alongside the restore.
+// issued on an earlier start, even if they have run out (8.25c, 8.35b: renewed in the
+// background, failed images retry), new ones only on a device that never had any for this user.
+// ready() never throws and runs alongside the restore. The restore gets at most
+// RESTORE_WAIT_MS: IndexedDB can stall behind a frozen app tab (8.24), and the app shouldn't sit
+// on the splash for it; a late restore still fills in what the network hasn't (8.35b).
+const RESTORE_WAIT_MS = 2000;
+const restoreWait = () => new Promise<void>((resolve) => setTimeout(resolve, RESTORE_WAIT_MS));
+
 export const Route = createFileRoute("/_authenticated")({
   beforeLoad: async ({ context, location }) => {
     const user = (await context.auth.getStoredUser()) ?? (await context.auth.getUser());
@@ -29,7 +35,10 @@ export const Route = createFileRoute("/_authenticated")({
         .catch((error: unknown) => console.warn("Deleting the saved query cache failed", error));
       throw redirect({ to: "/login", search: { redirect: location.href } });
     }
-    await Promise.all([context.persistedCache.start(user.sub), context.media.ready(user.sub)]);
+    await Promise.all([
+      Promise.race([context.persistedCache.start(user.sub), restoreWait()]),
+      context.media.ready(user.sub),
+    ]);
     return { user };
   },
   component: AuthenticatedLayout,

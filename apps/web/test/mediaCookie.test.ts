@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MEDIA_COOKIE_TTL_SECONDS } from "@photo-app/shared";
 import { ApiRequestError } from "../src/api/errors";
-import { createMediaCookies, MEDIA_COOKIE_MARGIN_MS } from "../src/auth/mediaCookie";
+import { createMediaCookies, mediaCookieIssues } from "../src/auth/mediaCookie";
 import { fakeApi, MemoryStorage, testUser } from "./fakes";
 
 const EXPIRES = { expiresAt: "2026-10-25T20:00:00.000Z" };
@@ -103,25 +103,39 @@ describe("ready() for the route guard", () => {
     return next;
   }
 
-  it("doesn't wait while the cookies issued on an earlier start are still valid", async () => {
-    const { media, request, posts } = await restartedAfter(TTL_MS / 2);
+  it.each([
+    ["still valid", TTL_MS / 2],
+    // 8.35b: opening the app after 8 h doesn't wait for the refresh and the API either; images
+    // that fail meanwhile retry once the new cookies arrive (useImageFailed).
+    ["run out", TTL_MS + 1],
+  ])("doesn't wait when cookies were issued on this device before (%s)", async (_, ago) => {
+    const { media, request, posts } = await restartedAfter(ago);
     request.mockImplementation(hang);
     await media.ready(testUser.sub);
     // Renewed in the background anyway: a new page load means a new token.
     expect(posts()).toHaveLength(1);
   });
 
-  it.each([
-    ["nothing was issued on this device", null],
-    ["they run out within the margin", TTL_MS - MEDIA_COOKIE_MARGIN_MS + 1],
-    ["they have run out", TTL_MS + 1],
-  ])("waits for new cookies when %s", async (_, ago) => {
-    const { media, request } = ago === null ? setup() : await restartedAfter(ago);
+  it("waits for new cookies when nothing was issued on this device", async () => {
+    const { media, request } = setup();
     request.mockImplementation(hang);
     const ready = vi.fn();
     void media.ready(testUser.sub).then(ready);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(ready).not.toHaveBeenCalled();
+  });
+
+  it("announces each issue, so failed images can try again", async () => {
+    const { media, setToken } = setup();
+    const listener = vi.fn();
+    const unsubscribe = mediaCookieIssues.subscribe(listener);
+    const before = mediaCookieIssues.current();
+    await media.ensure();
+    setToken("access-2");
+    await media.ensure();
+    expect(mediaCookieIssues.current()).toBe(before + 2);
+    expect(listener).toHaveBeenCalledTimes(2);
+    unsubscribe();
   });
 
   it("waits when the cookies were issued for another account", async () => {

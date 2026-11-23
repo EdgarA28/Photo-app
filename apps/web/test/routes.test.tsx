@@ -144,6 +144,13 @@ describe("authentication guard (FR-AUTH-6)", () => {
     expect(persistedCache.start).toHaveBeenCalledWith(testUser.sub);
   });
 
+  // 8.35b: IndexedDB can stall behind a frozen app tab (8.24); the splash mustn't wait for it.
+  it("opens the app when the saved cache can't be read within 2 s", async () => {
+    const persistedCache = { start: vi.fn(() => new Promise<void>(() => {})), clear: vi.fn() };
+    void renderAt("/gallery", { persistedCache });
+    expect(await screen.findByRole("heading", { name: "Gallery" }, { timeout: 4000 })).toBeTruthy();
+  });
+
   it("deletes the saved cache when the session has ended without a logout (9.3)", async () => {
     const { persistedCache } = await renderAt("/gallery", { auth: fakeAuth() });
     expect(persistedCache.clear).toHaveBeenCalled();

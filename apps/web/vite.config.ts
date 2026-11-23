@@ -65,9 +65,13 @@ export default defineConfig(({ mode }) => {
           start_url: "/gallery",
           scope: "/",
           display: "standalone",
-          // Light theme `--background` (index.css); the manifest has no per-scheme colours.
-          theme_color: "#ffffff",
-          background_color: "#ffffff",
+          // Android's launch screen (status bar + background around the icon). The manifest has
+          // one colour for both schemes, so it's the icon's own background (logo.svg, the dark
+          // theme `--background`), and the app's splash (index.css #splash) uses the same one:
+          // launch screen → splash is one dark screen with one icon, in light and dark mode (8.35).
+          // The per-scheme `theme-color` metas in index.html take over once the page has loaded.
+          theme_color: "#0a0a0a",
+          background_color: "#0a0a0a",
           // Android share sheet (9.6, FR-PWA-4): shared photos are POSTed to the service worker
           // (src/pwa/shareTarget.ts, which has the path and field name). Any image: the upload
           // page explains which types it can't take.

@@ -15,10 +15,12 @@ export interface MediaCookies {
    */
   ensure(): Promise<void>;
   /**
-   * For the route guard (8.25c): starts `ensure()` and waits for it only if the cookies issued for
-   * `userId` on this device (an earlier page load included) may run out soon; otherwise renews
-   * them in the background, so a restart doesn't wait for the token refresh and the API. Never
-   * throws.
+   * For the route guard (8.25c): starts `ensure()` and waits for it only if this device never got
+   * cookies for `userId` (first sign-in, another account). Otherwise they're renewed in the
+   * background, even when they have run out (opening the app after more than 8 h): a start then
+   * doesn't wait for the token refresh and the API (8.35b). Images that fail meanwhile load again
+   * once the new cookies arrive (`useImageFailed`, via `mediaCookieIssues`); most thumbnails come
+   * from the service worker's cache anyway (9.2). Never throws.
    */
   ready(userId: string): Promise<void>;
   /** Expires the cookies (logout, FR-AUTH-5). Needs a valid token, so call it before revoking. */
@@ -36,8 +38,24 @@ export interface MediaCookieDeps {
 /** `{ userId, validUntil }` of the last cookies issued on this device: only an expiry, no secret. */
 const ISSUED_KEY = "photo-app.media-cookie";
 const issuedSchema = z.object({ userId: z.string(), validUntil: z.number() });
-/** Cookies with less left than this are renewed before the page renders (images load for long). */
-export const MEDIA_COOKIE_MARGIN_MS = 5 * 60 * 1000;
+
+let issues = 0;
+const issueListeners = new Set<() => void>();
+/**
+ * Counts the cookies issued in this page (a `useSyncExternalStore` source): an image that failed
+ * with the old (or no) cookies gets another try after the next issue (8.35b).
+ */
+export const mediaCookieIssues = {
+  subscribe(listener: () => void) {
+    issueListeners.add(listener);
+    return () => void issueListeners.delete(listener);
+  },
+  current: () => issues,
+};
+function announceIssue() {
+  issues += 1;
+  for (const listener of issueListeners) listener();
+}
 
 export function createMediaCookies({
   auth,
@@ -67,6 +85,7 @@ export function createMediaCookies({
           issuedFor = token;
           const userId = (await auth.getStoredUser())?.sub;
           if (userId) remember({ userId, validUntil: sentAt + MEDIA_COOKIE_TTL_SECONDS * 1000 });
+          announceIssue();
         })
         .finally(() => {
           pending = null;
@@ -102,8 +121,7 @@ export function createMediaCookies({
 
     async ready(userId) {
       const renewed = ensure();
-      const issued = recall();
-      if (issued?.userId === userId && issued.validUntil - now() > MEDIA_COOKIE_MARGIN_MS) return;
+      if (recall()?.userId === userId) return;
       await renewed;
     },
 

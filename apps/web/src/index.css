@@ -137,14 +137,18 @@
   }
 }
 
-/* Launch splash (index.html): the app icon on the theme background until React renders a route.
-   This stylesheet is render-blocking in the build, so the splash is styled from the first paint. */
+/* Launch splash (index.html): the app icon until React renders a route. This stylesheet is
+   render-blocking in the build, so the splash is styled from the first paint. Always the manifest's
+   `background_color` (vite.config.ts) = the icon's own background, not the theme's: Android shows
+   its launch screen in that colour first, so a light-theme splash after it was a second, white
+   screen with a second-looking icon (8.35). */
 #splash {
   position: fixed;
   inset: 0;
   display: grid;
   place-items: center;
-  background: var(--background);
+  background: #0a0a0a;
+  color-scheme: dark;
 }
 #splash img {
   border-radius: 22%;
