@@ -95,6 +95,13 @@ export interface PhotoRecord {
   trashedAt?: string;
   purgeAt?: string;
   trashedAlbumIds?: Set<string>;
+  /**
+   * Similar photos (8.37, §8.2): set on ready photos (not videos) by the thumbnail Lambda;
+   * `topPickAt` by `POST /photos/{id}/top-pick` (FR-GAL-11).
+   */
+  similarityHash?: string;
+  sharpness?: number;
+  topPickAt?: string;
 }
 
 /** A trashed photo due for the purge (any user's). */
@@ -282,6 +289,36 @@ export function photosRepo(db: Db) {
             UpdateExpression: "REMOVE uploadId",
             ConditionExpression: "uploadId = :uploadId",
             ExpressionAttributeValues: { ":uploadId": uploadId },
+          }),
+        );
+        return true;
+      } catch (err) {
+        if (isConditionalCheckFailed(err)) return false;
+        throw err;
+      }
+    },
+
+    /**
+     * Makes an own photo its stack's top pick (FR-GAL-11): `topPickAt` = `now`; the newest choice
+     * in a stack wins, so the earlier pick needs no clearing. Only a ready photo (not a video) out
+     * of the trash; false otherwise, and for a photo that doesn't exist or isn't the caller's.
+     */
+    async setTopPick(userId: string, photoId: string, now: Date): Promise<boolean> {
+      try {
+        await db.client.send(
+          new UpdateCommand({
+            TableName: db.table,
+            Key: photoKey(userId, photoId),
+            UpdateExpression: "SET topPickAt = :now",
+            ConditionExpression:
+              "attribute_exists(PK) AND #status = :ready AND attribute_not_exists(trashedAt) " +
+              "AND (attribute_not_exists(mediaType) OR mediaType = :photo)",
+            ExpressionAttributeNames: { "#status": "status" },
+            ExpressionAttributeValues: {
+              ":now": now.toISOString(),
+              ":ready": "ready",
+              ":photo": "photo",
+            },
           }),
         );
         return true;

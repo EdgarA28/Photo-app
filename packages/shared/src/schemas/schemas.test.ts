@@ -124,7 +124,38 @@ describe("photoSchema", () => {
       purgeAt: null,
       ownerId: null,
       ownerUsername: null,
+      // Similar photos (8.37): an API from before them.
+      similarityHash: null,
+      sharpness: null,
+      topPickAt: null,
     });
+  });
+
+  test("similar-photo fields (8.37, FR-GAL-10/11)", () => {
+    const base = photoSchema.parse({
+      photoId: PHOTO_ID,
+      status: "ready",
+      fileName: "a.jpg",
+      contentType: "image/jpeg",
+      sizeBytes: 10,
+      width: 4000,
+      height: 3000,
+      takenAt: "2026-10-18T10:00:00Z",
+      uploadedAt: "2026-10-18T10:00:00Z",
+      thumbUrl: "/t",
+      previewUrl: "/p",
+    });
+    const photo = { ...base, similarityHash: "0123456789abcdef", sharpness: 92.45 };
+    expect(photoSchema.parse({ ...photo, topPickAt: "2026-11-23T10:00:00.000Z" })).toMatchObject({
+      similarityHash: "0123456789abcdef",
+      sharpness: 92.45,
+      topPickAt: "2026-11-23T10:00:00.000Z",
+    });
+    for (const bad of ["0123456789ABCDEF", "0123456789abcde", "0123456789abcdef0", "xyz"]) {
+      expect(photoSchema.safeParse({ ...photo, similarityHash: bad }).success, bad).toBe(false);
+    }
+    expect(photoSchema.safeParse({ ...photo, sharpness: -1 }).success).toBe(false);
+    expect(photoSchema.safeParse({ ...photo, topPickAt: "yesterday" }).success).toBe(false);
   });
 
   test("a processed video (FR-VID-4, FR-VID-5)", () => {

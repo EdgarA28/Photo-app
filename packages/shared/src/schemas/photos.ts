@@ -7,6 +7,7 @@ import {
   VIDEO_CONTENT_TYPES,
   MAX_PHOTOS_PER_SAVE_REQUEST,
   MAX_UPLOAD_BYTES,
+  SIMILARITY_HASH_REGEX,
 } from "../constants";
 import { idSchema, isoDateTimeSchema, pageQuerySchema, pageSchema, userIdSchema } from "./common";
 import { photoPlaceSchema } from "./places";
@@ -91,6 +92,16 @@ export const photoSchema = z.object({
   ownerId: userIdSchema.nullable().default(null),
   /** The owner's current username; set in album photo lists only (who added it), else null. */
   ownerUsername: z.string().nullable().default(null),
+  /**
+   * Similar photos (8.37, FR-GAL-10/11), own photos only (stacks are in the Gallery only): the
+   * difference hash and sharpness the thumbnail Lambda measured on a ready photo, and when the user
+   * made it the top pick of its stack. Null for videos, photos not processed yet or processed
+   * before 8.37 (until the backfill), and for share recipients. Missing (an API from before it)
+   * reads as null.
+   */
+  similarityHash: z.string().regex(SIMILARITY_HASH_REGEX).nullable().default(null),
+  sharpness: z.number().nonnegative().nullable().default(null),
+  topPickAt: isoDateTimeSchema.nullable().default(null),
 });
 export type Photo = z.infer<typeof photoSchema>;
 

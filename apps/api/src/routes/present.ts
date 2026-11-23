@@ -50,6 +50,10 @@ export function toPhoto(record: PhotoRecord): Photo {
     purgeAt: record.purgeAt ?? null,
     ownerId: record.userId,
     ownerUsername: null,
+    // Similar photos (8.37): photos only; the Lambda never sets them on videos.
+    similarityHash: record.similarityHash ?? null,
+    sharpness: record.sharpness ?? null,
+    topPickAt: record.topPickAt ?? null,
   };
 }
 
@@ -151,6 +155,10 @@ export async function toSharedPhoto(
     previewUrl,
     videoUrl,
     ownerUsername,
+    // Stacks are the owner's Gallery only (FR-GAL-10): nothing about them leaves for others.
+    similarityHash: null,
+    sharpness: null,
+    topPickAt: null,
   };
 }
 

@@ -160,6 +160,12 @@ export const MEDIA_COOKIE_TTL_SECONDS = 8 * 60 * 60;
 export const THUMB_MAX_EDGE = 400;
 export const PREVIEW_MAX_EDGE = 1600;
 
+/**
+ * Similar photos (8.37, FR-GAL-10/11/12): the thumbnail Lambda's difference hash of a ready photo,
+ * 64 bits as 16 lowercase hex characters (§8.2, §10; `services/thumbnails/.../similarity.py`).
+ */
+export const SIMILARITY_HASH_REGEX = /^[0-9a-f]{16}$/;
+
 // Import from Google Photos (13.5, §6.9, §10.1, §11.5)
 /** Most photos one import copies (FR-IMP-2). */
 export const MAX_PHOTOS_PER_IMPORT = 500;

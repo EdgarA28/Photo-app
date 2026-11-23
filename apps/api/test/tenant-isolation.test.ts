@@ -313,6 +313,18 @@ const cases: Case[] = [
     }),
   },
   {
+    route: "POST /api/photos/:photoId/top-pick",
+    name: "stranger makes someone else's photo a top pick (8.37b)",
+    foreign: () => ({ as: w.mallory, method: "POST", path: `/photos/${w.p1}/top-pick` }),
+    missing: () => ({ as: w.mallory, method: "POST", path: `/photos/${id()}/top-pick` }),
+  },
+  {
+    route: "POST /api/photos/:photoId/top-pick",
+    name: "recipient makes a shared photo a top pick (8.37b)",
+    foreign: () => ({ as: w.bob, method: "POST", path: `/photos/${w.p1}/top-pick` }),
+    missing: () => ({ as: w.bob, method: "POST", path: `/photos/${id()}/top-pick` }),
+  },
+  {
     route: "DELETE /api/photos/:photoId",
     name: "stranger deletes a photo",
     foreign: () => ({ as: w.mallory, method: "DELETE", path: `/photos/${w.p1}` }),

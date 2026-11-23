@@ -18,7 +18,7 @@ import {
 import type { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../env";
-import { AppError, orNotFound, quotaExceeded } from "../lib/errors";
+import { AppError, notFound, orNotFound, quotaExceeded } from "../lib/errors";
 import { abortUpload, objectKeys } from "../lib/objects";
 import { validate } from "../lib/validation";
 import type { PhotoRecord } from "../repo";
@@ -163,6 +163,18 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, media, config }
       return c.json(body);
     },
   );
+
+  /**
+   * Makes an own ready photo its stack's top pick (8.37b, FR-GAL-11) → 204. The web app decides
+   * what the stack is (§12.3); this only records the choice. Someone else's photo, a video, a
+   * photo not ready or in the trash → 404 (NFR-SEC-2).
+   */
+  app.post("/photos/:photoId/top-pick", validate("param", photoParam), async (c) => {
+    const { photoId } = c.req.valid("param");
+    const done = await repos.photos.setTopPick(c.get("userId"), photoId, new Date());
+    if (!done) throw notFound("Photo not found");
+    return c.body(null, 204);
+  });
 
   /**
    * Download of an original under its file name (FR-DL-1/2): 5-min pre-signed GET with
