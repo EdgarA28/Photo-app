@@ -130,6 +130,9 @@ def test_ready_iphone_like_video(aws: tuple[Any, Any], mov_hevc_portrait: bytes)
     assert item["status"]["S"] == "ready"
     assert (item["width"]["N"], item["height"]["N"]) == ("240", "320")
     assert item["durationMs"]["N"] == "2000"
+    # Videos are never stacked or listed as duplicates (FR-GAL-10, 8.37a).
+    assert "similarityHash" not in item
+    assert "sharpness" not in item
     assert item["videoCodec"]["S"] == "hevc"
     assert item["playable"]["BOOL"] is False
     assert item["mediaType"]["S"] == "video"

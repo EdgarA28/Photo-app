@@ -15,6 +15,7 @@ from PIL import ExifTags, Image
 from thumbnails import handler as handler_module
 from thumbnails import processor as processor_module
 from thumbnails.processor import DERIVED_CACHE_CONTROL, Processor
+from thumbnails.similarity import similarity
 
 BUCKET = "photo-app-photos-test"
 TABLE = "photo-app-test"
@@ -132,6 +133,23 @@ def test_ready(aws: tuple[Any, Any], jpeg_rotated: bytes) -> None:
         assert max(Image.open(io.BytesIO(body)).size) == edge
 
 
+def test_ready_stores_similarity_values(aws: tuple[Any, Any], jpeg_rotated: bytes) -> None:
+    """8.37a (FR-GAL-10/11/12): the hash and sharpness of the stored thumb and preview, so the
+    backfill (8.37c), which reads them back from S3, gets the same values."""
+    s3, dynamodb = aws
+    put_pending(dynamodb, declared=len(jpeg_rotated))
+
+    handler_module.handler(upload(s3, jpeg_rotated))
+
+    item = get(dynamodb, PHOTO_KEY)
+    assert item is not None
+    thumb = s3.get_object(Bucket=BUCKET, Key=THUMB)["Body"].read()
+    preview = s3.get_object(Bucket=BUCKET, Key=PREVIEW)["Body"].read()
+    expected = similarity(thumb, preview)
+    assert item["similarityHash"]["S"] == expected.hash
+    assert float(item["sharpness"]["N"]) == round(expected.sharpness, 2)
+
+
 def test_reservation_moves_to_the_actual_size(aws: tuple[Any, Any], jpeg_plain: bytes) -> None:
     # Task 5.6b: bytesReserved must end up equal to bytesUsed once nothing is pending.
     s3, dynamodb = aws
@@ -241,6 +259,8 @@ def test_corrupt_marks_failed_without_raising(aws: tuple[Any, Any], corrupt: byt
     assert usage is not None
     assert usage["bytesUsed"]["N"] == str(len(corrupt))  # The original is still stored.
     assert usage["bytesReserved"]["N"] == str(len(corrupt))
+    assert "similarityHash" not in item
+    assert "sharpness" not in item
     assert not exists(s3, THUMB)
     assert not exists(s3, PREVIEW)
 

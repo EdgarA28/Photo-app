@@ -19,6 +19,7 @@ from .base import (
     conflict_pause,
 )
 from .imaging import MAX_SOURCE_BYTES, PermanentImageError, process_image
+from .similarity import similarity
 
 __all__ = [
     "DERIVED_CACHE_CONTROL",
@@ -81,6 +82,8 @@ class Processor(BaseProcessor):
             image = process_image(data)
         except PermanentImageError as e:
             raise SourceFailed(str(e), size, processed_etag) from e
+        # Similar photos (8.37a, FR-GAL-10/12): photos only, from the JPEGs just made.
+        similar = similarity(image.thumb, image.preview)
         return Derived(
             size=size,
             etag=processed_etag,
@@ -91,4 +94,10 @@ class Processor(BaseProcessor):
             gps=image.gps,
             thumb=image.thumb,
             preview=image.preview,
+            extra_set=", similarityHash = :simHash, sharpness = :sharpness",
+            extra_values={
+                ":simHash": {"S": similar.hash},
+                ":sharpness": {"N": f"{similar.sharpness:.2f}"},
+            },
+            log={"similarityHash": similar.hash, "sharpness": round(similar.sharpness, 2)},
         )
