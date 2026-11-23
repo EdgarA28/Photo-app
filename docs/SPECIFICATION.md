@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Version** | 0.64 |
+| **Version** | 0.65 |
 | **Date** | 2026-11-22 |
 | **Owner** | Edgar |
 | **Status** | Draft — implemented and running in dev except the planned Google Photos import (13.5), videos (Phase 14) and production (Phase 11); what exists is in `ARCHITECTURE.md` |
@@ -268,6 +268,9 @@ IDs are stable — reference them in issues, PRs and tests.
 | FR-GAL-7 | The viewer zooms: pinch, double tap and drag on touch; wheel or trackpad pinch, double click, drag and + / − / 0 on a computer. Zoomed past the preview's detail, the full-resolution original loads and replaces it (where the browser can show its format). |
 | FR-GAL-8 | The photo grids (Gallery, Videos, albums) change their tile size with a pinch, as in Google Photos: fingers apart → bigger tiles, together → smaller, continuously: the grid follows the fingers, always covering the width, each size dissolving into the next as it is reached, and one pinch moves at most one size; on release it settles on the nearest of 5 sizes (from small tiles to 4, 3 and 2 photos per row on a phone, whatever their shape, only a panorama alone at 2) with a short animation, or springs back after a small pinch that hasn't shown the new layout; a trackpad pinch (Ctrl + wheel) does the same on a computer; with reduced motion the settle isn't animated. The photo under the fingers stays in place, the page itself doesn't zoom, and the size is remembered on the device. |
 | FR-GAL-9 | The Gallery and the Videos section have a timeline scrubber on the right edge, as in Google Photos: the years and a dot per month, spaced by how many items each month holds, and a handle at the month on screen. Dragging it (or the arrow keys) shows the month and jumps there, also to months not loaded yet, without loading everything in between; newer items load in above while scrolling up. On a phone it shows while scrolling; on a computer it stays, in its own lane (user request 2026-11-22) |
+| FR-GAL-10 | *(planned, 8.37)* Similar photos taken close together are **stacked** in the Gallery, as in Google Photos: photos taken within 60 s of each other that look nearly the same (bursts, several tries at one shot) show as one tile, the stack's **top pick**, with a stack badge and the count. Opening it shows the top pick with a strip of the stack's photos below. Selecting a stack selects all its photos. Stacks only in the Gallery (albums, shared albums, places and the Videos section show every item); videos are never stacked. A Settings switch turns stacks off on this device. |
+| FR-GAL-11 | *(planned, 8.37)* The top pick is the sharpest photo of the stack, unless the user chose another one ("Make top pick" in the viewer of a stacked photo); the newest choice in a stack wins. |
+| FR-GAL-12 | *(planned, 8.37)* A **Duplicates** page (from Settings) lists groups of own photos that are copies of each other, whenever they were taken: identical files and near-identical images (re-encoded or resized copies, e.g. the same photo uploaded and imported from Google Photos). Per group the user keeps one photo and moves the others to the trash (FR-DEL-3), or dismisses the group. |
 | FR-GAL-5 | Photos still processing aren't shown in the gallery, albums or the viewer's previous/next; they appear once ready (the list is polled meanwhile). Photos that failed processing show an error state. |
 | FR-GAL-6 | Correct orientation for all photos (EXIF orientation applied). |
 
@@ -463,6 +466,8 @@ Access patterns:
 | Can user X see photo P? | Owner check, else X owns an album containing P or has an accepted share of it (resolved via album membership + share). The membership's ownerId says whose partition the photo is in; another user's photo counts only if that user is the album owner or still holds an accepted share |
 | A member's photos in an album (on leave / removal) | `PK = ALBUM#{albumId}, SK begins_with PHOTO#`, filter `ownerId = :member` (bounded by the album size) |
 
+Similar photos (8.37, planned): ready photos (not videos) carry `similarityHash` (64-bit difference hash of the image, 16 hex characters) and `sharpness` (number, higher = sharper), written by the thumbnail Lambda in the `ready` update; absent on photos processed before 8.37 until the backfill (they're then never stacked). `topPickAt` (ISO time) when the user made the photo its stack's top pick (FR-GAL-11). Stacks themselves aren't stored: the web app groups them from the list (§12.3). Dismissing a duplicate group (FR-GAL-12) writes the group's key (a hash of its sorted photo IDs) as `dupDismissed` on each of its photos; a group whose photos all carry its current key is left out, and a new copy joining the group changes the key, so it shows again.
+
 `takenAt` = EXIF `DateTimeOriginal`, falling back to Google's creation time for imported photos (§10), then to upload time. Imported photos also carry `importId`.
 
 ---
@@ -488,6 +493,9 @@ Access patterns:
 | `GET` | `/photos` | List own photos `?cursor&limit&sort`; `?mediaType=video` lists own videos instead (FR-VID-11). `/places/{placeId}/photos` lists both unless `?mediaType=` is given. FR-GAL-9: `?start=<ISO>` begins the first page there in the sort order (newest first: taken before it; oldest first: at or after it; not with `cursor`); the page's `prevCursor` (null at the top) with `?direction=backward` gives the items just before it, in the sort order |
 | `GET` | `/photos/timeline` | `?mediaType&utcOffset` (minutes): every month of the Gallery (or Videos) list with its count, newest first, `{months: [{month: "YYYY-MM", count}]}` in the caller's time zone (FR-GAL-9) |
 | `GET` | `/photos/{photoId}` | Photo metadata; with `?albumId=` a photo of an album shared with the caller, with signed image URLs. A ready video has `videoUrl` (FR-VID-5/7) and `playbackStatus`: the playback copy's (or, without one, the original's) CloudFront path for the owner, a signed URL valid 4 h for recipients (playback needs range requests until the end) |
+| `POST` | `/photos/{photoId}/top-pick` | *(planned, 8.37)* Make this own ready photo its stack's top pick (FR-GAL-11): sets `topPickAt` = now → 204. Not the caller's, a video or not ready → 404. The web app decides what the stack is; the API only records the choice |
+| `GET` | `/photos/duplicates` | *(planned, 8.37)* Duplicate groups of the caller's ready photos (FR-GAL-12) → `{groups: [{key, photos: [photo]}]}`, largest groups first: same `originalETag` (identical files), or `similarityHash` at most 3 bits apart (near-identical images), whenever taken. Reads the caller's photo items (projection of the needed attributes, all pages); candidate pairs from 4 × 16-bit bands of the hash (two hashes ≤ 3 bits apart share at least one band), so no all-pairs comparison. Dismissed groups (§8.2 `dupDismissed`) left out |
+| `POST` | `/photos/duplicates/{key}/dismiss` | *(planned, 8.37)* Body `{photoIds}` (the group as shown); the group still matches `key` → writes `dupDismissed = key` on each photo → 204; changed meanwhile → 409 |
 | `GET` | `/photos/{photoId}/download-url` | 5-min pre-signed GET with `attachment` disposition |
 | `DELETE` | `/photos/{photoId}` | Move to the trash (FR-DEL-3): out of gallery, albums and places, files and usage stay; a `pending` upload is deleted at once (files + metadata + usage) |
 | `POST` | `/imports/google` | Start an import (FR-IMP-1): body `{code, codeVerifier, redirectUri}` (Google authorization code) → `201 {importId, pickerUri, expiresAt}`; exchanges the code server-side and creates the Picker session; `400 GOOGLE_AUTH_FAILED` when Google rejects the code |
@@ -559,6 +567,7 @@ Media cookie attributes: `Path=/users/{userId}/; Secure; HttpOnly; SameSite=Lax`
 | Errors — transient | The record is reported as a batch item failure → the message returns after the visibility timeout (6 × the Lambda timeout) → after 5 receives the SQS DLQ (14-day retention). A photo still `pending` a day after its original arrived is sent to the queue again by the daily stale-pending sweep (6.11). |
 | Packaging | Native wheels for `manylinux` aarch64 (`pip install --platform manylinux2014_aarch64 --only-binary=:all:`) or Docker build |
 | Logs | Structured JSON; 30-day retention |
+| Similar photos (8.37, planned) | From the decoded, orientation-corrected image: `similarityHash` = difference hash (grayscale, 9 × 8, each pixel brighter than its right neighbour → 1 bit, 64 bits as 16 hex characters); `sharpness` = variance of the Laplacian of the grayscale preview-size image (1600 px), so it compares across photos. Written in the `ready` update; photos only, not videos. A few ms per photo, no new library. Backfill for photos processed before: `scripts/backfill_similarity.py` reads each ready photo's thumb and preview from S3 and writes both values (idempotent, skips photos that have them) |
 | Date fallback (imports) | Imported originals carry `x-amz-meta-taken-at` (Google's `createTime`); used when EXIF has no `DateTimeOriginal`, before the upload time (FR-IMP-4). Ignored when unreadable, without a time zone, before 1826 or more than a day in the future. Browser uploads can't set it (the pre-signed POST policy allows no extra fields) |
 
 ### 10.1 Import worker (FR-IMP-*)
@@ -661,6 +670,7 @@ Second handler in `services/thumbnails` (`thumbnails.video_handler.handler`), so
 | `/import/$importId` | One import (FR-IMP-5): "Choose photos in Google Photos" (in the tab where it started: the Picker link is kept in sessionStorage), cancel, progress while copying, then the summary; polls `GET /imports/{id}` every 3 s until it ends; safe to reload or leave |
 | `/settings` | Usage, quota, link to the trash, logout |
 | `/s/$token` | Public photo link (FR-SHR-8), no login, no app shell: one photo full screen, or a grid ("N shared photos") whose tiles open the photo large with prev/next; "Link works until …", Download original per photo; "expired" message |
+| `/duplicates` | *(planned, 8.37)* Duplicate groups (FR-GAL-12), opened from Settings: per group its photos side by side (date, size, file name), "Keep" on one moves the others to the trash; "Not duplicates" dismisses the group |
 | `/trash` | Trash (FR-DEL-3): trashed photos with days left; pick to restore or delete forever; empty trash |
 
 ### 12.2 Data fetching (TanStack Query)
@@ -678,6 +688,7 @@ Second handler in `services/thumbnails` (`thumbnails.video_handler.handler`), so
 - API returns `width`/`height` so tiles reserve space before images load (no layout shift).
 - `fetchNextPage()` triggered when approaching the end.
 - Month sections, as in Google Photos but by month only: a heading ("October 2026", local time) above each month of date taken, in the gallery and in albums; a row never mixes months.
+- Stacks (FR-GAL-10/11, planned 8.37), Gallery only and while the device's "Group similar photos" switch is on (default on): consecutive photos of the date-sorted list form a stack while each is taken ≤ 60 s from the previous one and its `similarityHash` is ≤ 10 bits from some photo already in the stack (thresholds tuned on real bursts before release); photos without a hash and videos stay single. Grouped while the pages load, so a stack across a page boundary joins when the next page arrives. The tile is the top pick (newest `topPickAt` in the stack, else highest `sharpness`, else the first), with a stack badge and count; the grid's month sections and the timeline count photos as before. The viewer from a stack tile walks the tiles with prev/next and shows the stack as a strip below ("Make top pick" on the others); select mode and delete act on the whole stack (the count says how many photos).
 - Select mode (several photos at once: delete, add to / remove from an album), as in Google Photos: entered with the header's Select button or by pressing and holding a photo; sliding the finger on without lifting picks every photo up to the one under it (starting on a picked photo unpicks), scrolling the page near the screen edges. In select mode the Select button reads "Unselect all" (same place, so nothing moves), and Back (Android's back gesture) leaves select mode instead of the page.
 
 ### 12.4 Upload queue
@@ -908,6 +919,7 @@ Add new ideas here first. When a feature is planned, give it requirement IDs and
 | 0.37 | 2026-11-01 | Header status updated (implemented in dev); no requirement changes |
 | 0.38 | 2026-11-01 | Less gallery polling while uploads run: 15 s instead of 3 s, refreshes during a batch only mark lists stale (13.1j, §12.4) |
 | 0.53 | 2026-11-05 | FR-GAL-8 (user request): pinch to resize the grid tiles, continuous (live scale, settle on the nearest size) |
+| 0.65 | 2026-11-23 | Similar photos planned (8.37, user's choices): FR-GAL-10 stacks in the Gallery (60 s + difference hash, grouped in the web app), FR-GAL-11 sharpest top pick with the user's choice, FR-GAL-12 Duplicates page; §8.2 `similarityHash`/`sharpness`/`topPickAt`/`dupDismissed`, §9 `POST /photos/{id}/top-pick`, `GET /photos/duplicates`, dismiss, §10 hash + sharpness + backfill, §12.1 `/duplicates`, §12.3 stacks. No new AWS resources |
 | 0.64 | 2026-11-22 | §2: imported photos have no location (keeping it = uploading originals); no Takeout `.json` reading and no iCloud import (user's decision); B-10 implemented in dev |
 | 0.63 | 2026-11-22 | FR-GAL-9 timeline scrubber (user request): `GET /photos/timeline`, `GET /photos?start&direction` + `prevCursor` (§9), §12.3 |
 | 0.62 | 2026-11-22 | §12.6: imported photos have no location (confirmed in dev); the import box and summary say so. Import page: after Google's consent one prominent "Choose your photos" button (the picker can only open from a tap) |
