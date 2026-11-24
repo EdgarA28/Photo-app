@@ -14,6 +14,7 @@ import {
   sharedAlbumPageSchema,
 } from "@photo-app/shared";
 import { beforeAll, describe, expect, test } from "vitest";
+import { duplicateKey } from "../src/lib/duplicates";
 import type { Repositories } from "../src/repo";
 import {
   addPlaces,
@@ -185,6 +186,14 @@ interface Case {
 const id = () => newId();
 const json = (body: unknown) => body;
 
+/** "Not duplicates" for these photos, with their group's key (8.37f). */
+const dismiss = (as: string, photoIds: string[]): Request => ({
+  as,
+  method: "POST",
+  path: `/photos/duplicates/${duplicateKey(photoIds)}/dismiss`,
+  body: { photoIds },
+});
+
 /** Cases for a stranger (Mallory) and for the recipient (Bob) outside his read-only access. */
 const cases: Case[] = [
   // ---- imports (13.5c) ----
@@ -323,6 +332,24 @@ const cases: Case[] = [
     name: "recipient makes a shared photo a top pick (8.37b)",
     foreign: () => ({ as: w.bob, method: "POST", path: `/photos/${w.p1}/top-pick` }),
     missing: () => ({ as: w.bob, method: "POST", path: `/photos/${id()}/top-pick` }),
+  },
+  {
+    route: "POST /api/photos/duplicates/:key/dismiss",
+    name: "stranger dismisses someone else's photos as not duplicates (8.37f)",
+    foreign: () => dismiss(w.mallory, [w.p1, w.p2]),
+    missing: () => dismiss(w.mallory, [id(), id()]),
+  },
+  {
+    route: "POST /api/photos/duplicates/:key/dismiss",
+    name: "stranger mixes her own photo with someone else's (8.37f)",
+    foreign: () => dismiss(w.mallory, [w.malloryPhoto, w.p1]),
+    missing: () => dismiss(w.mallory, [w.malloryPhoto, id()]),
+  },
+  {
+    route: "POST /api/photos/duplicates/:key/dismiss",
+    name: "recipient dismisses shared photos as not duplicates (8.37f)",
+    foreign: () => dismiss(w.bob, [w.p1, w.p2]),
+    missing: () => dismiss(w.bob, [id(), id()]),
   },
   {
     route: "DELETE /api/photos/:photoId",
@@ -761,6 +788,8 @@ const exempt: Record<string, string> = {
   "GET /api/places": "caller's own places (keyed by sub); checked below",
   "GET /api/places/map": "caller's own photos with GPS (keyed by sub); checked below",
   "POST /api/imports/google": "creates under the caller (Google's token is the caller's own)",
+  "GET /api/photos/duplicates":
+    "caller's own photos (keyed by sub); others' copies never show, checked in routes.duplicates",
   "GET /api/photos/timeline":
     "caller's own month counts (keyed by sub); foreign prevCursor in routes.timeline",
   "GET /api/links/:token":

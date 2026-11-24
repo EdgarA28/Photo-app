@@ -42,6 +42,7 @@ import {
 } from "./keys";
 import { encodeCursor, type CursorKey } from "./cursor";
 import { removeMembership, restoreMembership } from "./memberships";
+import type { DuplicateCandidate } from "../lib/duplicates";
 
 /** Photo item without key attributes (spec §8.2). */
 export interface PhotoRecord {
@@ -102,6 +103,10 @@ export interface PhotoRecord {
   similarityHash?: string;
   sharpness?: number;
   topPickAt?: string;
+  /** ETag of the processed original (12.2b), set with `ready`/`failed`; equal = same file. */
+  originalETag?: string;
+  /** Key of the duplicate group the user dismissed (8.37f, FR-GAL-12, §8.2). */
+  dupDismissed?: string;
 }
 
 /** A trashed photo due for the purge (any user's). */
@@ -326,6 +331,57 @@ export function photosRepo(db: Db) {
         if (isConditionalCheckFailed(err)) return false;
         throw err;
       }
+    },
+
+    /**
+     * What finding duplicates needs (8.37f, FR-GAL-12) of every ready photo of the user that
+     * could have a copy: not a video, not in the trash, with an ETag or a hash. Reads the user's
+     * whole photo partition (bounded by the quota), only these few attributes.
+     */
+    async listDuplicateCandidates(userId: string): Promise<DuplicateCandidate[]> {
+      const items = await queryAll(db, {
+        KeyConditionExpression: "PK = :pk AND begins_with(SK, :prefix)",
+        FilterExpression:
+          "#status = :ready AND attribute_not_exists(trashedAt) " +
+          "AND (attribute_not_exists(mediaType) OR mediaType = :photo) " +
+          "AND (attribute_exists(originalETag) OR attribute_exists(similarityHash))",
+        ProjectionExpression: "photoId, takenAt, originalETag, similarityHash, dupDismissed",
+        ExpressionAttributeNames: { "#status": "status" },
+        ExpressionAttributeValues: {
+          ":pk": userPk(userId),
+          ":prefix": PHOTO_SK_PREFIX,
+          ":ready": "ready",
+          ":photo": "photo",
+        },
+      });
+      return items as DuplicateCandidate[];
+    },
+
+    /**
+     * "Not duplicates" (8.37f, FR-GAL-12): `dupDismissed = key` on each photo of the group. Only
+     * on photos that still exist (no stub items); false if one was deleted meanwhile.
+     */
+    async dismissDuplicates(userId: string, photoIds: string[], key: string): Promise<boolean> {
+      const results = await Promise.all(
+        photoIds.map(async (photoId) => {
+          try {
+            await db.client.send(
+              new UpdateCommand({
+                TableName: db.table,
+                Key: photoKey(userId, photoId),
+                UpdateExpression: "SET dupDismissed = :key",
+                ConditionExpression: "attribute_exists(PK)",
+                ExpressionAttributeValues: { ":key": key },
+              }),
+            );
+            return true;
+          } catch (err) {
+            if (isConditionalCheckFailed(err)) return false;
+            throw err;
+          }
+        }),
+      );
+      return results.every(Boolean);
     },
 
     /** Several of one user's photos; IDs that don't exist (or aren't theirs) are left out. */

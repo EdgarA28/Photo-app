@@ -7,6 +7,9 @@ import {
   galleryQuerySchema,
   timelineQuerySchema,
   type Timeline,
+  DUPLICATE_KEY_REGEX,
+  dismissDuplicatesRequestSchema,
+  type Duplicates,
   newId,
   originalKey,
   uploadUrlRequestSchema,
@@ -18,7 +21,8 @@ import {
 import type { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../env";
-import { AppError, notFound, orNotFound, quotaExceeded } from "../lib/errors";
+import { AppError, notFound, orNotFound, quotaExceeded, validationError } from "../lib/errors";
+import { duplicateKey, findDuplicates } from "../lib/duplicates";
 import { abortUpload, objectKeys } from "../lib/objects";
 import { validate } from "../lib/validation";
 import type { PhotoRecord } from "../repo";
@@ -27,6 +31,13 @@ import { albumPhoto } from "./access";
 import { toPhoto, toSharedPhoto } from "./present";
 
 const photoParam = z.object({ photoId: idSchema });
+const duplicateParam = z.object({ key: z.string().regex(DUPLICATE_KEY_REGEX) });
+
+/** Newest first, then by upload: the order a group's photos are shown in. */
+const byTaken = (a: PhotoRecord, b: PhotoRecord) =>
+  b.takenAt.localeCompare(a.takenAt) ||
+  b.uploadedAt.localeCompare(a.uploadedAt) ||
+  a.photoId.localeCompare(b.photoId);
 
 export function photoRoutes(app: Hono<AppEnv>, { repos, storage, media, config }: Deps): void {
   /**
@@ -136,6 +147,74 @@ export function photoRoutes(app: Hono<AppEnv>, { repos, storage, media, config }
     };
     return c.json(body);
   });
+
+  /**
+   * The caller's duplicate groups (8.37f, FR-GAL-12, §9): ready photos (not videos, not in the
+   * trash) with the same original (`originalETag`) or a hash at most 3 bits apart, whenever taken;
+   * largest groups first, then the newest; dismissed groups left out. Own photos only (keyed by
+   * the JWT sub). Registered before `/photos/:photoId`, which would read "duplicates" as an ID.
+   */
+  app.get("/photos/duplicates", async (c) => {
+    const userId = c.get("userId");
+    const groups = findDuplicates(await repos.photos.listDuplicateCandidates(userId));
+    const records = new Map(
+      (
+        await repos.photos.getMany(
+          userId,
+          groups.flatMap((g) => g.photoIds),
+        )
+      ).map((r) => [r.photoId, r]),
+    );
+    const shown = groups
+      .map(({ key, photoIds }) => ({
+        key,
+        photos: photoIds
+          .map((id) => records.get(id))
+          .filter((r): r is PhotoRecord => r !== undefined)
+          .sort(byTaken),
+      }))
+      // Deleted between the two reads: a group needs two photos.
+      .filter((group) => group.photos.length > 1)
+      .sort(
+        (a, b) =>
+          b.photos.length - a.photos.length ||
+          b.photos[0]!.takenAt.localeCompare(a.photos[0]!.takenAt),
+      );
+    const body: Duplicates = {
+      groups: shown.map(({ key, photos }) => ({ key, photos: photos.map(toPhoto) })),
+    };
+    return c.json(body);
+  });
+
+  /**
+   * "Not duplicates" (8.37f, FR-GAL-12): `photoIds` are the group as shown, `key` its key. A photo
+   * that isn't the caller's (or is gone) → 404 (NFR-SEC-2); the group changed since it was shown
+   * (a copy added, deleted or restored) → 409, so the user sees the new one first; else each photo
+   * gets `dupDismissed = key` → 204.
+   */
+  app.post(
+    "/photos/duplicates/:key/dismiss",
+    validate("param", duplicateParam),
+    validate("json", dismissDuplicatesRequestSchema),
+    async (c) => {
+      const userId = c.get("userId");
+      const { key } = c.req.valid("param");
+      const photoIds = [...new Set(c.req.valid("json").photoIds)];
+      if (duplicateKey(photoIds) !== key) {
+        throw validationError("photoIds don't match the group's key");
+      }
+      const records = await repos.photos.getMany(userId, photoIds);
+      if (records.length !== photoIds.length) throw notFound("Photo not found");
+      const groups = findDuplicates(await repos.photos.listDuplicateCandidates(userId));
+      if (!groups.some((group) => group.key === key)) {
+        throw new AppError(409, "CONFLICT", "This group of duplicates has changed");
+      }
+      if (!(await repos.photos.dismissDuplicates(userId, photoIds, key))) {
+        throw new AppError(409, "CONFLICT", "This group of duplicates has changed");
+      }
+      return c.body(null, 204);
+    },
+  );
 
   /**
    * One own photo, or with `?albumId=` someone else's photo in that album if the caller owns it or

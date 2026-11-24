@@ -166,6 +166,16 @@ export const PREVIEW_MAX_EDGE = 1600;
  */
 export const SIMILARITY_HASH_REGEX = /^[0-9a-f]{16}$/;
 
+/**
+ * Duplicates (8.37f, FR-GAL-12, §9): near-identical images are at most this many bits apart
+ * (re-encoded or resized copies are 0–2 on the user's dev photos and in the Lambda's tests).
+ */
+export const DUPLICATE_MAX_BITS = 3;
+/** A duplicate group's key: hex of the SHA-256 of its sorted photo IDs, first 128 bits (§8.2). */
+export const DUPLICATE_KEY_REGEX = /^[0-9a-f]{32}$/;
+/** Photos in one dismiss request: a group is rarely more than a few copies. */
+export const MAX_PHOTOS_PER_DUPLICATE_GROUP = 100;
+
 // Import from Google Photos (13.5, §6.9, §10.1, §11.5)
 /** Most photos one import copies (FR-IMP-2). */
 export const MAX_PHOTOS_PER_IMPORT = 500;

@@ -8,6 +8,8 @@ import {
   MAX_PHOTOS_PER_SAVE_REQUEST,
   MAX_UPLOAD_BYTES,
   SIMILARITY_HASH_REGEX,
+  DUPLICATE_KEY_REGEX,
+  MAX_PHOTOS_PER_DUPLICATE_GROUP,
 } from "../constants";
 import { idSchema, isoDateTimeSchema, pageQuerySchema, pageSchema, userIdSchema } from "./common";
 import { photoPlaceSchema } from "./places";
@@ -167,6 +169,26 @@ export type TimelineQuery = z.infer<typeof timelineQuerySchema>;
  */
 export const timelineSchema = z.object({ months: z.array(timelineMonthSchema) });
 export type Timeline = z.infer<typeof timelineSchema>;
+
+/** One group of copies of each other (8.37f, FR-GAL-12): `key` names it for the dismiss. */
+export const duplicateGroupSchema = z.object({
+  key: z.string().regex(DUPLICATE_KEY_REGEX),
+  photos: z.array(photoSchema).min(2),
+});
+export type DuplicateGroup = z.infer<typeof duplicateGroupSchema>;
+
+/**
+ * GET /photos/duplicates (8.37f, FR-GAL-12): the caller's ready photos (not videos, not in the
+ * trash) that are copies of each other, largest groups first; dismissed groups left out.
+ */
+export const duplicatesSchema = z.object({ groups: z.array(duplicateGroupSchema) });
+export type Duplicates = z.infer<typeof duplicatesSchema>;
+
+/** POST /photos/duplicates/{key}/dismiss: the group's photos, as shown. */
+export const dismissDuplicatesRequestSchema = z.object({
+  photoIds: z.array(idSchema).min(2).max(MAX_PHOTOS_PER_DUPLICATE_GROUP),
+});
+export type DismissDuplicatesRequest = z.infer<typeof dismissDuplicatesRequestSchema>;
 
 /** GET /trash: own photos in the trash, most recently deleted first, in one response (FR-DEL-3). */
 export const trashListSchema = z.object({ items: z.array(photoSchema) });
