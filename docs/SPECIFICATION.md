@@ -670,7 +670,7 @@ Second handler in `services/thumbnails` (`thumbnails.video_handler.handler`), so
 | `/import/$importId` | One import (FR-IMP-5): "Choose photos in Google Photos" (in the tab where it started: the Picker link is kept in sessionStorage), cancel, progress while copying, then the summary; polls `GET /imports/{id}` every 3 s until it ends; safe to reload or leave |
 | `/settings` | Usage, quota, link to the trash, logout |
 | `/s/$token` | Public photo link (FR-SHR-8), no login, no app shell: one photo full screen, or a grid ("N shared photos") whose tiles open the photo large with prev/next; "Link works until …", Download original per photo; "expired" message |
-| `/duplicates` | *(planned, 8.37)* Duplicate groups (FR-GAL-12), opened from Settings: per group its photos side by side (date, size, file name), "Keep" on one moves the others to the trash; "Not duplicates" dismisses the group |
+| `/duplicates` | *(8.37g)* Duplicate groups (FR-GAL-12), opened from Settings: per group its photos side by side (date, size, file name), "Keep" on one moves the others to the trash; "Not duplicates" dismisses the group |
 | `/trash` | Trash (FR-DEL-3): trashed photos with days left; pick to restore or delete forever; empty trash |
 
 ### 12.2 Data fetching (TanStack Query)

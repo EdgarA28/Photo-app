@@ -1,7 +1,7 @@
 import { TRASH_RETENTION_DAYS } from "@photo-app/shared";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useRouter, type ErrorComponentProps } from "@tanstack/react-router";
-import { LogOut, Trash2 } from "lucide-react";
+import { Copy, LogOut, Trash2 } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
 import { errorMessage } from "@/api/errors";
 import { logout } from "@/auth/logout";
@@ -53,6 +53,13 @@ function Settings() {
 
       <Section title="Gallery">
         <GroupSimilarSwitch />
+        {/* FR-GAL-12 (8.37g): copies of the same photo, to keep one of. */}
+        <Button variant="outline" asChild>
+          <Link to="/duplicates">
+            <Copy aria-hidden />
+            Find duplicates
+          </Link>
+        </Button>
       </Section>
 
       <Section

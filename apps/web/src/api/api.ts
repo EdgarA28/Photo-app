@@ -17,6 +17,7 @@ import {
   sharedAlbumPageSchema,
   shareInvitationPageSchema,
   trashListSchema,
+  duplicatesSchema,
   timelineSchema,
   importSchema,
   startGoogleImportResponseSchema,
@@ -85,6 +86,12 @@ export function createApi(request: Request) {
       delete: (photoId: string) => request("DELETE", `/photos/${enc(photoId)}`),
       /** Makes it its stack's top pick (FR-GAL-11, 8.37b): the newest pick in a stack wins. */
       topPick: (photoId: string) => request("POST", `/photos/${enc(photoId)}/top-pick`),
+      /** Groups of copies of each other (FR-GAL-12, 8.37f), largest first. */
+      duplicates: (o?: Opts) =>
+        request("GET", "/photos/duplicates", { schema: duplicatesSchema, ...o }),
+      /** "Not duplicates": the group as shown; 409 if it changed meanwhile. */
+      dismissDuplicates: (key: string, photoIds: string[]) =>
+        request("POST", `/photos/duplicates/${enc(key)}/dismiss`, { body: { photoIds } }),
     },
 
     /**
