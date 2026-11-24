@@ -1,4 +1,9 @@
-import { photoSortSchema, TRASH_RETENTION_DAYS, type PhotoSort } from "@photo-app/shared";
+import {
+  photoSortSchema,
+  TRASH_RETENTION_DAYS,
+  type Photo,
+  type PhotoSort,
+} from "@photo-app/shared";
 import { useInfiniteQuery, useQuery, useSuspenseInfiniteQuery } from "@tanstack/react-query";
 import { Link, useRouter } from "@tanstack/react-router";
 import { Link2, MapPin, X } from "lucide-react";
@@ -24,7 +29,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PhotoGrid, type MonthOffset } from "./PhotoGrid";
+import { PhotoGrid, type GridSelection, type MonthOffset } from "./PhotoGrid";
+import { groupStacks, stackIndex, type Stack } from "./stacks";
 import { jumpStart } from "./timeline";
 import { TimelineScrubber } from "./TimelineScrubber";
 import { PlaceSearch } from "./PlaceSearch";
@@ -34,6 +40,7 @@ import { SelectButton } from "./SelectButton";
 import { SelectionBar } from "./SelectionBar";
 import { useHideOnScroll } from "./useHideOnScroll";
 import { useSelection } from "./useSelection";
+import { useGroupSimilar } from "@/settings/groupSimilar";
 import { ShareLinkDialog } from "@/links/ShareLinkDialog";
 import { albumsQuery, useAddToAlbum } from "@/queries/albums";
 import { sharedAlbumsQuery } from "@/queries/shares";
@@ -104,6 +111,11 @@ export function Library({
   const viewerSearch: GallerySearch = { ...search, mediaType: kind };
 
   const selection = useSelection({ forced: addTo !== undefined });
+  // Stacks of similar photos (8.37e, FR-GAL-10): the Gallery's own list only, while the device's
+  // switch is on. Not while picking photos for an album, where each frame is a choice of its own.
+  const groupSimilar = useGroupSimilar();
+  const stacked = kind === "photo" && groupSimilar && !album && !place && !addTo;
+  const stacks = useStacks(photos, stacked, selection.grid, selection.replace);
   const [status, setStatus] = useState<ReactNode>(null);
   // In an album that isn't in my list (shared with me) the photos belong to someone else.
   const { data: albums } = useQuery({ ...albumsQuery(api), enabled: album !== undefined });
@@ -179,14 +191,15 @@ export function Library({
         )
       ) : (
         <PhotoGrid
-          photos={photos}
+          photos={stacks.tiles}
+          stackSizes={stacks.sizes}
           hasNextPage={hasNextPage && !isFetchNextPageError}
           isFetchingNextPage={isFetchingNextPage}
           fetchNextPage={fetchNextPage}
-          selection={selection.grid}
+          selection={stacks.selection}
           onSelectionChange={(photoIds) => {
             setStatus(null);
-            selection.replace(photoIds);
+            selection.replace(stacks.expand(photoIds));
           }}
           viewerSearch={viewerSearch}
           months
@@ -236,6 +249,69 @@ export function Library({
         ))}
     </main>
   );
+}
+
+/**
+ * The grid's side of stacks (FR-GAL-10): the tiles (each stack's top pick) and their sizes, and
+ * select mode on whole stacks: a tile is picked when any of its photos is, a tap picks or unpicks
+ * all of them, and the selection (and so the count, delete, album, link) holds every photo.
+ */
+function useStacks(
+  photos: Photo[],
+  enabled: boolean,
+  selection: GridSelection | undefined,
+  replace: (photoIds: ReadonlySet<string>) => void,
+) {
+  const grouped = useMemo(() => {
+    const stacks = groupStacks(photos, enabled);
+    const byPhoto = stackIndex(stacks);
+    const sizes = new Map<string, number>();
+    for (const stack of stacks) {
+      if (stack.photos.length > 1) sizes.set(stack.top.photoId, stack.photos.length);
+    }
+    return { stacks, byPhoto, sizes, tiles: enabled ? stacks.map((s) => s.top) : photos };
+  }, [photos, enabled]);
+
+  const stackOf = useCallback(
+    (photoId: string): Stack | undefined => {
+      const i = grouped.byPhoto.get(photoId);
+      return i === undefined ? undefined : grouped.stacks[i];
+    },
+    [grouped],
+  );
+
+  const expand = useCallback(
+    (photoIds: ReadonlySet<string>): ReadonlySet<string> => {
+      const all = new Set<string>();
+      for (const photoId of photoIds) {
+        for (const photo of stackOf(photoId)?.photos ?? []) all.add(photo.photoId);
+        all.add(photoId);
+      }
+      return all;
+    },
+    [stackOf],
+  );
+
+  const gridSelection = useMemo((): GridSelection | undefined => {
+    if (!selection || grouped.sizes.size === 0) return selection;
+    const selected = new Set<string>();
+    for (const photoId of selection.selected) {
+      const top = stackOf(photoId)?.top.photoId;
+      selected.add(top ?? photoId);
+    }
+    return {
+      selected,
+      onToggle: (photoId) => {
+        const members = stackOf(photoId)?.photos.map((p) => p.photoId) ?? [photoId];
+        const next = new Set(selection.selected);
+        if (members.some((id) => next.has(id))) for (const id of members) next.delete(id);
+        else for (const id of members) next.add(id);
+        replace(next);
+      },
+    };
+  }, [selection, grouped, stackOf, replace]);
+
+  return { tiles: grouped.tiles, sizes: grouped.sizes, selection: gridSelection, expand };
 }
 
 const itemsText = (kind: LibraryKind, count: number) =>

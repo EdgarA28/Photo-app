@@ -1,7 +1,7 @@
 import type { Photo } from "@photo-app/shared";
 import { Link } from "@tanstack/react-router";
 import { useWindowVirtualizer } from "@tanstack/react-virtual";
-import { Check, ImageOff, LoaderCircle } from "lucide-react";
+import { Check, GalleryVerticalEnd, ImageOff, LoaderCircle } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useImageFailed } from "@/components/useImageFailed";
 import { VideoBadge } from "@/components/VideoBadge";
@@ -48,6 +48,11 @@ interface PhotoGridProps {
   isFetching?: boolean | undefined;
   /** The month headings' positions after each layout (the timeline scrubber, 8.36). */
   onMonthOffsets?: ((offsets: MonthOffset[]) => void) | undefined;
+  /**
+   * Gallery stacks (8.37e, FR-GAL-10): `photos` are the tiles (each stack's top pick); this says
+   * how many photos a stacked tile stands for (absent: not stacked).
+   */
+  stackSizes?: ReadonlyMap<string, number> | undefined;
 }
 
 /**
@@ -70,6 +75,7 @@ export function PhotoGrid({
   fetchPreviousPage,
   isFetching = false,
   onMonthOffsets,
+  stackSizes,
 }: PhotoGridProps) {
   const ref = useRef<HTMLDivElement>(null);
   const { width, top } = useElementBox(ref);
@@ -235,13 +241,19 @@ export function PhotoGrid({
                 viewerSearch={viewerSearch}
                 selection={selection}
                 asButton={dragStartedInSelect ?? selection !== undefined}
+                stackSize={stackSizes?.get(item.photoId)}
               />
             ))}
           </div>
         );
       })}
       {pinch.layer && (
-        <PinchLayer layer={pinch.layer} stepRef={pinch.stepRef} selection={selection} />
+        <PinchLayer
+          layer={pinch.layer}
+          stepRef={pinch.stepRef}
+          selection={selection}
+          stackSizes={stackSizes}
+        />
       )}
     </div>
   );
@@ -259,10 +271,12 @@ function PinchLayer({
   layer,
   stepRef,
   selection,
+  stackSizes,
 }: {
   layer: PinchLayerState;
   stepRef: (step: number) => (node: HTMLElement | null) => void;
   selection: GridSelection | undefined;
+  stackSizes: ReadonlyMap<string, number> | undefined;
 }) {
   return (
     <div
@@ -316,7 +330,7 @@ function PinchLayer({
                   transform: `translate(${placement.x[i]}px, ${placement.y[i]}px)`,
                 }}
               >
-                <TileContent photo={photo} eager />
+                <TileContent photo={photo} stackSize={stackSizes?.get(photo.photoId)} eager />
                 {selection && <SelectMark selected={selection.selected.has(photo.photoId)} />}
               </div>
             );
@@ -338,6 +352,7 @@ function PhotoTile({
   viewerSearch,
   selection,
   asButton,
+  stackSize,
 }: {
   photo: Photo;
   width: number;
@@ -345,6 +360,8 @@ function PhotoTile({
   selection: GridSelection | undefined;
   /** Select mode's toggle button, else the viewer link (kept as is during a drag, useDragSelect). */
   asButton: boolean;
+  /** The tile stands for a stack of this many photos (FR-GAL-10). */
+  stackSize: number | undefined;
 }) {
   const selected = selection?.selected.has(photo.photoId) ?? false;
   const failed = photo.status === "failed";
@@ -354,6 +371,7 @@ function PhotoTile({
     // A video says so, with its length once processed (FR-VID-4).
     video && videoLabel(photo.durationMs),
     photo.status !== "ready" && STATUS_LABELS[photo.status],
+    stackSize && `stack of ${stackSize} photos`,
   ]
     .filter(Boolean)
     .join(", ");
@@ -375,7 +393,7 @@ function PhotoTile({
         onClick={() => selection.onToggle(photo.photoId)}
         {...tile}
       >
-        <TileContent photo={photo} />
+        <TileContent photo={photo} stackSize={stackSize} />
         <SelectMark selected={selected} />
       </button>
     );
@@ -392,7 +410,7 @@ function PhotoTile({
       draggable={false}
       {...tile}
     >
-      <TileContent photo={photo} />
+      <TileContent photo={photo} stackSize={stackSize} />
       {selection && <SelectMark selected={selected} />}
     </Link>
   );
@@ -418,7 +436,15 @@ function SelectMark({ selected }: { selected: boolean }) {
   );
 }
 
-function TileContent({ photo, eager = false }: { photo: Photo; eager?: boolean }) {
+function TileContent({
+  photo,
+  stackSize,
+  eager = false,
+}: {
+  photo: Photo;
+  stackSize?: number | undefined;
+  eager?: boolean;
+}) {
   // A thumbnail that can't load keeps the placeholder (until a refetch brings a new URL).
   const [broken, onError] = useImageFailed(photo.thumbUrl);
   return (
@@ -448,7 +474,25 @@ function TileContent({ photo, eager = false }: { photo: Photo; eager?: boolean }
       {photo.mediaType === "video" && photo.status === "ready" && (
         <VideoBadge durationMs={photo.durationMs} />
       )}
+      {stackSize !== undefined && <StackBadge count={stackSize} />}
     </>
+  );
+}
+
+/**
+ * The stack mark and count on a stacked tile (FR-GAL-10), top right, clear of select mode's check
+ * circle. Decorative: the tile's label says "stack of 3 photos".
+ */
+function StackBadge({ count }: { count: number }) {
+  return (
+    <span
+      aria-hidden
+      data-stack-badge
+      className="pointer-events-none absolute top-1 right-1 flex items-center gap-0.5 rounded bg-black/60 px-1 py-0.5 text-[0.6875rem] leading-none font-medium text-white tabular-nums"
+    >
+      <GalleryVerticalEnd className="size-2.5" />
+      {count}
+    </span>
   );
 }
 

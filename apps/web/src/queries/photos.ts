@@ -257,3 +257,31 @@ export const timelineQuery = (api: Api, mediaType: MediaType) =>
         { signal },
       ),
   });
+
+/**
+ * "Make top pick" in the viewer of a stacked photo (FR-GAL-11, 8.37e): records the choice
+ * (`POST /photos/{id}/top-pick`) and sets `topPickAt` in the cached lists at once, so the stack's
+ * tile changes without waiting for the refetch.
+ */
+export function useTopPick() {
+  const api = useRouteContext({ from: "__root__", select: (context) => context.api });
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (photoId: string) => api.photos.topPick(photoId),
+    onSuccess: (_, photoId) => {
+      const topPickAt = new Date().toISOString();
+      queryClient.setQueriesData<InfiniteData<PhotoPage>>({ queryKey: ["photos"] }, (data) =>
+        data?.pages
+          ? {
+              ...data,
+              pages: data.pages.map((page) => ({
+                ...page,
+                items: page.items.map((p) => (p.photoId === photoId ? { ...p, topPickAt } : p)),
+              })),
+            }
+          : data,
+      );
+      return queryClient.invalidateQueries({ queryKey: ["photos"] });
+    },
+  });
+}

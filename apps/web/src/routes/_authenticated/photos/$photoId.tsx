@@ -12,6 +12,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  GalleryVerticalEnd,
   Ellipsis,
   FolderMinus,
   FolderPlus,
@@ -54,6 +55,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { gallerySearchSchema } from "@/gallery/search";
+import { groupStacks, stackIndex, type Stack } from "@/gallery/stacks";
+import { cn } from "@/lib/utils";
+import { useGroupSimilar } from "@/settings/groupSimilar";
 import { startDownload } from "@/lib/download";
 import { albumsQuery, useRemoveFromAlbum, useUpdateAlbum } from "@/queries/albums";
 import {
@@ -62,6 +66,7 @@ import {
   photoQuery,
   removePhotoFromCache,
   shownPhotos,
+  useTopPick,
 } from "@/queries/photos";
 import { saveSummary, sharedAlbumsQuery, useSaveSharedPhotos } from "@/queries/shares";
 import { VideoPlayer } from "@/viewer/VideoPlayer";
@@ -133,11 +138,16 @@ function Viewer() {
   // Previous/next walk what the grid shows (no photos still processing); a processing photo
   // opened by its link is still found in the loaded pages.
   const photos = useMemo(() => shownPhotos(data.pages), [data]);
-  const index = photos.findIndex((p) => p.photoId === photoId);
+  // Opened from the Gallery with stacks on (8.37e, FR-GAL-10): prev/next walk the tiles, and the
+  // stack shows as a strip. Otherwise every photo is a stack of its own.
+  const groupSimilar = useGroupSimilar();
+  const stacked = groupSimilar && !album && !place && mediaType !== "video";
+  const stacks = useMemo(() => groupStacks(photos, stacked), [photos, stacked]);
+  const index = useMemo(() => stackIndex(stacks).get(photoId) ?? -1, [stacks, photoId]);
+  const stack: Stack | undefined = stacks[index];
   const listed =
-    index >= 0
-      ? photos[index]
-      : data.pages.flatMap((page) => page.items).find((p) => p.photoId === photoId);
+    stack?.photos.find((p) => p.photoId === photoId) ??
+    data.pages.flatMap((page) => page.items).find((p) => p.photoId === photoId);
   // Outside the loaded pages, or a shared album's photo (listed without its preview, 7.4).
   const single = useQuery({
     ...photoQuery(api, photoId, album),
@@ -145,14 +155,14 @@ function Viewer() {
   });
   const photo = !listed || needsOwnFetch(listed) ? (single.data ?? listed) : listed;
   const loadingPreview = needsOwnFetch(listed) && single.isPending;
-  const prev = index > 0 ? photos[index - 1] : undefined;
-  const next = index >= 0 ? photos[index + 1] : undefined;
+  const prev = index > 0 ? stacks[index - 1]?.top : undefined;
+  const next = index >= 0 ? stacks[index + 1]?.top : undefined;
 
   useEffect(() => {
-    if (index >= 0 && index >= photos.length - LOOKAHEAD_PHOTOS && hasNextPage) {
+    if (index >= 0 && index >= stacks.length - LOOKAHEAD_PHOTOS && hasNextPage) {
       if (!isFetchingNextPage) void fetchNextPage();
     }
-  }, [index, photos.length, hasNextPage, isFetchingNextPage, fetchNextPage]);
+  }, [index, stacks.length, hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   // Replace, so Back/close returns to the gallery rather than through every photo seen.
   const show = useCallback(
@@ -200,11 +210,16 @@ function Viewer() {
   usePreload((prevPhoto ?? prev)?.previewUrl, (nextPhoto ?? next)?.previewUrl);
   const swipe = useSwipe({ onLeft: () => void show(next), onRight: () => void show(prev) });
 
-  // After a delete: the neighbour takes its place, or the gallery if it was the only photo.
+  // After a delete: another photo of its stack, else the neighbour takes its place, or the
+  // gallery if it was the only photo.
   const afterDelete = useCallback(async () => {
-    if (next ?? prev) await show(next ?? prev);
+    const members = stack?.photos ?? [];
+    const at = members.findIndex((p) => p.photoId === photoId);
+    const sibling = members[at + 1] ?? members[at - 1];
+    const target = sibling ?? next ?? prev;
+    if (target) await show(target);
     else close();
-  }, [next, prev, show, close]);
+  }, [stack, photoId, next, prev, show, close]);
 
   // The loader fetched it; missing only if it went away since (e.g. deleted on another device).
   if (!photo) return single.isError ? <ErrorScreen error={single.error} /> : null;
@@ -261,11 +276,94 @@ function Viewer() {
         <NavButton label={`Previous ${prev ? kindOf(prev) : "photo"}`} target={prev} side="left" />
         <NavButton label={`Next ${next ? kindOf(next) : "photo"}`} target={next} side="right" />
       </div>
+      {stack && stack.photos.length > 1 && <StackStrip stack={stack} photoId={photoId} />}
     </main>
   );
 }
 
 const iconButton = "text-white hover:bg-white/10 hover:text-white";
+
+/**
+ * The photos of a stack below the one shown (FR-GAL-10/11): tap one to show it; the top pick is
+ * marked, and another photo can be made the top pick (it then stands for the stack in the Gallery).
+ */
+function StackStrip({ stack, photoId }: { stack: Stack; photoId: string }) {
+  const topPick = useTopPick();
+  const isTop = stack.top.photoId === photoId;
+  // A result belongs to the photo it was for: the strip stays while walking the stack.
+  const [pickedFor, setPickedFor] = useState<string | null>(null);
+  const failed = topPick.isError && pickedFor === photoId;
+  return (
+    <section
+      aria-label={`Stack of ${stack.photos.length} photos`}
+      className="relative z-10 space-y-2 px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]"
+    >
+      <div className="flex min-h-9 items-center justify-center gap-3 text-sm">
+        {isTop ? (
+          <p className="flex items-center gap-1.5 text-white/70">
+            <GalleryVerticalEnd aria-hidden className="size-4" />
+            Top pick
+          </p>
+        ) : (
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={topPick.isPending}
+            onClick={() => {
+              setPickedFor(photoId);
+              topPick.mutate(photoId);
+            }}
+          >
+            {topPick.isPending && pickedFor === photoId ? "Saving…" : "Make top pick"}
+          </Button>
+        )}
+        {failed && (
+          <p role="alert" className="text-red-300">
+            {errorMessage(topPick.error)}
+          </p>
+        )}
+      </div>
+      <ul className="flex justify-center-safe gap-1 overflow-x-auto">
+        {stack.photos.map((member) => {
+          const current = member.photoId === photoId;
+          const top = member.photoId === stack.top.photoId;
+          return (
+            <li key={member.photoId} className="shrink-0">
+              <Link
+                from={Route.fullPath}
+                to="."
+                params={{ photoId: member.photoId }}
+                search={(s) => s}
+                replace
+                aria-label={`${member.fileName}${top ? ", top pick" : ""}`}
+                aria-current={current || undefined}
+                className={cn(
+                  "relative block size-14 overflow-hidden rounded-sm outline-offset-2 focus-visible:outline-2 focus-visible:outline-white",
+                  current ? "ring-2 ring-white" : "opacity-60 hover:opacity-100",
+                )}
+              >
+                {member.thumbUrl && (
+                  <img
+                    src={member.thumbUrl}
+                    alt=""
+                    draggable={false}
+                    className="size-full object-cover"
+                  />
+                )}
+                {top && (
+                  <GalleryVerticalEnd
+                    aria-hidden
+                    className="absolute right-0.5 bottom-0.5 size-3.5 rounded-sm bg-black/60 p-0.5 text-white"
+                  />
+                )}
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
 
 /**
  * Whose photo this is when it isn't mine: "Added by @name" in a collaborative album (FR-SHR-11),

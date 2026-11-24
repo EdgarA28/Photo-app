@@ -83,6 +83,8 @@ export function createApi(request: Request) {
         }),
       /** Moves it to the trash; a pending upload is deleted at once (FR-DEL-3). */
       delete: (photoId: string) => request("DELETE", `/photos/${enc(photoId)}`),
+      /** Makes it its stack's top pick (FR-GAL-11, 8.37b): the newest pick in a stack wins. */
+      topPick: (photoId: string) => request("POST", `/photos/${enc(photoId)}/top-pick`),
     },
 
     /**

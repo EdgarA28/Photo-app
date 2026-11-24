@@ -2,7 +2,7 @@ import { TRASH_RETENTION_DAYS } from "@photo-app/shared";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useRouter, type ErrorComponentProps } from "@tanstack/react-router";
 import { LogOut, Trash2 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { errorMessage } from "@/api/errors";
 import { logout } from "@/auth/logout";
 import {
@@ -16,13 +16,17 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { meQuery } from "@/queries/me";
+import { setGroupingSimilar, useGroupSimilar } from "@/settings/groupSimilar";
 import { QuotaBar } from "@/settings/QuotaBar";
 import { UsernameSection } from "@/settings/UsernameSection";
 import { isActive, useUploads } from "@/upload/useUploads";
 import { APP_VERSION } from "@/version";
 
-// Account, storage, trash, username and logout (FR-ACC-1, FR-ACC-3, FR-DEL-3, FR-AUTH-5, 8.13).
+// Account, storage, gallery, trash, username and logout (FR-ACC-1, FR-ACC-3, FR-GAL-10,
+// FR-DEL-3, FR-AUTH-5, 8.13).
 export const Route = createFileRoute("/_authenticated/settings")({
   loader: ({ context }) =>
     context.queryClient.query({ ...meQuery(context.api), staleTime: "static" }),
@@ -45,6 +49,10 @@ function Settings() {
 
       <Section title="Storage">
         <QuotaBar usage={me.usage} />
+      </Section>
+
+      <Section title="Gallery">
+        <GroupSimilarSwitch />
       </Section>
 
       <Section
@@ -113,6 +121,29 @@ function Section({
       </div>
       {children}
     </section>
+  );
+}
+
+/** Stacks of similar photos in the Gallery (8.37e, FR-GAL-10), on this device only. */
+function GroupSimilarSwitch() {
+  const id = useId();
+  const on = useGroupSimilar();
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div className="grid gap-0.5">
+        <Label htmlFor={id}>Group similar photos</Label>
+        <p id={`${id}-hint`} className="text-sm text-muted-foreground">
+          Bursts and repeated shots taken together show as one photo, the best one, with the others
+          behind it. Only on this device.
+        </p>
+      </div>
+      <Switch
+        id={id}
+        aria-describedby={`${id}-hint`}
+        checked={on}
+        onCheckedChange={setGroupingSimilar}
+      />
+    </div>
   );
 }
 
