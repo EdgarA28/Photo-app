@@ -3,12 +3,17 @@ import type { Photo } from "@photo-app/shared";
 /**
  * Gallery stacks (8.37e, FR-GAL-10/11, §12.3): consecutive photos of the date-sorted list form a
  * stack while each is taken at most `STACK_SECONDS` from the previous one and its
- * `similarityHash` is at most `STACK_BITS` from some photo already in the stack. Tuned on real
- * bursts on dev (8.37d, 2026-11-24): frames of a burst are 0–10 bits apart, different shots and
- * screenshots seconds apart 13+. Same rules as `services/thumbnails/scripts/stack_dry_run.py`.
+ * `similarityHash` is at most `STACK_BITS` from some photo already in the stack; taken at most
+ * `BURST_SECONDS` from the previous one, up to `BURST_BITS`. Tuned on real bursts on dev (8.37d,
+ * 2026-11-24): frames of a burst are mostly 0–10 bits apart, different shots and screenshots
+ * seconds apart 13+; a frame where the camera moved sideways a little is 15–20 bits from the
+ * others (the hash isn't shift-tolerant), but frames that close in time are one burst anyway
+ * (user's decision 2026-11-24). Same rules as `services/thumbnails/scripts/stack_dry_run.py`.
  */
 export const STACK_SECONDS = 60;
 export const STACK_BITS = 10;
+export const BURST_SECONDS = 2;
+export const BURST_BITS = 20;
 
 /** A run of the list shown as one tile: `top` (the top pick) stands for all of `photos`. */
 export interface Stack {
@@ -51,6 +56,16 @@ export function topPick(photos: readonly Photo[]): Photo {
   return best ?? photos[0]!;
 }
 
+/** Whether `photo` joins the stack ending with `previous` (both stackable). */
+function closeEnough(photo: Photo, previous: Photo, stack: readonly Photo[]) {
+  const seconds = Math.abs(Date.parse(previous.takenAt) - Date.parse(photo.takenAt)) / 1000;
+  if (seconds > STACK_SECONDS) return false;
+  const bits = seconds <= BURST_SECONDS ? BURST_BITS : STACK_BITS;
+  return stack.some(
+    (member) => hammingDistance(member.similarityHash!, photo.similarityHash!) <= bits,
+  );
+}
+
 /**
  * The list as stacks, in its order (either sort: the time limit is between neighbours, either
  * way). `enabled` false (the Settings switch is off, or a list that isn't the Gallery): one stack
@@ -68,10 +83,7 @@ export function groupStacks(photos: readonly Photo[], enabled = true): Stack[] {
       previous !== undefined &&
       stackable(photo) &&
       stackable(previous) &&
-      Math.abs(Date.parse(previous.takenAt) - Date.parse(photo.takenAt)) <= STACK_SECONDS * 1000 &&
-      current.some(
-        (member) => hammingDistance(member.similarityHash!, photo.similarityHash!) <= STACK_BITS,
-      );
+      closeEnough(photo, previous, current);
     if (joins) current.push(photo);
     else groups.push([photo]);
     previous = photo;

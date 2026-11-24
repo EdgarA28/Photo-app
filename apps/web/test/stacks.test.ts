@@ -48,6 +48,24 @@ describe("groupStacks (FR-GAL-10, §12.3)", () => {
     expect(names([photo(0, 61), photo(1, 0)])).toEqual([["IMG_0.jpg"], ["IMG_1.jpg"]]);
   });
 
+  it("within 2 s of the previous photo, up to 20 bits (a burst where the camera moved a little)", () => {
+    const at = (n: number, ms: number, bits: number) =>
+      photoSchema.parse(
+        testPhoto(n, {
+          takenAt: new Date(Date.UTC(2026, 9, 1, 10, 0, 0, ms)).toISOString(),
+          similarityHash: flip(bits),
+          sharpness: 1,
+        }),
+      );
+    // dev 2026-11-24: 31212 was 0.4 s after 31211 and 18 bits from it.
+    expect(names([at(0, 1200, 18), at(1, 800, 0)])).toHaveLength(1);
+    expect(names([at(0, 2000, 20), at(1, 0, 0)])).toHaveLength(1);
+    expect(names([at(0, 2000, 21), at(1, 0, 0)])).toHaveLength(2);
+    // 2.1 s apart: the 10-bit limit again.
+    expect(names([at(0, 2100, 11), at(1, 0, 0)])).toHaveLength(2);
+    expect(names([at(0, 2100, 10), at(1, 0, 0)])).toHaveLength(1);
+  });
+
   it("joins when close to any photo of the stack (a slow pan drifts away from the first)", () => {
     const pan = [
       photo(0, 20),

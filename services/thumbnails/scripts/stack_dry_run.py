@@ -4,8 +4,9 @@ make from the photos on an environment, to tune the thresholds on real bursts be
 Reads every user's Gallery photos (ready, not trashed, not videos) from DynamoDB and groups them
 like §12.3: in date-taken order (newest first), a photo joins the stack above it while it was
 taken at most `--seconds` after/before the previous photo and its `similarityHash` is at most
-`--bits` from some photo already in the stack. Top pick: newest `topPickAt`, else the sharpest,
-else the first. Writes nothing to AWS.
+`--bits` from some photo already in the stack (`--burst-bits` when taken at most
+`--burst-seconds` from the previous photo: a burst where the camera moved a little). Top pick:
+newest `topPickAt`, else the sharpest, else the first. Writes nothing to AWS.
 
 Prints a summary per user and, with `--html`, writes a local contact sheet (thumbnails embedded,
 so it works offline and nothing is uploaded anywhere): each stack with its top pick marked, and
@@ -13,7 +14,8 @@ the near misses (taken within `--seconds` but more than `--bits` apart), which s
 bit threshold is too strict.
 
     AWS_PROFILE=dev uv run python scripts/stack_dry_run.py photo-app-dev \
-        photo-app-photos-dev-<account id> [--seconds 60] [--bits 10] [--html stacks.html]
+        photo-app-photos-dev-<account id> [--seconds 60] [--bits 10] [--burst-seconds 2] \
+        [--burst-bits 20] [--html stacks.html]
 """
 
 import argparse
@@ -31,6 +33,8 @@ from thumbnails.similarity import hamming_distance
 
 DEFAULT_SECONDS = 60
 DEFAULT_BITS = 10
+DEFAULT_BURST_SECONDS = 2
+DEFAULT_BURST_BITS = 20
 NEAR_MISS_EXTRA_BITS = 10
 """Near misses shown: within the time limit and up to this many bits over the threshold."""
 
@@ -50,20 +54,50 @@ class Photo:
         return datetime.fromisoformat(self.taken_at)
 
 
-def group_stacks(photos: Sequence[Photo], max_seconds: float, max_bits: int) -> list[list[Photo]]:
+def bits_limit(
+    seconds: float,
+    max_seconds: float,
+    max_bits: int,
+    burst_seconds: float = DEFAULT_BURST_SECONDS,
+    burst_bits: int = DEFAULT_BURST_BITS,
+) -> int | None:
+    """How far apart two neighbours' hashes may be to stack, or None if too far apart in time."""
+    if seconds > max_seconds:
+        return None
+    return max(burst_bits, max_bits) if seconds <= burst_seconds else max_bits
+
+
+def group_stacks(
+    photos: Sequence[Photo],
+    max_seconds: float,
+    max_bits: int,
+    burst_seconds: float = DEFAULT_BURST_SECONDS,
+    burst_bits: int = DEFAULT_BURST_BITS,
+) -> list[list[Photo]]:
     """§12.3 grouping of one user's photos, given newest first. Every photo is in exactly one
     group; groups of one are single tiles. A photo without a hash stays single and ends the
     stack above it."""
     groups: list[list[Photo]] = []
     for photo in photos:
         current = groups[-1] if groups else None
+        limit = (
+            bits_limit(
+                abs((current[-1].taken - photo.taken).total_seconds()),
+                max_seconds,
+                max_bits,
+                burst_seconds,
+                burst_bits,
+            )
+            if current is not None
+            else None
+        )
         if (
             current is not None
+            and limit is not None
             and photo.similarity_hash is not None
             and current[-1].similarity_hash is not None
-            and abs((current[-1].taken - photo.taken).total_seconds()) <= max_seconds
             and any(
-                hamming_distance(photo.similarity_hash, member.similarity_hash) <= max_bits
+                hamming_distance(photo.similarity_hash, member.similarity_hash) <= limit
                 for member in current
                 if member.similarity_hash is not None
             )
@@ -86,7 +120,11 @@ def top_pick(stack: Sequence[Photo]) -> Photo:
 
 
 def near_misses(
-    photos: Sequence[Photo], max_seconds: float, max_bits: int
+    photos: Sequence[Photo],
+    max_seconds: float,
+    max_bits: int,
+    burst_seconds: float = DEFAULT_BURST_SECONDS,
+    burst_bits: int = DEFAULT_BURST_BITS,
 ) -> list[tuple[Photo, Photo, int]]:
     """Neighbours (newest first) taken within the time limit whose hashes are just too far apart
     to stack: (newer, older, bits)."""
@@ -94,10 +132,12 @@ def near_misses(
     for newer, older in itertools.pairwise(photos):
         if newer.similarity_hash is None or older.similarity_hash is None:
             continue
-        if abs((newer.taken - older.taken).total_seconds()) > max_seconds:
+        seconds = abs((newer.taken - older.taken).total_seconds())
+        limit = bits_limit(seconds, max_seconds, max_bits, burst_seconds, burst_bits)
+        if limit is None:
             continue
         bits = hamming_distance(newer.similarity_hash, older.similarity_hash)
-        if max_bits < bits <= max_bits + NEAR_MISS_EXTRA_BITS:
+        if limit < bits <= limit + NEAR_MISS_EXTRA_BITS:
             misses.append((newer, older, bits))
     return misses
 
@@ -194,7 +234,8 @@ def write_html(
         ".pick img{border-color:#4ade80}figcaption{font-size:12px;color:#aaa;margin-top:4px;"
         "word-break:break-all}</style>",
         f"<h1>Stack dry run</h1><p>Rules: ≤ {max_seconds:g} s between neighbours, hash ≤ "
-        f"{max_bits} bits from a photo in the stack. Green = top pick (sharpest).</p>",
+        f"{max_bits} bits from a photo in the stack ({DEFAULT_BURST_BITS} bits within "
+        f"{DEFAULT_BURST_SECONDS:g} s by default). Green = top pick (sharpest).</p>",
     ]
     for user_id, stacks, misses in sections:
         stacked = [s for s in stacks if len(s) > 1]
@@ -212,8 +253,7 @@ def write_html(
         if misses:
             parts.append(
                 f"<h2>User {html.escape(user_id[:8])}: near misses (within {max_seconds:g} s, "
-                f"{max_bits + 1} to {max_bits + NEAR_MISS_EXTRA_BITS} bits): "
-                "should these stack?</h2>"
+                f"up to {NEAR_MISS_EXTRA_BITS} bits over the limit): should these stack?</h2>"
             )
             for newer, older, bits in misses:
                 parts.append(f"<h3>{bits} bits apart</h3><div class=row>")
@@ -231,14 +271,17 @@ def main() -> None:
     parser.add_argument("bucket")
     parser.add_argument("--seconds", type=float, default=DEFAULT_SECONDS)
     parser.add_argument("--bits", type=int, default=DEFAULT_BITS)
+    parser.add_argument("--burst-seconds", type=float, default=DEFAULT_BURST_SECONDS)
+    parser.add_argument("--burst-bits", type=int, default=DEFAULT_BURST_BITS)
     parser.add_argument("--html", help="write a contact sheet with the thumbnails to this file")
     args = parser.parse_args()
 
     by_user = load_photos(boto3.client("dynamodb"), args.table)
     sections = []
     for user_id, photos in sorted(by_user.items(), key=lambda kv: -len(kv[1])):
-        stacks = group_stacks(photos, args.seconds, args.bits)
-        misses = near_misses(photos, args.seconds, args.bits)
+        tiers = (args.seconds, args.bits, args.burst_seconds, args.burst_bits)
+        stacks = group_stacks(photos, *tiers)
+        misses = near_misses(photos, *tiers)
         print(summary(user_id, photos, stacks, misses))
         sections.append((user_id, stacks, misses))
     if args.html:

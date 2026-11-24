@@ -53,12 +53,27 @@ def test_time_gap_ends_the_stack() -> None:
     assert names(script.group_stacks(photos, 60, 10)) == [["b"], ["a"]]
 
 
+def test_within_two_seconds_up_to_twenty_bits() -> None:
+    """A burst where the camera moved a little (dev 2026-11-24: 18 bits, 0.4 s apart)."""
+    assert names(script.group_stacks([photo("b", 2, flip(20)), photo("a", 0)], 60, 10)) == [
+        ["b", "a"]
+    ]
+    assert names(script.group_stacks([photo("b", 2, flip(21)), photo("a", 0)], 60, 10)) == [
+        ["b"],
+        ["a"],
+    ]
+    assert names(script.group_stacks([photo("b", 3, flip(11)), photo("a", 0)], 60, 10)) == [
+        ["b"],
+        ["a"],
+    ]
+
+
 def test_hash_close_to_any_member_joins() -> None:
     """c is 11 bits from a but 1 from b: it joins (a slow pan drifts away from the first shot)."""
     a, b, c = BASE, flip(10), flip(11)
     photos = [photo("a", 20, a), photo("b", 10, b), photo("c", 0, c)]
     assert names(script.group_stacks(photos, 60, 10)) == [["a", "b", "c"]]
-    assert names(script.group_stacks([photo("a", 1, a), photo("c", 0, c)], 60, 10)) == [
+    assert names(script.group_stacks([photo("a", 5, a), photo("c", 0, c)], 60, 10)) == [
         ["a"],
         ["c"],
     ]
